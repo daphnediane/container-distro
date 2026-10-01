@@ -26,6 +26,16 @@ built with `cargo build` and can optionally be aliased to `wsl` via symlink.
 Before any machine operation the wrapper runs `container system start` if
 `container system status` shows services down.
 
+## Host filesystem
+
+`container machine` mounts macOS `$HOME` into the guest via virtiofs at the
+**same path** (`/Users/<name>`), mode `rw`/`ro`/`none` via `--home-mount` at
+create or `machine set home-mount=<mode>` + restart. Nothing outside `$HOME`
+is shared and no additional-mount option exists (container 1.5.0). `machine
+run` auto-starts in the same path when host cwd is under `$HOME`, else guest
+`/home/<name>`. Machines get their own IP — no localhost forwarding like WSL.
+See "Differences from WSL" in README.md.
+
 ## Verify
 
 ```bash
