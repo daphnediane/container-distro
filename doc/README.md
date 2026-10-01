@@ -3,9 +3,10 @@
 Design notes and research documents for `cm`. These are working documents —
 they describe options and tradeoffs, not commitments.
 
-| Document                                              | Contents                                                                                                                                                                            |
-| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [lower-level-integration](lower-level-integration.md) | Can `cm` bypass the `container` CLI — the XPC/Swift-library/Containerization/Virtualization.framework layers, Rust↔Swift interop options, and whether a Swift rewrite is worthwhile |
+| Document                                              | Contents                                                                                                                                                                                                   |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [lower-level-integration](lower-level-integration.md) | Can `cm` bypass the `container` CLI — the XPC/Swift-library/Containerization/Virtualization.framework layers, Rust↔Swift interop options, and whether a Swift rewrite is worthwhile                        |
+| [remote-wsl-interop](remote-wsl-interop.md)           | What Remote-WSL-style editor extensions (`ms-vscode-remote.remote-wsl`, `codeium.windsurf-remote-wsl`, `open-remote-wsl`) need from `wsl.exe`, and the fake-shim / forked-resolver / sshd paths to interop |
 
 ## Feature gaps vs WSL
 
