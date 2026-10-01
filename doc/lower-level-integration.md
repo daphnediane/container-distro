@@ -315,46 +315,21 @@ semantics, richer errors), while interactive shells keep using `exec`'d
 
 ## What lower-level access would actually fix
 
-Mapping current `cm`/machine gaps to the rung that solves them:
+Each `cm`/machine gap has its own document under [`gaps/`](gaps/),
+including the level that solves it and a recommendation:
 
-| Gap today                                             | Fixed at                                                                  |
-| ----------------------------------------------------- | ------------------------------------------------------------------------- |
-| No mounts outside `$HOME` (`/Volumes/...`)            | L2.5 (own daemon plugin → `create` with extra virtiofs) or L3             |
-| No localhost port forwarding (machine has its own IP) | L2.5 (a `network`-type plugin) / L3/L4; possibly L2 via `SocketForwarder` |
-| No `--export`/`--import`, snapshots                   | **L0** — see recipes below                                                |
-| `-v` ignored, no verbose list                         | L1/L2/L3 (structured data direct)                                         |
-| Subprocess overhead + JSON scraping                   | L1/L2                                                                     |
-| Startup `system start` dance                          | unchanged at L1/L2/L2.5 — services still required                         |
+| Gap                                        | Document                                                | Cheapest fix level         |
+| ------------------------------------------ | ------------------------------------------------------- | -------------------------- |
+| No mounts outside `$HOME` (`/Volumes/...`) | [gaps/mounts-outside-home](gaps/mounts-outside-home.md) | upstream PR, else L2.5     |
+| No localhost port forwarding               | [gaps/port-forwarding](gaps/port-forwarding.md)         | L0 (manual forwarder)      |
+| No `--export`/`--import`, snapshots        | [gaps/export-import](gaps/export-import.md)             | **L0** — CLI composition   |
+| No config files (`wsl.conf`/`.wslconfig`)  | [gaps/configuration-files](gaps/configuration-files.md) | L0 host config             |
+| `-v` ignored, no verbose list              | [gaps/verbose-list](gaps/verbose-list.md)               | **L0** — `machine inspect` |
+| Subprocess overhead + JSON scraping        | [gaps/subprocess-overhead](gaps/subprocess-overhead.md) | L2 only if it hurts        |
+| Startup `system start` dance               | [gaps/service-startup](gaps/service-startup.md)         | L0 — stop-what-we-started  |
 
-### `--export` / `--import` at L0
-
-WSL exports a distro's rootfs to a tar and imports one back. `container`
-already has the primitives; a machine's persistent state lives in its
-backing container, so we just need the container ID:
-
-- **Export (rootfs tar — WSL-faithful):** `container machine inspect <m>`
-  → `containerId` → `container export <cid> -o file.tar`. Takes a runtime
-  snapshot automatically if the machine is running. Virtiofs mounts
-  (`$HOME`, `/sbin.machine/init`) aren't part of the container filesystem
-  — verify they're excluded, which is the *desired* behavior anyway since
-  `$HOME` is host data. Guest-side mutations (provisioned user accounts,
-  installed packages) live in the container layer and are captured.
-- **Snapshot → image (OCI path):** `container commit <cid> <ref>` +
-  `container image save`/`load` round-trips through standard OCI archives.
-  Better fidelity (image config preserved) but not WSL-tar-compatible.
-- **Import (raw rootfs tar → machine):** `container image load` only
-  accepts OCI-layout tars (from `image save`), not bare rootfs tars — so
-  `cm --import` needs a wrap step: `container build` with
-  `FROM scratch` + `ADD rootfs.tar /`, or emit OCI image layout ourselves
-  (it's just `blobs/sha256/*` + `index.json` — easy to generate in Rust),
-  then `container image load` + `machine create --name <m> <ref>`.
-- **Import into an existing machine** is even simpler: stream the tar
-  through `machine run`'s stdin to `tar -xf - -C /` — no OCI involved,
-  but it mutates rather than registers.
-
-With export/import reachable at L0, the only gaps that genuinely require
-going below the CLI are **mounts outside `$HOME`** (L2.5/L3) and
-**localhost port forwarding** (L2.5/L3+).
+Only **mounts outside `$HOME`** and **port forwarding** genuinely require
+going below the CLI — everything else is reachable at L0.
 
 ## Risks
 
