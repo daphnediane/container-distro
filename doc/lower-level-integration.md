@@ -11,11 +11,13 @@ stability terms (see [Risks](#risks)).
 - Yes, you can go below `container machine`. There are roughly four rungs
   between "shell out to the CLI" and "talk to Virtualization.framework
   yourself", and only two of them are attractive.
-- The sweet spot, if we ever need it: a **small Swift helper library** that
-  uses `apple/container`'s exported `MachineAPIClient`/`ContainerAPIClient`
-  SwiftPM products, exposed to Rust over a C ABI. That removes the
-  subprocess layer without reimplementing anything or needing new
-  entitlements.
+- The sweet spot, if we ever need it: a **third-party `container` plugin**
+  (or a small Swift helper using the exported `MachineAPIClient`/
+  `ContainerAPIClient` libraries). Plugins are a real extension point —
+  user plugins load from `/usr/local/libexec/container-plugins/`, can
+  add `container <name>` subcommands in any language, and can create
+  containers with *arbitrary* virtiofs mounts through the apiserver's
+  own client API. See [The plugin route](#the-plugin-route--l25).
 - Going **fully independent** via `apple/containerization` directly (or
   `objc2-virtualization` from pure Rust) is possible but means owning
   kernel boot, the guest-agent protocol, OCI unpacking, networking, and
@@ -31,7 +33,7 @@ stability terms (see [Risks](#risks)).
 
 ## How the stack is actually layered
 
-```
+```text
 cm (Rust, this repo)
 └── container CLI  ── Swift, Sources/CLI + Sources/ContainerCommands
     └── client libraries (SwiftPM products of the `container` package)
@@ -60,7 +62,9 @@ Key facts, with sources:
   (`Sources/Services/MachineAPIService/Client/MachineClient.swift`), which
   speaks XPC to `com.apple.container.core.machine-apiserver` — a
   `loadAtBoot` plugin with its own guest init resource
-  (`Sources/Plugins/MachineAPIServer/`).
+  (`Sources/Plugins/MachineAPIServer/`). The plugin system itself is a
+  supported extension point for third parties — see
+  [The plugin route](#the-plugin-route--l25).
 - **`machine run` is just `createProcess` on a specially-configured
   container.** `MachineRun.swift` boots the machine via the machine plugin,
   then uses the *regular* `ContainerClient.createProcess` to exec
@@ -89,6 +93,7 @@ Key facts, with sources:
 | L0 (current) | `container` CLI subprocess                                | Rust only                                            | yes                                | CLI backward compat within major versions                                    |
 | L1           | XPC to apiserver / machine plugin                         | any (XPC is a C API)                                 | yes                                | only `container-apiserver` XPC documented stable; plugin routes are internal |
 | L2           | `MachineAPIClient` / `ContainerAPIClient` Swift libraries | Swift (C shim for Rust)                              | yes                                | source-stable-ish, but exact-pin churn                                       |
+| L2.5         | third-party plugin (`libexec/container-plugins/`)         | any (CLI) / Swift or C ABI (daemon)                  | yes                                | plugin contract is internal but stable-shaped; used by Apple itself          |
 | L3           | `containerization` package directly                       | Swift (C shim for Rust)                              | **no**                             | pre-1.0; minor-version source stability only                                 |
 | L4           | Virtualization.framework / vmnet directly                 | Rust possible (`objc2-virtualization`) or Swift/ObjC | **no**                             | Apple framework — stable, but huge scope                                     |
 
@@ -169,6 +174,83 @@ reimplement or embed `vminitd`'s vsock gRPC protocol — for exec/signal/IO.
 language boundary. The only argument for it is "no Swift in the build,"
 which is a bad trade at this layer.
 
+## The plugin route — L2.5
+
+`container` has a **documented-in-code, supported third-party plugin
+system** (`Sources/ContainerPlugin/`), and `container machine` itself is
+implemented as one. This is the most interesting escalation path.
+
+### How plugins work
+
+- **Discovery.** `PluginLoader` scans, in order
+  (`Utility+PluginLoader.swift`):
+  1. `<install-root>/libexec/container-plugins/` — **user plugins**
+     (`/usr/local/libexec/container-plugins/` for a pkg install)
+  2. app-bundle `plugins/` resources
+  3. `<install-root>/libexec/container/plugins/` — built-ins
+     (`CoreImages`, `MachineAPIServer`, `NetworkVmnet`, `RuntimeLinux`,
+     `K8s`)
+  A user plugin scanned first can even **shadow** a built-in of the same
+  name.
+- **Layout.** `<plugin-dir>/<name>/config.toml` (or legacy `config.json`)
+  plus `bin/<name>` executable.
+- **CLI plugins** (`servicesConfig` absent): `container <name>` falls
+  through `Application`'s hidden `DefaultCommand`, which `execvp`s the
+  plugin binary (with signals reset to defaults — the same exec-passthrough
+  trick `cm` uses). Listed in `container --help` under OTHER SUBCOMMANDS.
+  **Any language works** — a Rust binary is a perfectly fine CLI plugin;
+  `cm` itself could register as `container cm`/`container wsl`.
+- **Daemon plugins** (`servicesConfig` present): the apiserver loads the
+  binary into launchd (`loadAtBoot`, `runAtLoad`, `defaultArguments`) and
+  manages lifecycle. It must publish MachServices named
+  `com.apple.container.{type}.{name}[.{id}]` where type is one of:
+  - `runtime` — per-container lifecycle API (one instance per container;
+    `RuntimeLinux` is this)
+  - `network` — per-network IP allocation (`container network create
+    --plugin <name>` selects it; `NetworkVmnet` is the default)
+  - `core` — singleton resource API (`MachineAPIServer` is this)
+  - `auxiliary` — reserved, currently equivalent to `core`
+
+### What a "distro" plugin could do
+
+The decisive detail: `MachinesService` does **not** own its VMs. It builds
+a `ContainerConfiguration` — including `mounts` with
+`.virtiofs(source: <arbitrary host path>, destination:, options:)` — and
+calls `ContainerClient.create()`, i.e. the machine plugin orchestrates
+through the apiserver's standard create API, and the actual VM is spawned
+by Apple's signed `container-runtime-linux` helper.
+
+Consequences for a `cm`-supplied `container-distro` plugin:
+
+- **Extra mounts without new machinery.** A `core` plugin modeled on
+  `MachineAPIServer` can attach virtiofs shares anywhere on the host
+  (`/Volumes/...`, sibling dirs outside `$HOME`) — the single biggest WSL
+  gap — while staying 100% inside Apple's lifecycle, signing, and
+  entitlement envelope. No `com.apple.security.virtualization` needed:
+  we never touch VZ ourselves.
+- **Reuse of machine semantics** is a choice: we could call the machine
+  plugin's own XPC routes for base behavior, or replicate them (it is
+  ~1 Swift file of config + the bundled `init` resource, which lives at
+  `<install-root>/libexec/container/plugins/machine-apiserver/` post-install).
+- **A `container distro` (or `cm`-managed) CLI plugin** in Rust could then
+  talk to our daemon plugin — or even shortcut the whole thing: a CLI
+  plugin alone that calls `ContainerClient`-equivalent `container create
+  -v …` covers the mount case with zero daemon code.
+- **Caveats.** The plugin *contract* (directory layout, `config.toml`,
+  MachService naming, the create/list/attach XPC routes it must serve or
+  call) is an implementation detail of the open source — usable, reviewed
+  in-tree, but not covered by the `container-apiserver` compatibility
+  promise. Expect to re-verify on each `container` upgrade. And plugin
+  management UX is thin: there's `PluginsService` for listing, but install
+  is "drop a directory," so `cm` would own install/uninstall of its
+  plugin dir.
+
+**Verdict: strong.** It delivers most of L3's value (arbitrary mounts;
+per-network plugins could address forwarding) inside L0's stability
+envelope, at the cost of one Swift-or-C-ABI XPC daemon we control. It is
+also the only option where `container` remains fully responsible for
+VM security boundaries.
+
 ## Can Rust interop with Swift?
 
 Yes, with caveats. There is no toolchain-level Swift↔Rust bridge (Swift
@@ -235,17 +317,44 @@ semantics, richer errors), while interactive shells keep using `exec`'d
 
 Mapping current `cm`/machine gaps to the rung that solves them:
 
-| Gap today                                             | Fixed at                                                                              |
-| ----------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| No mounts outside `$HOME` (`/Volumes/...`)            | L3 (arbitrary virtiofs); L1/L2 can't — plugin doesn't expose it                       |
-| No localhost port forwarding (machine has its own IP) | L3/L4 (own NAT/forwarder); possibly L2 via `SocketForwarder`/`NetworkClient` products |
-| No `--export`/`--import`, snapshots                   | L3; or wait for upstream                                                              |
-| `-v` ignored, no verbose list                         | L1/L2/L3 (structured data direct)                                                     |
-| Subprocess overhead + JSON scraping                   | L1/L2                                                                                 |
-| Startup `system start` dance                          | unchanged at L1/L2 — services still required                                          |
+| Gap today                                             | Fixed at                                                                  |
+| ----------------------------------------------------- | ------------------------------------------------------------------------- |
+| No mounts outside `$HOME` (`/Volumes/...`)            | L2.5 (own daemon plugin → `create` with extra virtiofs) or L3             |
+| No localhost port forwarding (machine has its own IP) | L2.5 (a `network`-type plugin) / L3/L4; possibly L2 via `SocketForwarder` |
+| No `--export`/`--import`, snapshots                   | **L0** — see recipes below                                                |
+| `-v` ignored, no verbose list                         | L1/L2/L3 (structured data direct)                                         |
+| Subprocess overhead + JSON scraping                   | L1/L2                                                                     |
+| Startup `system start` dance                          | unchanged at L1/L2/L2.5 — services still required                         |
 
-Most of the list is L3-only. That's the real decision: the benefits of
-going low-level concentrate at the level that requires owning the VM.
+### `--export` / `--import` at L0
+
+WSL exports a distro's rootfs to a tar and imports one back. `container`
+already has the primitives; a machine's persistent state lives in its
+backing container, so we just need the container ID:
+
+- **Export (rootfs tar — WSL-faithful):** `container machine inspect <m>`
+  → `containerId` → `container export <cid> -o file.tar`. Takes a runtime
+  snapshot automatically if the machine is running. Virtiofs mounts
+  (`$HOME`, `/sbin.machine/init`) aren't part of the container filesystem
+  — verify they're excluded, which is the *desired* behavior anyway since
+  `$HOME` is host data. Guest-side mutations (provisioned user accounts,
+  installed packages) live in the container layer and are captured.
+- **Snapshot → image (OCI path):** `container commit <cid> <ref>` +
+  `container image save`/`load` round-trips through standard OCI archives.
+  Better fidelity (image config preserved) but not WSL-tar-compatible.
+- **Import (raw rootfs tar → machine):** `container image load` only
+  accepts OCI-layout tars (from `image save`), not bare rootfs tars — so
+  `cm --import` needs a wrap step: `container build` with
+  `FROM scratch` + `ADD rootfs.tar /`, or emit OCI image layout ourselves
+  (it's just `blobs/sha256/*` + `index.json` — easy to generate in Rust),
+  then `container image load` + `machine create --name <m> <ref>`.
+- **Import into an existing machine** is even simpler: stream the tar
+  through `machine run`'s stdin to `tar -xf - -C /` — no OCI involved,
+  but it mutates rather than registers.
+
+With export/import reachable at L0, the only gaps that genuinely require
+going below the CLI are **mounts outside `$HOME`** (L2.5/L3) and
+**localhost port forwarding** (L2.5/L3+).
 
 ## Risks
 
@@ -281,22 +390,28 @@ going low-level concentrate at the level that requires owning the VM.
 - Would upstream accept `container machine create` flags for extra
   virtiofs mounts? Cheapest fix for the biggest gap is a PR, not a
   rewrite.
-- `container`'s `ContainerPlugin`/`config.toml` plugin mechanism: can
-  third parties register XPC plugins? If so, a `cm`-managed plugin could
-  add machine features (mounts, forwarding) *inside* the supported
-  architecture — L2.5, arguably the cleverest option of all.
+- Is the plugin contract (directory layout, `config.toml` schema,
+  MachService naming, XPC route/keys) covered by any compatibility
+  promise, or strictly internal? The `container-apiserver` XPC guarantee
+  may not extend to plugin-facing routes.
+- Can a `runtime`-type plugin be selected per-container (`container
+  create --runtime <plugin>`?) the way `--plugin` works for networks? If
+  so a custom runtime could bend the isolation model too.
 
 ## Recommendation
 
 Keep `cm` on the CLI (L0). It's the only layer with a real stability
 guarantee, the exec-passthrough model is a feature, and everything we'd
-gain below L3 is cosmetic. Track two future triggers:
+gain below L2.5 is cosmetic. Track three future triggers:
 
 1. If structured output/error handling or subprocess overhead starts
    hurting → prototype the **L2 Swift shim** (`MachineAPIClient` behind
    `@_cdecl`, linked via `swift-rs`). No Swift rewrite of `cm` needed.
 2. If mounts-outside-`$HOME` or port forwarding become real requirements
-   and upstream won't take them → evaluate **L3** (Swift binary/library on
-   `containerization`), accepting the signing and maintenance burden, or
-   investigate the **plugin route** (open questions) which could deliver
-   the same features while staying a guest of the `container` ecosystem.
+   and upstream won't take them → build a **third-party plugin (L2.5)**:
+   a `core` daemon plugin creating containers with extra virtiofs mounts
+   via the apiserver API, plus (optionally) a `container <name>` CLI
+   plugin. No entitlements, no VM ownership, lifecycle stays with Apple.
+3. Only if the plugin contract proves unstable or the apiserver API can't
+   express what we need → evaluate **L3** (Swift binary/library on
+   `containerization`), accepting the signing and maintenance burden.
