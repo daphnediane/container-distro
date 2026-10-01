@@ -1,0 +1,16 @@
+tag: Brief description from user point of view [WORK-ITEM]
+
+Detailed description of the change.
+
+- Specific change made [WORK-ITEM]
+- Another specific change
+  - Nested detail if needed
+- Final change
+
+Prompt: [note if summarized or verbatim]
+[prompt]
+
+Followup: [note if summarized or verbatim]
+[followup]
+
+generated-by: agent (models)

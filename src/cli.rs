@@ -1,0 +1,366 @@
+/*
+ * Copyright (c) 2026 Daphne Pfister
+ * SPDX-License-Identifier: BSD-2-Clause
+ * See LICENSE file for full license text
+ */
+
+//! WSL-compatible argument parsing.
+//!
+//! Mirrors `wsl.exe` argument semantics rather than clap's defaults: `-e` and
+//! `--` both consume the remainder of the command line verbatim, and a bare
+//! positional argument is treated as a command to execute.
+
+use anyhow::{Result, bail};
+use clap::{Parser, ValueEnum};
+
+/// Which shell flavor to start for an interactive session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ShellType {
+    /// Non-login interactive shell.
+    Standard,
+    /// Login shell (the default).
+    Login,
+    /// No shell — only valid together with a command.
+    None,
+}
+
+#[derive(Debug, Parser)]
+#[command(
+    name = "cm",
+    version,
+    disable_version_flag = true,
+    about = "WSL-compatible wrapper for Apple container machines",
+    long_about = "Runs commands and shells inside Apple `container` machines using WSL-style arguments.\n\
+                  With no arguments, opens a login shell in the default machine.",
+    override_usage = "cm [OPTIONS] [-- <COMMAND LINE>]",
+    after_help = "Examples:\n  \
+                  cm                          Open a shell in the default machine\n  \
+                  cm -d alpine                Open a shell in the 'alpine' machine\n  \
+                  cm -e uname -a              Run a command without a shell\n  \
+                  cm -- ls -la                Pass a command line through verbatim\n  \
+                  cm -l -v                    List machines\n  \
+                  cm -t alpine                Stop the 'alpine' machine"
+)]
+pub struct Args {
+    /// Machine to use (uses the default if not specified)
+    #[arg(short = 'd', long = "distribution", value_name = "MACHINE")]
+    pub distribution: Option<String>,
+
+    /// Run as the specified user
+    #[arg(short = 'u', long = "user", value_name = "USER")]
+    pub user: Option<String>,
+
+    /// Set the working directory inside the machine
+    #[arg(long = "cd", value_name = "DIR")]
+    pub cd: Option<String>,
+
+    /// Shell type to start for an interactive session
+    #[arg(long = "shell-type", value_enum, value_name = "TYPE")]
+    pub shell_type: Option<ShellType>,
+
+    /// Execute the command line without a shell; consumes the rest of the line
+    #[arg(short = 'e', long = "exec")]
+    pub exec: bool,
+
+    /// Set an environment variable (key=value, or key to inherit from host)
+    #[arg(long = "env", value_name = "KEY=VALUE")]
+    pub env: Vec<String>,
+
+    /// List container machines
+    #[arg(short = 'l', long = "list")]
+    pub list: bool,
+
+    /// List all machines (with --list)
+    #[arg(long = "all", requires = "list")]
+    pub all: bool,
+
+    /// List only running machines (with --list)
+    #[arg(long = "running", requires = "list")]
+    pub running: bool,
+
+    /// Show only machine names (with --list)
+    #[arg(
+        short = 'q',
+        long = "quiet",
+        requires = "list",
+        conflicts_with = "verbose"
+    )]
+    pub quiet: bool,
+
+    /// Show verbose machine information (with --list)
+    #[arg(
+        short = 'v',
+        long = "verbose",
+        requires = "list",
+        conflicts_with = "quiet"
+    )]
+    pub verbose: bool,
+
+    /// Set the default machine
+    #[arg(short = 's', long = "set-default", value_name = "MACHINE")]
+    pub set_default: Option<String>,
+
+    /// Stop a running machine
+    #[arg(short = 't', long = "terminate", value_name = "MACHINE")]
+    pub terminate: Option<String>,
+
+    /// Stop all running machines
+    #[arg(long = "shutdown")]
+    pub shutdown: bool,
+
+    /// Show container system status
+    #[arg(long = "status")]
+    pub status: bool,
+
+    /// Delete a machine and its persistent storage
+    #[arg(long = "unregister", value_name = "MACHINE")]
+    pub unregister: Option<String>,
+
+    /// Create a machine from a container image and boot it
+    #[arg(long = "install", value_name = "IMAGE")]
+    pub install: Option<String>,
+
+    /// Name for the machine created by --install
+    #[arg(long = "name", requires = "install", value_name = "NAME")]
+    pub name: Option<String>,
+
+    /// Do not open a shell after --install finishes
+    #[arg(long = "no-launch", requires = "install")]
+    pub no_launch: bool,
+
+    /// Print version information
+    #[arg(long = "version")]
+    pub version: bool,
+
+    /// Command line to execute in the machine (everything after -- is verbatim)
+    #[arg(
+        trailing_var_arg = true,
+        allow_hyphen_values = true,
+        value_name = "COMMAND LINE"
+    )]
+    pub command: Vec<String>,
+}
+
+/// A validated top-level action.
+#[derive(Debug, PartialEq)]
+pub enum Action {
+    /// Open a shell or run a command in a machine.
+    Run,
+    /// `container machine list` variants.
+    List { running_only: bool, quiet: bool },
+    /// Stop every running machine.
+    Shutdown,
+    /// `container system status`.
+    Status,
+    /// `container machine set-default`.
+    SetDefault(String),
+    /// `container machine stop`.
+    Terminate(String),
+    /// `container machine rm`.
+    Unregister(String),
+    /// `container machine create`, then optionally open a shell.
+    Install {
+        image: String,
+        name: Option<String>,
+        no_launch: bool,
+    },
+    /// Print cm and container versions.
+    Version,
+}
+
+impl Args {
+    /// Resolve the parsed arguments into a single validated action.
+    pub fn action(&self) -> Result<Action> {
+        let action = if self.version {
+            Action::Version
+        } else if self.status {
+            Action::Status
+        } else if let Some(m) = &self.set_default {
+            Action::SetDefault(m.clone())
+        } else if let Some(m) = &self.terminate {
+            Action::Terminate(m.clone())
+        } else if let Some(m) = &self.unregister {
+            Action::Unregister(m.clone())
+        } else if let Some(i) = &self.install {
+            Action::Install {
+                image: i.clone(),
+                name: self.name.clone(),
+                no_launch: self.no_launch,
+            }
+        } else if self.shutdown {
+            Action::Shutdown
+        } else if self.list {
+            Action::List {
+                running_only: self.running,
+                quiet: self.quiet,
+            }
+        } else {
+            return self.validate_run();
+        };
+        self.check_no_run_args()?;
+        Ok(action)
+    }
+
+    fn check_no_run_args(&self) -> Result<()> {
+        let mut bad = Vec::new();
+        if self.distribution.is_some() {
+            bad.push("--distribution");
+        }
+        if self.user.is_some() {
+            bad.push("--user");
+        }
+        if self.cd.is_some() {
+            bad.push("--cd");
+        }
+        if self.shell_type.is_some() {
+            bad.push("--shell-type");
+        }
+        if self.exec {
+            bad.push("--exec");
+        }
+        if !self.env.is_empty() {
+            bad.push("--env");
+        }
+        if !self.command.is_empty() {
+            bad.push("a command line");
+        }
+        if !bad.is_empty() {
+            bail!("cannot combine {} with a management action", bad.join(", "));
+        }
+        Ok(())
+    }
+
+    fn validate_run(&self) -> Result<Action> {
+        if self.command.is_empty() {
+            if self.exec {
+                bail!("--exec requires a command line");
+            }
+            if self.shell_type == Some(ShellType::None) {
+                bail!("--shell-type none requires a command line");
+            }
+        }
+        Ok(Action::Run)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(argv: &[&str]) -> Result<Args, clap::Error> {
+        Args::try_parse_from(argv)
+    }
+
+    #[test]
+    fn no_args_is_run() {
+        let args = parse(&["cm"]).unwrap();
+        assert_eq!(args.action().unwrap(), Action::Run);
+    }
+
+    #[test]
+    fn distribution_run() {
+        let args = parse(&["cm", "-d", "alpine"]).unwrap();
+        assert_eq!(args.distribution.as_deref(), Some("alpine"));
+        assert_eq!(args.action().unwrap(), Action::Run);
+    }
+
+    #[test]
+    fn exec_consumes_rest() {
+        let args = parse(&["cm", "-d", "alpine", "-e", "uname", "-a"]).unwrap();
+        assert!(args.exec);
+        assert_eq!(args.command, ["uname", "-a"]);
+    }
+
+    #[test]
+    fn dash_dash_passthrough() {
+        let args = parse(&["cm", "--", "cat", "/proc/cpuinfo"]).unwrap();
+        assert_eq!(args.command, ["cat", "/proc/cpuinfo"]);
+    }
+
+    #[test]
+    fn bare_positional_is_command() {
+        let args = parse(&["cm", "uname"]).unwrap();
+        assert_eq!(args.command, ["uname"]);
+        assert_eq!(args.action().unwrap(), Action::Run);
+    }
+
+    #[test]
+    fn exec_requires_command() {
+        let args = parse(&["cm", "-e"]).unwrap();
+        assert!(args.action().is_err());
+    }
+
+    #[test]
+    fn shell_type_none_requires_command() {
+        let args = parse(&["cm", "--shell-type", "none"]).unwrap();
+        assert!(args.action().is_err());
+        let args = parse(&["cm", "--shell-type", "none", "-e", "ls"]).unwrap();
+        assert_eq!(args.action().unwrap(), Action::Run);
+    }
+
+    #[test]
+    fn list_subflags() {
+        let args = parse(&["cm", "-l"]).unwrap();
+        assert_eq!(
+            args.action().unwrap(),
+            Action::List {
+                running_only: false,
+                quiet: false
+            }
+        );
+        let args = parse(&["cm", "-l", "-q"]).unwrap();
+        assert!(matches!(
+            args.action().unwrap(),
+            Action::List { quiet: true, .. }
+        ));
+        let args = parse(&["cm", "--list", "--running"]).unwrap();
+        assert!(matches!(
+            args.action().unwrap(),
+            Action::List {
+                running_only: true,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn quiet_requires_list() {
+        assert!(parse(&["cm", "-q"]).is_err());
+    }
+
+    #[test]
+    fn terminate_and_set_default() {
+        let args = parse(&["cm", "-t", "alpine"]).unwrap();
+        assert_eq!(args.action().unwrap(), Action::Terminate("alpine".into()));
+        let args = parse(&["cm", "-s", "alpine"]).unwrap();
+        assert_eq!(args.action().unwrap(), Action::SetDefault("alpine".into()));
+    }
+
+    #[test]
+    fn run_args_conflict_with_actions() {
+        let args = parse(&["cm", "-l", "-d", "x"]).unwrap();
+        assert!(args.action().is_err());
+        let args = parse(&["cm", "--shutdown", "-u", "root"]).unwrap();
+        assert!(args.action().is_err());
+        let args = parse(&["cm", "-t", "x", "ls"]).unwrap();
+        assert!(args.action().is_err());
+    }
+
+    #[test]
+    fn install_with_name() {
+        let args = parse(&["cm", "--install", "alpine:latest", "--name", "dev"]).unwrap();
+        assert_eq!(
+            args.action().unwrap(),
+            Action::Install {
+                image: "alpine:latest".into(),
+                name: Some("dev".into()),
+                no_launch: false
+            }
+        );
+    }
+
+    #[test]
+    fn name_requires_install() {
+        assert!(parse(&["cm", "--name", "dev"]).is_err());
+    }
+}

@@ -1,0 +1,56 @@
+[#]*
+*.bak
+*.backup
+*.o
+*.old
+*.orig
+*.tdy
+*.tmp
+*~
+.*
+
+# Keep some vscode files
+!/.vscode
+/.vscode/perl-lang
+
+# Keep claude rules and shared settings
+!/.claude
+/.claude/*
+!/.claude/rules
+!/.claude/workflows
+!/.claude/settings.json
+
+# Keep devin rules, skills, and shared settings
+!/.devin
+/.devin/*
+!/.devin/rules
+!/.devin/skills
+!/.devin/.markdownlint.json
+
+# Keep some config files
+!/.devcontainer
+!.git*[^~]
+!.markdownlint.json
+
+# Rust target directory (Cargo.lock IS committed: binary crate)
+/target
+
+# Ignore scratch directories
+/scratch
+/input
+/output
+/docs-to-be-added
+
+# Commit templates
+next[-_]commit*.txt
+next[-_]amend*.txt
+!.templates/
+!.templates/next[-_]commit*.txt
+!.templates/next[-_]amend*.txt
+
+
+# Added by cargo
+#
+# already existing elements were commented out
+
+#/target
