@@ -21,7 +21,8 @@ and Windsurf's uses the same `wsl+<distro>` authority URI scheme.
   already covers most of it. The gaps: UTF-16LE output for list commands,
   WSL-shaped `-l -v` output, `-i` stdin wiring in `cm`'s exec path, and a
   **stdout attach race in `container machine run`** that eats the first
-  writes — measured and documented below.
+  writes — measured and documented below; tracked in
+  [gaps/exec-stdio](gaps/exec-stdio.md).
 - The hard problem isn't the CLI — it's **transport**: the server binds
   guest `127.0.0.1:<port>` and the editor connects to *its own* localhost,
   relying on WSL2 `localhostForwarding`. We have no forwarding
@@ -138,37 +139,33 @@ forwarder — trivial to add in a forked resolver, awkward via a fake
 
 Checked against a running `alpine` machine (`container` 1.5.x):
 
-| Requirement                        | Status today                                                          |
-| ---------------------------------- | --------------------------------------------------------------------- |
-| Non-TTY exec with `--` passthrough | works — exit codes propagate, stderr clean                            |
-| stdin → guest                      | **needs `-i`**; without it guest stdin is closed (`cat` reads EOF)    |
-| stdout reliability                 | **racy** — writes in the first ~50 ms are silently dropped            |
-| `-l -v` WSL-format output          | absent — `-v` ignored today; see [verbose-list](gaps/verbose-list.md) |
-| UTF-16LE list output               | absent — only relevant on the Windows side anyway                     |
-| `-d`, `-s`, `-t`, `--unregister`   | all present and compatible                                            |
-| `--list --online`                  | no equivalent (no distro store); can return a curated image list      |
+| Requirement                        | Status today                                                                                                                                                                            |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Non-TTY exec with `--` passthrough | works — exit codes propagate, stderr clean                                                                                                                                              |
+| stdin → guest                      | **needs `-i`**; without it guest stdin is closed — see [exec-stdio](gaps/exec-stdio.md)                                                                                                 |
+| stdout reliability                 | **racy** — first writes dropped on either stream; see [exec-stdio](gaps/exec-stdio.md)                                                                                                  |
+| argv fidelity                      | **not preserved** — `machine run` shell-evals joined argv ([upstream #1954](https://github.com/apple/container/issues/1954)); single-quoted `bash -c '…'` survives the extra eval round |
+| `-l -v` WSL-format output          | absent — `-v` ignored today; see [verbose-list](gaps/verbose-list.md)                                                                                                                   |
+| UTF-16LE list output               | absent — only relevant on the Windows side anyway                                                                                                                                       |
+| `-d`, `-s`, `-t`, `--unregister`   | all present and compatible                                                                                                                                                              |
+| `--list --online`                  | no equivalent (no distro store); can return a curated image list                                                                                                                        |
 
-Details worth an upstream issue:
-
-```text
-$ container machine run -n alpine -i -- sh -c 'echo start; for i in $(seq 3); do echo l$i; sleep 0.05; done; echo end'
-
-l1        ← "start" vanished; its newline partially survives
-l2
-l3
-end
-```
-
-stdout attaches late; early bytes are lost. Workaround at the `cm` level:
-prefix exec commands with a tiny delay, or buffer via `sh -c 'sleep 0.05;
-exec "$@"' sh <cmd>`. The honest fix is upstream in `machine run`'s stdio
-wiring. Note the bootstrap script's critical output (the result block)
-comes after downloads and sleeps, so it survives the race — flaky failures
-would show up in the quick probe calls instead.
+Details in [gaps/exec-stdio](gaps/exec-stdio.md) — the headline for this
+use case: stdout attaches late and the **first write on either stream is
+dropped**, so quick probe commands (`uname`, `command -v`, `cat
+/etc/os-release`) are exactly the traffic that loses output, while the
+bootstrap script's result block (echoed at the end, after downloads and
+sleeps) survives. The honest fix is upstream in `machine run`'s stdio
+wiring; `cm` workarounds (`-i` passthrough, attach handshake) are in the
+gap doc.
 
 Concrete `cm` changes for this use case:
 
-- Pass `-i` on the exec path (or at least when stdin isn't a TTY) — one flag.
+- Pass `-i` on the exec path (or at least when stdin isn't a TTY) — one
+  flag; details in [exec-stdio](gaps/exec-stdio.md).
+- Per-arg quoting in the exec path to neutralize `machine run`'s
+  shell-eval round ([upstream #1954](https://github.com/apple/container/issues/1954))
+  — otherwise `cm -e cmd "a b"` silently becomes `cmd a b`.
 - Emit WSL-compatible `-l -v` (a `*`, name, `Running`/`Stopped`, version
   `2`) — overlaps the existing verbose-list gap.
 - Optionally grow `cm forward` (localhost→machine port forwarder) and/or a
@@ -307,16 +304,20 @@ VSCodium is the unambiguous client for it.
    prefer the container-native flavor (B2), since the extension gets
    structured `container` JSON for free and the `cm` layer buys it
    nothing. If you do go through `cm`, fold in its three fixes (`-i` on
-   exec, WSL `-l -v` output, upstream bug report for the stdout race) —
-   the fork needs them regardless via `container machine run`.
+   exec, WSL `-l -v` output, upstream bug report for the
+   [stdout race](gaps/exec-stdio.md)) — the fork needs them regardless
+   via `container machine run`.
 3. **Option A** only if the requirement is specifically "stock VS Code /
    Windsurf on Windows, no forked client" — it's real but it's a shim
    emulating a shim.
 
 ## Open questions
 
-- Does `container machine run`'s stdout race reproduce upstream, and is it
-  already tracked? (File/fix upstream; the workaround is cheap either way.)
+- ~~Does `container machine run`'s stdout race reproduce upstream, and is
+  it already tracked?~~ Answered 2026-10-01: reproduces on 1.5.0, no exact
+  upstream issue — closest is
+  [#1148](https://github.com/apple/container/issues/1148) (`run -i` output
+  truncation). File a new one; see [exec-stdio](gaps/exec-stdio.md).
 - Does `machine run` allocate a TTY when the caller has none, and can `-t`
   behavior affect the exec path?
 - Do `windsurf-remote-wsl` / Cursor's remote use the same call surface?

@@ -327,6 +327,7 @@ including the level that solves it and a recommendation:
 | `-v` ignored, no verbose list              | [gaps/verbose-list](gaps/verbose-list.md)               | **L0** — `machine inspect` |
 | Subprocess overhead + JSON scraping        | [gaps/subprocess-overhead](gaps/subprocess-overhead.md) | L2 only if it hurts        |
 | Startup `system start` dance               | [gaps/service-startup](gaps/service-startup.md)         | L0 — stop-what-we-started  |
+| `machine run` exec stdio loss              | [gaps/exec-stdio](gaps/exec-stdio.md)                   | upstream fix; L0 `-i`      |
 
 Only **mounts outside `$HOME`** and **port forwarding** genuinely require
 going below the CLI — everything else is reachable at L0.

@@ -30,3 +30,9 @@ compat shim — it only becomes a gap if:
 
 Do nothing. Revisit only if profiling shows subprocess time matters or
 JSON drift actually breaks us — then go L2, not L1.
+
+## Related
+
+- [exec-stdio](exec-stdio.md) — correctness problem on the same exec
+  path: `machine run` drops the first guest→host write and needs `-i`
+  for stdin

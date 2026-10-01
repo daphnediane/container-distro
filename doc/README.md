@@ -23,6 +23,7 @@ that would fix it:
 | [`-v` verbose list](gaps/verbose-list.md)                           | L0 — `machine inspect` JSON             |
 | [Subprocess overhead / JSON scraping](gaps/subprocess-overhead.md)  | L2 if it ever hurts                     |
 | [Service startup / `--shutdown` semantics](gaps/service-startup.md) | L0 — "stop what we started"             |
+| [`machine run` exec stdio loss](gaps/exec-stdio.md)                 | upstream fix; L0 `-i` + handshake       |
 
 Upstream references:
 
