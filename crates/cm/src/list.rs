@@ -64,7 +64,7 @@ impl Entry {
             ip: d.ip_address.clone(),
             cpus: d.cpus,
             memory: d.memory,
-            disk: None,
+            disk: d.disk_size,
             platform: d.platform.clone(),
             home: d.home_mount.clone(),
             image: d.image.clone(),

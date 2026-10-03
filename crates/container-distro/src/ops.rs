@@ -42,6 +42,12 @@ pub struct DistroSummary {
     pub cpus: Option<u64>,
     #[serde(default)]
     pub memory: Option<u64>,
+    /// Host disk space used by the root filesystem, in bytes.
+    #[serde(default)]
+    pub disk_size: Option<u64>,
+    /// ISO 8601 UTC.
+    #[serde(default)]
+    pub created_date: Option<String>,
     #[serde(default)]
     pub image: Option<String>,
     #[serde(default)]
@@ -341,7 +347,7 @@ pub fn create(name: Option<String>, opts: &CreateOptions, image: &str) -> Result
     create_from_spec(&spec, opts.no_boot, opts.set_default)
 }
 
-fn summarize(c: &ContainerInfo, default: Option<&str>) -> DistroSummary {
+fn summarize(c: &ContainerInfo, default: Option<&str>, app_root: Option<&Path>) -> DistroSummary {
     let cfg = &c.configuration;
     let home = host_home().unwrap_or_default();
     let spec = DistroSpec::from_container(c, &home).ok();
@@ -352,6 +358,8 @@ fn summarize(c: &ContainerInfo, default: Option<&str>) -> DistroSummary {
         ip_address: c.ipv4().map(str::to_string),
         cpus: cfg.resources.as_ref().and_then(|r| r.cpus),
         memory: cfg.resources.as_ref().and_then(|r| r.memory_in_bytes),
+        disk_size: app_root.and_then(|r| container::container_disk_usage(r, c.id())),
+        created_date: cfg.creation_date.clone(),
         image: cfg.image.as_ref().map(|i| i.reference.clone()),
         platform: cfg.platform.as_ref().map(ToString::to_string),
         home_mount: label_lookup(&cfg.labels, LABEL_HOME_MOUNT).cloned(),
@@ -369,10 +377,11 @@ fn summarize(c: &ContainerInfo, default: Option<&str>) -> DistroSummary {
 /// All distros, sorted by name.
 pub fn summaries(running_only: bool) -> Result<Vec<DistroSummary>> {
     let default = default_name();
+    let app_root = container::app_root();
     let mut rows: Vec<DistroSummary> = distros()?
         .iter()
         .filter(|c| !running_only || c.is_running())
-        .map(|c| summarize(c, default.as_deref()))
+        .map(|c| summarize(c, default.as_deref(), app_root.as_deref()))
         .collect();
     rows.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(rows)

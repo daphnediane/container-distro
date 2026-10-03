@@ -7,7 +7,8 @@
 //! Thin wrappers around the `container` CLI.
 
 use std::env;
-use std::path::Path;
+use std::os::unix::fs::MetadataExt;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
@@ -135,6 +136,9 @@ pub struct ContainerConfig {
     pub image: Option<ImageInfo>,
     #[serde(default)]
     pub platform: Option<Platform>,
+    /// ISO 8601 UTC, e.g. `2026-10-03T23:35:14Z`.
+    #[serde(default)]
+    pub creation_date: Option<String>,
 }
 
 /// A filesystem mount in a container's configuration.
@@ -197,7 +201,7 @@ pub fn container_cmd() -> Command {
     Command::new(env::var("CONTAINER_CLI").unwrap_or_else(|_| "container".into()))
 }
 
-fn system_status() -> Option<String> {
+fn system_status() -> Option<serde_json::Value> {
     let out = container_cmd()
         .args(["system", "status", "--format", "json"])
         .stderr(Stdio::null())
@@ -206,16 +210,28 @@ fn system_status() -> Option<String> {
     if !out.status.success() {
         return None;
     }
-    serde_json::from_slice::<serde_json::Value>(&out.stdout)
-        .ok()?
-        .get("status")?
-        .as_str()
-        .map(str::to_owned)
+    serde_json::from_slice(&out.stdout).ok()
 }
 
 /// Whether `container` services are currently running.
 pub fn system_running() -> bool {
-    system_status().as_deref() == Some("running")
+    system_status().is_some_and(|s| s.get("status").and_then(|v| v.as_str()) == Some("running"))
+}
+
+/// `container`'s data directory (`paths.appRoot` in `container system status`).
+pub fn app_root() -> Option<PathBuf> {
+    system_status()?
+        .pointer("/paths/appRoot")?
+        .as_str()
+        .map(PathBuf::from)
+}
+
+/// Host disk space a container's root filesystem uses: the allocated size
+/// of its sparse `rootfs.ext4`, which is what `container machine list`
+/// reports as DISK.
+pub fn container_disk_usage(app_root: &Path, id: &str) -> Option<u64> {
+    let meta = std::fs::metadata(app_root.join("containers").join(id).join("rootfs.ext4")).ok()?;
+    Some(meta.blocks() * 512)
 }
 
 /// Start `container` services if they are not already running.

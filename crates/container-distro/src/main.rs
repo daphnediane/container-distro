@@ -14,7 +14,7 @@ use std::process::ExitCode;
 
 use anyhow::Result;
 use clap::Parser;
-use cm_core::table::{columns, human_bytes};
+use cm_core::table::{columns, human_bytes, local_datetime};
 use container_distro::ops::{self, DistroSummary, RunOpts};
 use container_distro::plugin;
 use container_distro::spec::SpecChanges;
@@ -42,7 +42,8 @@ fn print_table(rows: &[DistroSummary]) {
     let dash = || "-".to_string();
     let mut table = vec![
         [
-            "NAME", "IMAGE", "STATE", "IP", "CPUS", "MEMORY", "MOUNTS", "PORTS", "DEFAULT",
+            "NAME", "IMAGE", "CREATED", "STATE", "IP", "CPUS", "MEMORY", "DISK", "MOUNTS", "PORTS",
+            "DEFAULT",
         ]
         .map(String::from)
         .to_vec(),
@@ -51,10 +52,15 @@ fn print_table(rows: &[DistroSummary]) {
         table.push(vec![
             r.id.clone(),
             r.image.clone().unwrap_or_else(dash),
+            r.created_date
+                .as_deref()
+                .and_then(local_datetime)
+                .unwrap_or_else(dash),
             r.status.clone(),
             r.ip_address.clone().unwrap_or_else(dash),
             r.cpus.map_or_else(dash, |c| c.to_string()),
             r.memory.map_or_else(dash, human_bytes),
+            r.disk_size.map_or_else(dash, human_bytes),
             if r.mounts.is_empty() {
                 dash()
             } else {
