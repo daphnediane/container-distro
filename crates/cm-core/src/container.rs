@@ -7,6 +7,7 @@
 //! Thin wrappers around the `container` CLI.
 
 use std::env;
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
@@ -43,13 +44,31 @@ impl Machine {
 pub struct MachineDetail {
     pub id: String,
     #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
     pub container_id: Option<String>,
+    #[serde(default)]
+    pub user_setup: Option<UserSetup>,
     #[serde(default)]
     pub home_mount: Option<String>,
     #[serde(default)]
     pub platform: Option<Platform>,
     #[serde(default)]
     pub image: Option<ImageInfo>,
+}
+
+impl MachineDetail {
+    pub fn is_running(&self) -> bool {
+        self.status.as_deref() == Some("running")
+    }
+}
+
+/// The host account a machine provisioned.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UserSetup {
+    pub uid: u32,
+    pub gid: u32,
+    pub username: String,
 }
 
 /// An OCI platform (`os`/`architecture`).
@@ -242,11 +261,98 @@ pub fn list_containers() -> Result<Vec<ContainerInfo>> {
 
 /// `container machine inspect` for one machine.
 pub fn inspect_machine(id: &str) -> Result<MachineDetail> {
-    let details: Vec<MachineDetail> = json_output(&["machine", "inspect", id])?;
+    inspect_machine_or_default(Some(id))
+}
+
+/// `container machine inspect` for `id`, or the default machine.
+pub fn inspect_machine_or_default(id: Option<&str>) -> Result<MachineDetail> {
+    let mut args = vec!["machine", "inspect"];
+    args.extend(id);
+    let details: Vec<MachineDetail> = json_output(&args)?;
     details
         .into_iter()
         .next()
-        .with_context(|| format!("machine `{id}` not found"))
+        .with_context(|| format!("machine `{}` not found", id.unwrap_or("(default)")))
+}
+
+/// Starting directory for a machine session, matching `machine run`: the
+/// host cwd when it is under a shared `$HOME`, else the guest home.
+///
+/// Never returns a path that may not exist in the guest — `container
+/// exec -w` silently creates missing directories.
+pub fn machine_workdir(
+    detail: &MachineDetail,
+    cwd: Option<&Path>,
+    host_home: Option<&str>,
+) -> Option<String> {
+    let home_shared = detail.home_mount.as_deref() != Some("none");
+    if let (true, Some(cwd), Some(home)) = (home_shared, cwd, host_home)
+        && cwd.starts_with(home)
+    {
+        return Some(cwd.to_string_lossy().into_owned());
+    }
+    detail
+        .user_setup
+        .as_ref()
+        .map(|u| format!("/home/{}", u.username))
+}
+
+/// Build `container exec` for an argv-exact command in a machine's
+/// backing container — bypassing `machine run`'s `$SHELL -c "$*"`
+/// re-evaluation (apple/container#1954) without any quoting.
+///
+/// Returns `None` when the inspect data lacks what's needed (no backing
+/// container ID, or no provisioned user when `user` is unset); callers
+/// fall back to [`run_command`] with [`ArgvMode::Exact`]. The machine
+/// must already be running.
+#[allow(clippy::too_many_arguments)]
+pub fn machine_exec_command(
+    detail: &MachineDetail,
+    user: Option<&str>,
+    cd: Option<&str>,
+    env_vars: &[String],
+    command: &[String],
+    tty: bool,
+    cwd: Option<&Path>,
+    host_home: Option<&str>,
+) -> Option<Command> {
+    let cid = detail.container_id.as_deref()?;
+    let mut cmd = container_cmd();
+    cmd.args(["exec", "-i"]);
+    if tty {
+        cmd.arg("-t");
+    }
+    match user {
+        Some(u) => {
+            cmd.args(["--user", u]);
+        }
+        None => {
+            let u = detail.user_setup.as_ref()?;
+            cmd.arg("--user").arg(format!("{}:{}", u.uid, u.gid));
+            for (k, v) in [
+                ("HOME", format!("/home/{}", u.username)),
+                ("USER", u.username.clone()),
+                ("LOGNAME", u.username.clone()),
+            ] {
+                cmd.arg("--env").arg(format!("{k}={v}"));
+            }
+        }
+    }
+    let workdir = match cd {
+        Some(d) => Some(d.to_string()),
+        None => machine_workdir(detail, cwd, host_home),
+    };
+    if let Some(w) = workdir {
+        cmd.args(["--workdir", &w]);
+    }
+    if let Ok(term) = env::var("TERM") {
+        cmd.arg("--env").arg(format!("TERM={term}"));
+    }
+    for e in env_vars {
+        cmd.args(["--env", e]);
+    }
+    cmd.arg(cid).args(command);
+    Some(cmd)
 }
 
 /// Quote `arg` for a POSIX shell: wrap in single quotes, escaping embedded
@@ -438,6 +544,63 @@ mod tests {
             serde_json::from_str(r#"{"configuration":{"id":"x"},"status":{"state":"stopped"}}"#)
                 .unwrap();
         assert!(!c.is_running() && c.ipv4().is_none());
+    }
+
+    fn detail() -> MachineDetail {
+        let d: Vec<MachineDetail> = serde_json::from_str(INSPECT_JSON).unwrap();
+        d.into_iter().next().unwrap()
+    }
+
+    #[test]
+    fn machine_exec_is_argv_exact() {
+        let d = detail();
+        let command = ["printf".to_string(), ":%s:".to_string(), "a b".to_string()];
+        let cmd = machine_exec_command(
+            &d,
+            None,
+            None,
+            &["FOO=bar".to_string()],
+            &command,
+            false,
+            Some(Path::new("/tmp")),
+            Some("/Users/daphnediane"),
+        )
+        .unwrap();
+        let args = args_of(&cmd);
+        let joined = args.join(" ");
+        assert!(joined.starts_with("exec -i --user 1027:20 --env HOME=/home/daphnediane"));
+        assert!(joined.contains("--workdir /home/daphnediane"));
+        assert!(joined.contains("--env FOO=bar"));
+        assert_eq!(
+            &args[args.len() - 4..],
+            ["alpine-730439", "printf", ":%s:", "a b"]
+        );
+    }
+
+    #[test]
+    fn machine_exec_needs_container_id() {
+        let mut d = detail();
+        d.container_id = None;
+        assert!(
+            machine_exec_command(&d, None, None, &[], &["ls".into()], false, None, None).is_none()
+        );
+    }
+
+    #[test]
+    fn machine_workdir_only_existing_paths() {
+        let mut d = detail();
+        let home = Some("/Users/daphnediane");
+        let wd = |d: &MachineDetail, p: &str| machine_workdir(d, Some(Path::new(p)), home);
+        assert_eq!(
+            wd(&d, "/Users/daphnediane/src").as_deref(),
+            Some("/Users/daphnediane/src")
+        );
+        assert_eq!(wd(&d, "/Volumes/X").as_deref(), Some("/home/daphnediane"));
+        d.home_mount = Some("none".into());
+        assert_eq!(
+            wd(&d, "/Users/daphnediane/src").as_deref(),
+            Some("/home/daphnediane")
+        );
     }
 
     #[test]

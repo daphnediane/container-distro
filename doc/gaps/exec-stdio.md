@@ -1,8 +1,10 @@
 # Gap: `machine run` exec fidelity — stdin needs `-i`, first writes dropped, argv re-evaled
 
-**Status:** partially closed — `cm` now always passes `-i` (stdin works)
-and single-quotes `-e` arguments (argv exact); distros use `container
-exec`, which is argv-exact. The first-write drop is still open upstream
+**Status:** partially closed — `cm` now always passes `-i` (stdin works).
+`cm -e` runs machine commands with `container exec` in the backing
+container (argv-exact, no shell re-eval), falling back to
+`machine run` with single-quoted arguments; distros always use
+`container exec`. The first-write drop is still open upstream
 (not reproduced in later 1.5.0 runs on 2026-10-03)
 **Fix level:** upstream fix in `container machine run` attach sequencing;
 L0 workarounds (`-i` passthrough, attach handshake) cover most cases

@@ -11,6 +11,7 @@ mod backend;
 mod cli;
 mod list;
 
+use std::io::IsTerminal;
 use std::net::{IpAddr, Ipv4Addr};
 use std::os::unix::process::CommandExt;
 use std::process::{ExitCode, ExitStatus, Stdio};
@@ -88,6 +89,12 @@ fn run_in_target(args: &Args) -> Result<ExitCode> {
 }
 
 fn run_in_machine(args: &Args, machine: Option<&str>) -> Result<ExitCode> {
+    if argv_mode(args) == ArgvMode::Exact
+        && !args.command.is_empty()
+        && let Some(mut cmd) = machine_exec(args, machine)?
+    {
+        return Err(anyhow::Error::from(cmd.exec()).context("failed to exec `container exec`"));
+    }
     let executable = match args.shell_type {
         Some(ShellType::Standard) if args.command.is_empty() => {
             Some(container::resolve_shell(machine, args.user.as_deref()))
@@ -104,6 +111,46 @@ fn run_in_machine(args: &Args, machine: Option<&str>) -> Result<ExitCode> {
         argv_mode(args),
     );
     Err(anyhow::Error::from(cmd.exec()).context("failed to exec `container machine run`"))
+}
+
+/// Exact-argv commands go straight to the machine's backing container via
+/// `container exec`, avoiding `machine run`'s shell re-evaluation. Returns
+/// `None` to fall back to `machine run` (with per-argument quoting) when
+/// the inspect data lacks a container ID or user.
+fn machine_exec(args: &Args, machine: Option<&str>) -> Result<Option<std::process::Command>> {
+    let Ok(mut detail) = container::inspect_machine_or_default(machine) else {
+        return Ok(None);
+    };
+    if !detail.is_running() {
+        let status = container::run_command(
+            Some(&detail.id),
+            None,
+            None,
+            &[],
+            None,
+            &["true".to_string()],
+            ArgvMode::Shell,
+        )
+        .stdin(Stdio::null())
+        .status()
+        .context("failed to boot the machine")?;
+        if !status.success() {
+            bail!("failed to boot machine `{}`", detail.id);
+        }
+        detail = container::inspect_machine(&detail.id)?;
+    }
+    let cwd = std::env::current_dir().ok();
+    let home = std::env::var("HOME").ok();
+    Ok(container::machine_exec_command(
+        &detail,
+        args.user.as_deref(),
+        args.cd.as_deref(),
+        &args.env,
+        &args.command,
+        std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),
+        cwd.as_deref(),
+        home.as_deref(),
+    ))
 }
 
 /// Distros run through `container exec`, which is argv-exact already; the

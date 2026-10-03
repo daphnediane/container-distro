@@ -186,8 +186,12 @@ As with WSL, `cm -e cmd args…` delivers each argument exactly, while
 (so `cm -- echo '$HOME'` expands in the guest). `container machine run`
 always shell-evaluates its arguments
 ([apple/container#1954](https://github.com/apple/container/issues/1954)),
-so `cm -e` single-quotes each argument to cancel that out. Piped stdin
-is forwarded (`cm` always passes `-i`).
+so `cm -e` bypasses it: it runs the command with `container exec` in the
+machine's backing container (as your user, starting in the same
+directory `machine run` would). If that isn't possible, `cm` falls back
+to `machine run` with each argument single-quoted. Shells and `--`
+commands still use `machine run`. Piped stdin is forwarded (`cm` always
+passes `-i`).
 
 Known upstream issue: `container machine run` can drop the guest's very
 first write to stdout/stderr — see

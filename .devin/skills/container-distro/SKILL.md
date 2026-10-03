@@ -25,8 +25,11 @@ from `cm_core::naming`; see `doc/naming.md` before changing any of them.
 
 - No args / `-d <m>` / `-u <u>` / `--cd <dir>` / `--shell-type <t>` →
   `container machine run -i` (`exec()`ed for TTY passthrough)
-- `-e <cmd...>` → argv-exact: each arg is single-quoted, because
-  `machine run` shell-evaluates its args (apple/container#1954)
+- `-e <cmd...>` → argv-exact via `container exec` in the machine's
+  backing container (`containerId` from `machine inspect`, user from
+  `userSetup`, workdir only if it exists in the guest — `exec -w`
+  creates missing dirs). Falls back to `machine run` with each arg
+  single-quoted (apple/container#1954)
 - `-- <cmd...>` or bare positional args → run via the guest shell (WSL
   semantics)
 - `-l` → WSL-style name list; `-l -v` → exact `NAME STATE VERSION`
