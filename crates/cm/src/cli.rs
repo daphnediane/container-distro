@@ -13,6 +13,38 @@
 use anyhow::{Result, bail};
 use clap::{ArgAction, Parser, ValueEnum};
 
+/// How the macOS home directory is shared into a machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum HomeMount {
+    /// Read-write (the `container` default).
+    Rw,
+    /// Read-only.
+    Ro,
+    /// Not shared.
+    None,
+}
+
+impl HomeMount {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HomeMount::Rw => "rw",
+            HomeMount::Ro => "ro",
+            HomeMount::None => "none",
+        }
+    }
+}
+
+/// Options for `--install`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InstallOpts {
+    pub image: String,
+    pub name: Option<String>,
+    pub no_launch: bool,
+    pub cpus: Option<u32>,
+    pub memory: Option<String>,
+    pub home_mount: Option<HomeMount>,
+}
+
 /// Which shell flavor to start for an interactive session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum ShellType {
@@ -109,6 +141,10 @@ pub struct Args {
     #[arg(long = "shutdown")]
     pub shutdown: bool,
 
+    /// With --shutdown, also stop `container` services (`container system stop`)
+    #[arg(long = "system", requires = "shutdown")]
+    pub system: bool,
+
     /// Show container system status
     #[arg(long = "status")]
     pub status: bool,
@@ -128,6 +164,23 @@ pub struct Args {
     /// Do not open a shell after --install finishes
     #[arg(long = "no-launch", requires = "install")]
     pub no_launch: bool,
+
+    /// Number of virtual CPUs for the machine created by --install
+    #[arg(long = "cpus", requires = "install", value_name = "N")]
+    pub cpus: Option<u32>,
+
+    /// Memory for the machine created by --install (e.g. 4G)
+    #[arg(long = "memory", requires = "install", value_name = "SIZE")]
+    pub memory: Option<String>,
+
+    /// Home directory mount for the machine created by --install
+    #[arg(
+        long = "home-mount",
+        requires = "install",
+        value_enum,
+        value_name = "MODE"
+    )]
+    pub home_mount: Option<HomeMount>,
 
     /// Print version information
     #[arg(long = "version")]
@@ -153,8 +206,8 @@ pub enum Action {
         quiet: bool,
         verbosity: u8,
     },
-    /// Stop every running machine.
-    Shutdown,
+    /// Stop every running machine; with `system`, also stop services.
+    Shutdown { system: bool },
     /// `container system status`.
     Status,
     /// `container machine set-default`.
@@ -164,11 +217,7 @@ pub enum Action {
     /// `container machine rm`.
     Unregister(String),
     /// `container machine create`, then optionally open a shell.
-    Install {
-        image: String,
-        name: Option<String>,
-        no_launch: bool,
-    },
+    Install(InstallOpts),
     /// Print cm and container versions.
     Version,
 }
@@ -187,13 +236,18 @@ impl Args {
         } else if let Some(m) = &self.unregister {
             Action::Unregister(m.clone())
         } else if let Some(i) = &self.install {
-            Action::Install {
+            Action::Install(InstallOpts {
                 image: i.clone(),
                 name: self.name.clone(),
                 no_launch: self.no_launch,
-            }
+                cpus: self.cpus,
+                memory: self.memory.clone(),
+                home_mount: self.home_mount,
+            })
         } else if self.shutdown {
-            Action::Shutdown
+            Action::Shutdown {
+                system: self.system,
+            }
         } else if self.list {
             Action::List {
                 running_only: self.running,
@@ -368,12 +422,45 @@ mod tests {
         let args = parse(&["cm", "--install", "alpine:latest", "--name", "dev"]).unwrap();
         assert_eq!(
             args.action().unwrap(),
-            Action::Install {
+            Action::Install(InstallOpts {
                 image: "alpine:latest".into(),
                 name: Some("dev".into()),
-                no_launch: false
-            }
+                no_launch: false,
+                cpus: None,
+                memory: None,
+                home_mount: None,
+            })
         );
+    }
+
+    #[test]
+    fn install_resource_options() {
+        let args = parse(&[
+            "cm",
+            "--install",
+            "alpine",
+            "--cpus",
+            "2",
+            "--memory",
+            "4G",
+            "--home-mount",
+            "ro",
+        ])
+        .unwrap();
+        let Action::Install(opts) = args.action().unwrap() else {
+            panic!("expected install");
+        };
+        assert_eq!(opts.cpus, Some(2));
+        assert_eq!(opts.memory.as_deref(), Some("4G"));
+        assert_eq!(opts.home_mount, Some(HomeMount::Ro));
+        assert!(parse(&["cm", "--cpus", "2"]).is_err());
+    }
+
+    #[test]
+    fn shutdown_system() {
+        let args = parse(&["cm", "--shutdown", "--system"]).unwrap();
+        assert_eq!(args.action().unwrap(), Action::Shutdown { system: true });
+        assert!(parse(&["cm", "--system"]).is_err());
     }
 
     #[test]

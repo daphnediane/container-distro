@@ -25,28 +25,28 @@ cm [OPTIONS] [-- <COMMAND LINE>]
 
 ### Run commands and shells
 
-| Option               | Description                                       |
-| -------------------- | ------------------------------------------------- |
-| `-d, --distribution` | Machine to use (default machine if omitted)       |
-| `-u, --user`         | Run as the specified user                         |
-| `--cd`               | Working directory inside the machine              |
-| `--shell-type`       | `standard` (non-login), `login` (default), `none` |
-| `-e, --exec`         | Execute the command line without a shell          |
-| `-- <cmd>`           | Pass the remaining command line through verbatim  |
-| `--env KEY=VALUE`    | Set an environment variable in the machine        |
+| Option               | Description                                           |
+| -------------------- | ----------------------------------------------------- |
+| `-d, --distribution` | Machine to use (default machine if omitted)           |
+| `-u, --user`         | Run as the specified user                             |
+| `--cd`               | Working directory inside the machine                  |
+| `--shell-type`       | `standard` (non-login), `login` (default), `none`     |
+| `-e, --exec`         | Execute the command line without a shell (exact argv) |
+| `-- <cmd>`           | Run the remaining command line via the shell          |
+| `--env KEY=VALUE`    | Set an environment variable in the machine            |
 
 ### Manage machines
 
-| Option              | Description                                       |
-| ------------------- | ------------------------------------------------- |
-| `-l, --list`        | List machines (`--all`, `--running`, `-q`, `-v`)  |
-| `-s, --set-default` | Set the default machine                           |
-| `-t, --terminate`   | Stop a running machine                            |
-| `--shutdown`        | Stop all running machines                         |
-| `--status`          | Show container system status                      |
-| `--unregister`      | Delete a machine and its storage                  |
-| `--install <image>` | Create + boot a machine (`--name`, `--no-launch`) |
-| `--version`         | Show `cm` and `container` versions                |
+| Option              | Description                                                                             |
+| ------------------- | --------------------------------------------------------------------------------------- |
+| `-l, --list`        | List machines (`--all`, `--running`, `-q`, `-v`, `-v -v`)                               |
+| `-s, --set-default` | Set the default machine                                                                 |
+| `-t, --terminate`   | Stop a running machine                                                                  |
+| `--shutdown`        | Stop all running machines (`--system`: also stop services)                              |
+| `--status`          | Show container system status                                                            |
+| `--unregister`      | Delete a machine and its storage                                                        |
+| `--install <image>` | Create + boot a machine (`--name`, `--no-launch`, `--cpus`, `--memory`, `--home-mount`) |
+| `--version`         | Show `cm` and `container` versions                                                      |
 
 If `container` services aren't running, `cm` runs `container system start`
 first.
@@ -58,7 +58,10 @@ cm -d alpine                      # shell in the alpine machine
 cm -e uname -a                    # run a command
 cm -- ls -la                      # verbatim passthrough
 cm -d alpine --cd /tmp -e pwd     # command with a working dir
-cm -l -v                          # list machines
+cm -l                             # list machines (WSL style)
+cm -l -v                          # NAME STATE VERSION table
+cm -l -v -v                       # ...plus IP, resources, image
+echo hi | cm -- cat               # stdin is piped through
 cm -t alpine                      # stop it
 cm --install alpine:latest --name dev   # create and launch a machine
 ```
@@ -82,9 +85,9 @@ home mount (`rw` by default; `ro` or `none` via
 `container machine create --home-mount` or
 `container machine set -n <m> home-mount=<mode>` plus a restart).
 Directories on other volumes (e.g. `/Volumes/...`) or elsewhere outside
-your home directory are unreachable from inside the machine. `cm
---install` does not yet expose `--home-mount`; use `container machine
-set` to change it after creation.
+your home directory are unreachable from inside the machine. Pick the
+home mode at creation with `cm --install <image> --home-mount ro`, or
+change it later with `container machine set`.
 
 Also note the guest's `~` is `/home/<name>` — a pure Linux home on the
 machine's persistent disk — distinct from your macOS home at
@@ -109,6 +112,20 @@ its own IP on the `machine` network (shown by `cm -l`); services in the
 guest are reachable at that IP only — nothing is bridged to macOS
 localhost.
 
+### Command execution
+
+As with WSL, `cm -e cmd args…` delivers each argument exactly, while
+`cm cmd…` and `cm -- cmd…` run the command line through the guest shell
+(so `cm -- echo '$HOME'` expands in the guest). `container machine run`
+always shell-evaluates its arguments
+([apple/container#1954](https://github.com/apple/container/issues/1954)),
+so `cm -e` single-quotes each argument to cancel that out. Piped stdin
+is forwarded (`cm` always passes `-i`).
+
+Known upstream issue: `container machine run` can drop the guest's very
+first write to stdout/stderr — see
+[doc/gaps/exec-stdio.md](doc/gaps/exec-stdio.md).
+
 ### Interop and user mapping
 
 WSL can execute Windows binaries from Linux via binfmt interop; there is
@@ -119,21 +136,21 @@ so `git`/`ssh` operations use your host agent with no extra setup.
 
 ### Management gaps
 
-- `-v/--verbose` is accepted with `-l` for WSL compatibility but ignored —
-  `container machine list` has no verbose mode.
+- `cm -l -v` prints WSL's `NAME STATE VERSION` table; VERSION is always
+  `2` (machines are full VMs). `-v -v` adds `container`-specific columns.
 - Machine names must be lowercase DNS-style (`[a-z0-9-]`); WSL distro
   names are unrestricted.
-- `--shutdown` stops machines but leaves `container` services running
-  (see Notes).
-- No equivalents for `--export`/`--import`, `--update`, `--manage`,
+- `--shutdown` stops machines but leaves `container` services running;
+  `--shutdown --system` also runs `container system stop` (which stops
+  every container, not just machines).
+- No equivalents for `--export`/`--import` (see
+  [doc/gaps/export-import.md](doc/gaps/export-import.md)), `--update`, `--manage`,
   `--mount` (VHDs), or `wsl.conf`.
 
 ## Notes
 
 - `container machine run` requires a TTY for interactive shells (as does `cm`).
 - `container` is resolved from `PATH`; set `CONTAINER_CLI` to override.
-- `--shutdown` stops machines but leaves `container` services running
-  (use `container system stop` for a full shutdown).
 
 ## License
 

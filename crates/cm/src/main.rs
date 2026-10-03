@@ -14,7 +14,7 @@ use std::process::{ExitCode, ExitStatus};
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use cli::{Action, Args, ShellType};
+use cli::{Action, Args, InstallOpts, ShellType};
 use cm_core::container::{self, ArgvMode};
 use list::Entry;
 
@@ -33,7 +33,7 @@ fn run(args: Args) -> Result<ExitCode> {
     match args.action()? {
         Action::Version => version(),
         Action::Status => passthru(&["system", "status"]),
-        Action::Shutdown => shutdown(),
+        Action::Shutdown { system } => shutdown(system),
         Action::List {
             running_only,
             quiet,
@@ -48,11 +48,7 @@ fn run(args: Args) -> Result<ExitCode> {
             container::ensure_started()?;
             passthru(&["machine", "rm", &m])
         }
-        Action::Install {
-            image,
-            name,
-            no_launch,
-        } => install(&image, name, no_launch),
+        Action::Install(opts) => install(&opts),
         Action::Run => run_in_machine(&args),
     }
 }
@@ -138,8 +134,10 @@ fn list(running_only: bool, quiet: bool, verbosity: u8) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-/// WSL `--shutdown`: stop every running machine, leave services up.
-fn shutdown() -> Result<ExitCode> {
+/// WSL `--shutdown`: stop every running machine. Services stay up unless
+/// `system` is set, since `container system stop` also stops unrelated
+/// containers.
+fn shutdown(system: bool) -> Result<ExitCode> {
     if !container::system_running() {
         return Ok(ExitCode::SUCCESS);
     }
@@ -153,18 +151,38 @@ fn shutdown() -> Result<ExitCode> {
             code = c;
         }
     }
+    if system {
+        let c = passthru(&["system", "stop"])?;
+        if !c.eq(&ExitCode::SUCCESS) {
+            code = c;
+        }
+    }
     Ok(code)
 }
 
 /// WSL `--install`: create a machine from an image, then open a shell in it.
-fn install(image: &str, name: Option<String>, no_launch: bool) -> Result<ExitCode> {
+fn install(opts: &InstallOpts) -> Result<ExitCode> {
     container::ensure_started()?;
-    let name = name.unwrap_or_else(|| container::default_machine_name(image));
-    let status = container::container_cmd()
-        .args(["machine", "create", "--name", &name, image])
+    let name = opts
+        .name
+        .clone()
+        .unwrap_or_else(|| container::default_machine_name(&opts.image));
+    let mut cmd = container::container_cmd();
+    cmd.args(["machine", "create", "--name", &name]);
+    if let Some(c) = opts.cpus {
+        cmd.arg("--cpus").arg(c.to_string());
+    }
+    if let Some(m) = &opts.memory {
+        cmd.args(["--memory", m]);
+    }
+    if let Some(h) = opts.home_mount {
+        cmd.args(["--home-mount", h.as_str()]);
+    }
+    let status = cmd
+        .arg(&opts.image)
         .status()
         .context("failed to run `container machine create`")?;
-    if !status.success() || no_launch {
+    if !status.success() || opts.no_launch {
         return Ok(exit_code(status));
     }
     let mut cmd = container::run_command(Some(&name), None, None, &[], None, &[], ArgvMode::Shell);
