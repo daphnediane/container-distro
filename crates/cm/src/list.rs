@@ -13,6 +13,7 @@
 
 use cm_core::container::{Machine, MachineDetail};
 use cm_core::table::{columns, human_bytes, title_case};
+use container_distro::ops::DistroSummary;
 
 /// Header printed by `cm -l` (WSL: "Windows Subsystem for Linux Distributions:").
 pub const LIST_HEADER: &str = "Container Machines:";
@@ -53,6 +54,34 @@ impl Entry {
                 .map(|i| i.reference.clone()),
         }
     }
+
+    pub fn from_distro(d: &DistroSummary) -> Self {
+        Entry {
+            name: d.id.clone(),
+            status: d.status.clone(),
+            default: d.default,
+            kind: "distro",
+            ip: d.ip_address.clone(),
+            cpus: d.cpus,
+            memory: d.memory,
+            disk: None,
+            platform: d.platform.clone(),
+            home: d.home_mount.clone(),
+            image: d.image.clone(),
+        }
+    }
+}
+
+/// Merge machines and distros into one list. A distro shadows a machine
+/// of the same name, and a default distro takes the default marker from
+/// the default machine (matching [`crate::backend::resolve`]).
+pub fn merge(mut machines: Vec<Entry>, distros: Vec<Entry>) -> Vec<Entry> {
+    machines.retain(|m| !distros.iter().any(|d| d.name == m.name));
+    if distros.iter().any(|d| d.default) {
+        machines.iter_mut().for_each(|m| m.default = false);
+    }
+    machines.extend(distros);
+    machines
 }
 
 /// `cm -l`: header, then names with the default marked.
@@ -202,6 +231,31 @@ mod tests {
         assert!(lines[0].starts_with("  NAME      STATE           VERSION  KIND"));
         assert!(lines[1].starts_with("* alpine    Running         2        machine  192.168.64.6"));
         assert!(lines[1].contains("32G"));
+    }
+
+    #[test]
+    fn merge_distro_shadows_and_takes_default() {
+        let machines = vec![
+            entry("alpine", "running", true),
+            entry("x", "stopped", false),
+        ];
+        let mut d1 = entry("d1", "running", true);
+        d1.kind = "distro";
+        let mut x = entry("x", "running", false);
+        x.kind = "distro";
+        let merged = merge(machines, vec![d1, x]);
+        let names: Vec<_> = merged
+            .iter()
+            .map(|e| (e.name.as_str(), e.kind, e.default))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                ("alpine", "machine", false),
+                ("d1", "distro", true),
+                ("x", "distro", false)
+            ]
+        );
     }
 
     #[test]

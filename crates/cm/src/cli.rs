@@ -13,27 +13,8 @@
 use anyhow::{Result, bail};
 use clap::{ArgAction, Parser, ValueEnum};
 use cm_core::forward::PortMapping;
-
-/// How the macOS home directory is shared into a machine.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum HomeMount {
-    /// Read-write (the `container` default).
-    Rw,
-    /// Read-only.
-    Ro,
-    /// Not shared.
-    None,
-}
-
-impl HomeMount {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            HomeMount::Rw => "rw",
-            HomeMount::Ro => "ro",
-            HomeMount::None => "none",
-        }
-    }
-}
+pub use container_distro::spec::HomeMount;
+use container_distro::spec::{MountSpec, PublishSpec};
 
 /// Options for `--install`.
 #[derive(Debug, Clone, PartialEq)]
@@ -44,6 +25,17 @@ pub struct InstallOpts {
     pub cpus: Option<u32>,
     pub memory: Option<String>,
     pub home_mount: Option<HomeMount>,
+    /// Create a `container distro` instead of a machine.
+    pub distro: bool,
+    pub shares: Vec<MountSpec>,
+    pub publish: Vec<PublishSpec>,
+}
+
+impl InstallOpts {
+    /// `--distro`, or any distro-only option, selects a distro.
+    pub fn wants_distro(&self) -> bool {
+        self.distro || !self.shares.is_empty() || !self.publish.is_empty()
+    }
 }
 
 /// Which shell flavor to start for an interactive session.
@@ -183,6 +175,20 @@ pub struct Args {
     )]
     pub home_mount: Option<HomeMount>,
 
+    /// Create a distro (`container distro`) instead of a machine with --install
+    #[arg(long = "distro", requires = "install")]
+    pub distro: bool,
+
+    /// Share a host directory into a distro created by --install:
+    /// SRC:DST[:ro] (repeatable; implies --distro)
+    #[arg(long = "share", requires = "install", value_name = "SRC:DST[:ro]")]
+    pub shares: Vec<MountSpec>,
+
+    /// Publish a port from a distro created by --install:
+    /// [HOST_IP:]HOST_PORT[:GUEST_PORT] (repeatable; implies --distro)
+    #[arg(long = "publish", requires = "install", value_name = "SPEC")]
+    pub publish: Vec<PublishSpec>,
+
     /// Forward 127.0.0.1:HOST_PORT to the machine's GUEST_PORT (repeatable;
     /// runs in the foreground until interrupted)
     #[arg(long = "forward", value_name = "HOST_PORT[:GUEST_PORT]")]
@@ -254,6 +260,9 @@ impl Args {
                 cpus: self.cpus,
                 memory: self.memory.clone(),
                 home_mount: self.home_mount,
+                distro: self.distro,
+                shares: self.shares.clone(),
+                publish: self.publish.clone(),
             })
         } else if !self.forward.is_empty() {
             let action = Action::Forward {
@@ -451,6 +460,9 @@ mod tests {
                 cpus: None,
                 memory: None,
                 home_mount: None,
+                distro: false,
+                shares: vec![],
+                publish: vec![],
             })
         );
     }
@@ -475,6 +487,7 @@ mod tests {
         assert_eq!(opts.cpus, Some(2));
         assert_eq!(opts.memory.as_deref(), Some("4G"));
         assert_eq!(opts.home_mount, Some(HomeMount::Ro));
+        assert!(!opts.wants_distro());
         assert!(parse(&["cm", "--cpus", "2"]).is_err());
     }
 
@@ -509,6 +522,21 @@ mod tests {
         assert!(parse(&["cm", "--forward", "x"]).is_err());
         let args = parse(&["cm", "--forward", "8080", "-u", "root"]).unwrap();
         assert!(args.action().is_err());
+    }
+
+    #[test]
+    fn install_distro_options() {
+        let args = parse(&["cm", "--install", "alpine", "--share", "/Volumes/X:/mnt/x"]).unwrap();
+        let Action::Install(opts) = args.action().unwrap() else {
+            panic!("expected install");
+        };
+        assert!(opts.wants_distro());
+        let args = parse(&["cm", "--install", "alpine", "--distro"]).unwrap();
+        let Action::Install(opts) = args.action().unwrap() else {
+            panic!("expected install");
+        };
+        assert!(opts.wants_distro());
+        assert!(parse(&["cm", "--publish", "8080"]).is_err());
     }
 
     #[test]

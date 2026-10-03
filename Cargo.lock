@@ -132,6 +132,8 @@ dependencies = [
  "anyhow",
  "clap",
  "cm-core",
+ "container-distro",
+ "serde_json",
 ]
 
 [[package]]
