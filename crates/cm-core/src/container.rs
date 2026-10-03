@@ -86,11 +86,35 @@ pub fn list_machines() -> Result<Vec<Machine>> {
     serde_json::from_slice(&out.stdout).context("failed to parse `container machine list` output")
 }
 
+/// Quote `arg` for a POSIX shell: wrap in single quotes, escaping embedded
+/// single quotes as `'\''`.
+#[must_use]
+pub fn shell_quote(arg: &str) -> String {
+    format!("'{}'", arg.replace('\'', r"'\''"))
+}
+
+/// How a command line is handed to the guest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArgvMode {
+    /// Joined and evaluated by the guest shell (WSL `--` / bare command).
+    Shell,
+    /// Each argument delivered verbatim (WSL `-e`).
+    Exact,
+}
+
 /// Build a `container machine run` command.
 ///
 /// `executable` selects a specific program to run interactively (used for
-/// `--shell-type standard`); `command` is a verbatim command line appended
-/// after `--`. With neither, `container` opens the machine's login shell.
+/// `--shell-type standard`); `command` is a command line appended after
+/// `--`. With neither, `container` opens the machine's login shell.
+///
+/// `machine run` always passes its arguments through the guest's
+/// `$SHELL -c "$*"` (apple/container#1954), so [`ArgvMode::Exact`]
+/// single-quotes each argument to make that evaluation a no-op. Drop the
+/// quoting if upstream grows an argv-preserving mode.
+///
+/// `-i` is always passed: without it the guest sees EOF on stdin, so
+/// piped input would silently vanish.
 pub fn run_command(
     machine: Option<&str>,
     user: Option<&str>,
@@ -98,9 +122,10 @@ pub fn run_command(
     env_vars: &[String],
     executable: Option<&str>,
     command: &[String],
+    mode: ArgvMode,
 ) -> Command {
     let mut cmd = container_cmd();
-    cmd.arg("machine").arg("run");
+    cmd.args(["machine", "run", "-i"]);
     if let Some(m) = machine {
         cmd.args(["-n", m]);
     }
@@ -114,9 +139,13 @@ pub fn run_command(
         cmd.args(["-e", e]);
     }
     if let Some(exe) = executable {
-        cmd.arg("--").arg(exe);
+        cmd.arg("--").arg(shell_quote(exe));
     } else if !command.is_empty() {
-        cmd.arg("--").args(command);
+        cmd.arg("--");
+        match mode {
+            ArgvMode::Shell => cmd.args(command),
+            ArgvMode::Exact => cmd.args(command.iter().map(|a| shell_quote(a))),
+        };
     }
     cmd
 }
@@ -130,7 +159,7 @@ pub fn resolve_shell(machine: Option<&str>, user: Option<&str>) -> String {
         "-c".to_string(),
         r#"getent passwd "$(id -un)" 2>/dev/null | cut -d: -f7"#.to_string(),
     ];
-    let mut cmd = run_command(machine, user, None, &[], None, &command);
+    let mut cmd = run_command(machine, user, None, &[], None, &command, ArgvMode::Shell);
     let out = cmd.stdin(Stdio::null()).output();
     let shell = out.ok().and_then(|o| {
         let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
@@ -178,6 +207,7 @@ mod tests {
             &["FOO=bar".to_string()],
             None,
             &["ls".to_string(), "-la".to_string()],
+            ArgvMode::Shell,
         );
         let args: Vec<_> = cmd
             .get_args()
@@ -186,19 +216,39 @@ mod tests {
         assert_eq!(
             args,
             [
-                "machine", "run", "-n", "dev", "-u", "root", "-w", "/tmp", "-e", "FOO=bar", "--",
-                "ls", "-la"
+                "machine", "run", "-i", "-n", "dev", "-u", "root", "-w", "/tmp", "-e", "FOO=bar",
+                "--", "ls", "-la"
             ]
         );
     }
 
     #[test]
     fn run_command_bare_shell() {
-        let cmd = run_command(None, None, None, &[], None, &[]);
-        let args: Vec<_> = cmd
-            .get_args()
+        let cmd = run_command(None, None, None, &[], None, &[], ArgvMode::Shell);
+        assert_eq!(args_of(&cmd), ["machine", "run", "-i"]);
+    }
+
+    #[test]
+    fn run_command_exact_quotes_each_arg() {
+        let command = ["printf".to_string(), ":%s:".to_string(), "a b".to_string()];
+        let cmd = run_command(None, None, None, &[], None, &command, ArgvMode::Exact);
+        assert_eq!(
+            args_of(&cmd),
+            ["machine", "run", "-i", "--", "'printf'", "':%s:'", "'a b'"]
+        );
+    }
+
+    #[test]
+    fn shell_quote_escapes() {
+        assert_eq!(shell_quote(""), "''");
+        assert_eq!(shell_quote("a b"), "'a b'");
+        assert_eq!(shell_quote("$HOME"), "'$HOME'");
+        assert_eq!(shell_quote("it's"), r"'it'\''s'");
+    }
+
+    fn args_of(cmd: &Command) -> Vec<String> {
+        cmd.get_args()
             .map(|a| a.to_string_lossy().into_owned())
-            .collect();
-        assert_eq!(args, ["machine", "run"]);
+            .collect()
     }
 }

@@ -14,7 +14,7 @@ use std::process::{ExitCode, ExitStatus};
 use anyhow::{Context, Result};
 use clap::Parser;
 use cli::{Action, Args, ShellType};
-use cm_core::container;
+use cm_core::container::{self, ArgvMode};
 
 fn main() -> ExitCode {
     let args = Args::parse();
@@ -84,8 +84,19 @@ fn run_in_machine(args: &Args) -> Result<ExitCode> {
         &args.env,
         executable.as_deref(),
         &args.command,
+        argv_mode(args),
     );
     Err(anyhow::Error::from(cmd.exec()).context("failed to exec `container machine run`"))
+}
+
+/// WSL semantics: `-e` (and `--shell-type none`) execute argv exactly;
+/// a bare or `--` command line is evaluated by the shell.
+fn argv_mode(args: &Args) -> ArgvMode {
+    if args.exec || args.shell_type == Some(ShellType::None) {
+        ArgvMode::Exact
+    } else {
+        ArgvMode::Shell
+    }
 }
 
 fn list(running_only: bool, quiet: bool) -> Result<ExitCode> {
@@ -141,7 +152,7 @@ fn install(image: &str, name: Option<String>, no_launch: bool) -> Result<ExitCod
     if !status.success() || no_launch {
         return Ok(exit_code(status));
     }
-    let mut cmd = container::run_command(Some(&name), None, None, &[], None, &[]);
+    let mut cmd = container::run_command(Some(&name), None, None, &[], None, &[], ArgvMode::Shell);
     Err(anyhow::Error::from(cmd.exec()).context("failed to exec `container machine run`"))
 }
 
