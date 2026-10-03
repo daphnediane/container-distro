@@ -10,10 +10,11 @@ use std::env;
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
-use serde::Deserialize;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 /// A container machine as reported by `container machine list --format json`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Machine {
     pub id: String,
@@ -22,12 +23,52 @@ pub struct Machine {
     pub default: bool,
     #[serde(default)]
     pub ip_address: Option<String>,
+    #[serde(default)]
+    pub cpus: Option<u64>,
+    #[serde(default)]
+    pub memory: Option<u64>,
+    #[serde(default)]
+    pub disk_size: Option<u64>,
 }
 
 impl Machine {
     pub fn is_running(&self) -> bool {
         self.status == "running"
     }
+}
+
+/// Extra per-machine fields reported only by `container machine inspect`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MachineDetail {
+    pub id: String,
+    #[serde(default)]
+    pub container_id: Option<String>,
+    #[serde(default)]
+    pub home_mount: Option<String>,
+    #[serde(default)]
+    pub platform: Option<Platform>,
+    #[serde(default)]
+    pub image: Option<ImageInfo>,
+}
+
+/// An OCI platform (`os`/`architecture`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Platform {
+    pub os: String,
+    pub architecture: String,
+}
+
+impl std::fmt::Display for Platform {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.os, self.architecture)
+    }
+}
+
+/// The image a machine was created from.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ImageInfo {
+    pub reference: String,
 }
 
 /// A `container` CLI invocation; `CONTAINER_CLI` overrides the binary path.
@@ -71,19 +112,34 @@ pub fn ensure_started() -> Result<()> {
     Ok(())
 }
 
-/// All machines known to `container`.
-pub fn list_machines() -> Result<Vec<Machine>> {
+/// Run `container <args>` and parse its stdout as JSON.
+pub fn json_output<T: DeserializeOwned>(args: &[&str]) -> Result<T> {
+    let what = format!("container {}", args.join(" "));
     let out = container_cmd()
-        .args(["machine", "list", "--format", "json"])
+        .args(args)
         .output()
-        .context("failed to run `container machine list`")?;
+        .with_context(|| format!("failed to run `{what}`"))?;
     if !out.status.success() {
         bail!(
-            "`container machine list` failed: {}",
+            "`{what}` failed: {}",
             String::from_utf8_lossy(&out.stderr).trim()
         );
     }
-    serde_json::from_slice(&out.stdout).context("failed to parse `container machine list` output")
+    serde_json::from_slice(&out.stdout).with_context(|| format!("failed to parse `{what}` output"))
+}
+
+/// All machines known to `container`.
+pub fn list_machines() -> Result<Vec<Machine>> {
+    json_output(&["machine", "list", "--format", "json"])
+}
+
+/// `container machine inspect` for one machine.
+pub fn inspect_machine(id: &str) -> Result<MachineDetail> {
+    let details: Vec<MachineDetail> = json_output(&["machine", "inspect", id])?;
+    details
+        .into_iter()
+        .next()
+        .with_context(|| format!("machine `{id}` not found"))
 }
 
 /// Quote `arg` for a POSIX shell: wrap in single quotes, escaping embedded
@@ -187,6 +243,47 @@ pub fn default_machine_name(image: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const LIST_JSON: &str = r#"[{"id":"alpine","memory":34359738368,"createdDate":"2026-10-01T00:58:57Z","status":"running","diskSize":78872576,"default":true,"cpus":7,"ipAddress":"192.168.64.6"}]"#;
+
+    const INSPECT_JSON: &str = r#"[{"containerId":"alpine-730439","cpus":7,"homeMount":"rw","id":"alpine",
+        "image":{"descriptor":{"digest":"sha256:a2","mediaType":"application/vnd.oci.image.index.v1+json","size":9218},
+                 "reference":"docker.io/library/alpine:latest"},
+        "ipAddress":"192.168.64.6","platform":{"architecture":"arm64","os":"linux"},"status":"running",
+        "userSetup":{"gid":20,"uid":1027,"username":"daphnediane"}}]"#;
+
+    #[test]
+    fn test_machine_deserialize_list() {
+        let machines: Vec<Machine> = serde_json::from_str(LIST_JSON).unwrap();
+        assert_eq!(machines.len(), 1);
+        let m = &machines[0];
+        assert!(m.is_running() && m.default);
+        assert_eq!(m.cpus, Some(7));
+        assert_eq!(m.disk_size, Some(78872576));
+        let round: Machine = serde_json::from_str(&serde_json::to_string(m).unwrap()).unwrap();
+        assert_eq!(&round, m);
+    }
+
+    #[test]
+    fn test_machine_deserialize_minimal() {
+        let m: Machine = serde_json::from_str(r#"{"id":"x","status":"stopped"}"#).unwrap();
+        assert!(!m.is_running() && !m.default && m.cpus.is_none());
+    }
+
+    #[test]
+    fn test_machine_detail_deserialize() {
+        let d: Vec<MachineDetail> = serde_json::from_str(INSPECT_JSON).unwrap();
+        let d = &d[0];
+        assert_eq!(d.container_id.as_deref(), Some("alpine-730439"));
+        assert_eq!(d.platform.as_ref().unwrap().to_string(), "linux/arm64");
+        assert_eq!(
+            d.image.as_ref().unwrap().reference,
+            "docker.io/library/alpine:latest"
+        );
+        let round: MachineDetail =
+            serde_json::from_str(&serde_json::to_string(d).unwrap()).unwrap();
+        assert_eq!(&round, d);
+    }
 
     #[test]
     fn machine_name_from_image() {

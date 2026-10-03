@@ -11,7 +11,7 @@
 //! positional argument is treated as a command to execute.
 
 use anyhow::{Result, bail};
-use clap::{Parser, ValueEnum};
+use clap::{ArgAction, Parser, ValueEnum};
 
 /// Which shell flavor to start for an interactive session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -87,14 +87,15 @@ pub struct Args {
     )]
     pub quiet: bool,
 
-    /// Show verbose machine information (with --list)
+    /// Show a NAME/STATE/VERSION table (with --list); repeat for more columns
     #[arg(
         short = 'v',
         long = "verbose",
+        action = ArgAction::Count,
         requires = "list",
         conflicts_with = "quiet"
     )]
-    pub verbose: bool,
+    pub verbose: u8,
 
     /// Set the default machine
     #[arg(short = 's', long = "set-default", value_name = "MACHINE")]
@@ -146,8 +147,12 @@ pub struct Args {
 pub enum Action {
     /// Open a shell or run a command in a machine.
     Run,
-    /// `container machine list` variants.
-    List { running_only: bool, quiet: bool },
+    /// WSL-shaped machine list.
+    List {
+        running_only: bool,
+        quiet: bool,
+        verbosity: u8,
+    },
     /// Stop every running machine.
     Shutdown,
     /// `container system status`.
@@ -193,6 +198,7 @@ impl Args {
             Action::List {
                 running_only: self.running,
                 quiet: self.quiet,
+                verbosity: self.verbose,
             }
         } else {
             return self.validate_run();
@@ -305,7 +311,8 @@ mod tests {
             args.action().unwrap(),
             Action::List {
                 running_only: false,
-                quiet: false
+                quiet: false,
+                verbosity: 0
             }
         );
         let args = parse(&["cm", "-l", "-q"]).unwrap();
@@ -321,6 +328,16 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn verbose_counts() {
+        let args = parse(&["cm", "-l", "-v", "-v"]).unwrap();
+        assert!(matches!(
+            args.action().unwrap(),
+            Action::List { verbosity: 2, .. }
+        ));
+        assert!(parse(&["cm", "-l", "-v", "-q"]).is_err());
     }
 
     #[test]

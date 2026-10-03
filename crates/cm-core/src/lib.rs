@@ -8,3 +8,4 @@
 //! `container` CLI and the serde types for its JSON output.
 
 pub mod container;
+pub mod table;

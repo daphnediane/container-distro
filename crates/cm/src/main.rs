@@ -7,6 +7,7 @@
 //! `cm` — a WSL-compatible command-line wrapper for Apple container machines.
 
 mod cli;
+mod list;
 
 use std::os::unix::process::CommandExt;
 use std::process::{ExitCode, ExitStatus};
@@ -15,6 +16,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use cli::{Action, Args, ShellType};
 use cm_core::container::{self, ArgvMode};
+use list::Entry;
 
 fn main() -> ExitCode {
     let args = Args::parse();
@@ -35,7 +37,8 @@ fn run(args: Args) -> Result<ExitCode> {
         Action::List {
             running_only,
             quiet,
-        } => list(running_only, quiet),
+            verbosity,
+        } => list(running_only, quiet, verbosity),
         Action::SetDefault(m) => passthru(&["machine", "set-default", &m]),
         Action::Terminate(m) => {
             container::ensure_started()?;
@@ -99,27 +102,39 @@ fn argv_mode(args: &Args) -> ArgvMode {
     }
 }
 
-fn list(running_only: bool, quiet: bool) -> Result<ExitCode> {
+fn list(running_only: bool, quiet: bool, verbosity: u8) -> Result<ExitCode> {
     container::ensure_started()?;
-    if !running_only {
-        let mut argv = vec!["machine", "list"];
-        if quiet {
-            argv.push("--quiet");
+    let mut entries: Vec<Entry> = Vec::new();
+    for m in container::list_machines()? {
+        if running_only && !m.is_running() {
+            continue;
         }
-        return passthru(&argv);
-    }
-    for m in container::list_machines()?
-        .iter()
-        .filter(|m| m.is_running())
-    {
-        if quiet {
-            println!("{}", m.id);
+        let detail = if verbosity >= 2 {
+            container::inspect_machine(&m.id).ok()
         } else {
-            let star = if m.default { "*" } else { " " };
-            let ip = m.ip_address.as_deref().unwrap_or("-");
-            println!("{star}{:<23} {:<10} {ip}", m.id, m.status);
-        }
+            None
+        };
+        entries.push(Entry::from_machine(&m, detail.as_ref()));
     }
+    if entries.is_empty() {
+        if running_only {
+            eprintln!("There are no running container machines.");
+        } else {
+            eprintln!(
+                "No container machines are installed.\n\
+                 Use `cm --install <image>` to create one."
+            );
+        }
+        return Ok(ExitCode::FAILURE);
+    }
+    let out = if quiet {
+        list::format_quiet(&entries)
+    } else if verbosity > 0 {
+        list::format_verbose(&entries, verbosity)
+    } else {
+        list::format_simple(&entries)
+    };
+    print!("{out}");
     Ok(ExitCode::SUCCESS)
 }
 
