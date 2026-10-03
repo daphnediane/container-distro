@@ -126,6 +126,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 
 [[package]]
+name = "cm"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "cm-core",
+]
+
+[[package]]
 name = "cm-core"
 version = "0.1.0"
 dependencies = [
@@ -151,6 +160,7 @@ dependencies = [
  "anyhow",
  "clap",
  "cm-core",
+ "serde",
  "serde_json",
  "tempfile",
 ]
@@ -484,15 +494,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
 dependencies = [
  "windows-link",
-]
-
-[[package]]
-name = "wsl-compat"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "cm-core",
 ]
 
 [[package]]

@@ -1,4 +1,4 @@
-# wsl-compat (`cm`)
+# container-distro (`cm`)
 
 A [WSL](https://github.com/microsoft/WSL)-compatible command-line wrapper for
 [Apple container machines](https://github.com/apple/container/blob/main/docs/container-machine.md).

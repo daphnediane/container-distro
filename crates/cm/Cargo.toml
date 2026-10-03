@@ -1,5 +1,5 @@
 [package]
-name = "wsl-compat"
+name = "cm"
 description = "WSL-compatible CLI wrapper for Apple container machines"
 version.workspace = true
 edition.workspace = true

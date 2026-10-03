@@ -15,19 +15,19 @@ use std::fs;
 use std::io::ErrorKind;
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
 
 use anyhow::{Context, Result, bail};
+use cm_core::naming::APP_NAME;
 
 /// The plugin (and subcommand) name.
 pub const PLUGIN_NAME: &str = "distro";
-const ABSTRACT: &str = "Machine-like distros with extra mounts and published ports (wsl-compat)";
+const ABSTRACT: &str = "Machine-like distros with extra mounts and published ports";
 
 /// The plugin's `config.toml`.
 #[must_use]
 pub fn config_toml() -> String {
     format!(
-        "abstract = \"{ABSTRACT}\"\nauthor = \"wsl-compat\"\nversion = \"{}\"\n",
+        "abstract = \"{ABSTRACT} ({APP_NAME})\"\nauthor = \"{APP_NAME}\"\nversion = \"{}\"\n",
         env!("CARGO_PKG_VERSION")
     )
 }
@@ -84,7 +84,7 @@ fn permission_hint(e: std::io::Error, what: &Path) -> anyhow::Error {
     }
 }
 
-pub fn install(root: Option<PathBuf>) -> Result<ExitCode> {
+pub fn install(root: Option<PathBuf>) -> Result<()> {
     let dir = plugin_dir(root)?;
     let exe = fs::canonicalize(env::current_exe()?)?;
     let bin_dir = dir.join("bin");
@@ -98,10 +98,10 @@ pub fn install(root: Option<PathBuf>) -> Result<ExitCode> {
     symlink(&exe, &link).map_err(|e| permission_hint(e, &link))?;
     println!("Installed `container {PLUGIN_NAME}` -> {}", exe.display());
     println!("  {}", dir.display());
-    Ok(ExitCode::SUCCESS)
+    Ok(())
 }
 
-pub fn uninstall(root: Option<PathBuf>) -> Result<ExitCode> {
+pub fn uninstall(root: Option<PathBuf>) -> Result<()> {
     let dir = plugin_dir(root)?;
     let config = dir.join("config.toml");
     match fs::read_to_string(&config) {
@@ -109,13 +109,13 @@ pub fn uninstall(root: Option<PathBuf>) -> Result<ExitCode> {
         Ok(_) => bail!("{} was not installed by container-distro", dir.display()),
         Err(e) if e.kind() == ErrorKind::NotFound => {
             println!("Not installed ({})", dir.display());
-            return Ok(ExitCode::SUCCESS);
+            return Ok(());
         }
         Err(e) => return Err(e.into()),
     }
     fs::remove_dir_all(&dir).map_err(|e| permission_hint(e, &dir))?;
     println!("Removed {}", dir.display());
-    Ok(ExitCode::SUCCESS)
+    Ok(())
 }
 
 #[cfg(test)]

@@ -6,6 +6,10 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 
+[lib]
+name = "container_distro"
+path = "src/lib.rs"
+
 [[bin]]
 name = "container-distro"
 path = "src/main.rs"
@@ -14,5 +18,6 @@ path = "src/main.rs"
 anyhow.workspace = true
 clap.workspace = true
 cm-core.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tempfile = "3"

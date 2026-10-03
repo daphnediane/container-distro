@@ -17,10 +17,16 @@ use std::str::FromStr;
 use anyhow::{Context, Result, bail};
 use clap::ValueEnum;
 use cm_core::container::ContainerInfo;
-use cm_core::distro::{LABEL_DISTRO, LABEL_HOME_MOUNT};
+use cm_core::naming::{label_key, label_lookup};
 
-/// Label recording the provisioned account as `name:uid:gid`.
-pub const LABEL_USER: &str = "org.wsl-compat.user";
+/// Label suffixes (full keys come from [`cm_core::naming::label_key`]).
+///
+/// Marks a container as a distro; the value is the distro name.
+pub const LABEL_DISTRO: &str = "distro";
+/// The home-directory mount mode (`rw`/`ro`/`none`).
+pub const LABEL_HOME_MOUNT: &str = "home-mount";
+/// The provisioned account as `name:uid:gid`.
+pub const LABEL_USER: &str = "user";
 /// Guest path where the init assets are mounted.
 pub const INIT_DIR: &str = "/sbin.distro";
 
@@ -210,12 +216,22 @@ impl DistroSpec {
             a.push(k.to_string());
             a.push(v);
         };
-        push("--label", format!("{LABEL_DISTRO}={}", self.name));
         push(
             "--label",
-            format!("{LABEL_HOME_MOUNT}={}", self.home_mount.as_str()),
+            format!("{}={}", label_key(LABEL_DISTRO), self.name),
         );
-        push("--label", format!("{LABEL_USER}={}", self.user.to_label()));
+        push(
+            "--label",
+            format!(
+                "{}={}",
+                label_key(LABEL_HOME_MOUNT),
+                self.home_mount.as_str()
+            ),
+        );
+        push(
+            "--label",
+            format!("{}={}", label_key(LABEL_USER), self.user.to_label()),
+        );
         push("--entrypoint", format!("{INIT_DIR}/init"));
         push("--volume", format!("{assets_dir}:{INIT_DIR}:ro"));
         match self.home_mount {
@@ -258,20 +274,15 @@ impl DistroSpec {
     /// dropped; every other mount is a user mount.
     pub fn from_container(info: &ContainerInfo, host_home: &str) -> Result<Self> {
         let cfg = &info.configuration;
-        let name = cfg
-            .labels
-            .get(LABEL_DISTRO)
+        let name = label_lookup(&cfg.labels, LABEL_DISTRO)
             .with_context(|| format!("`{}` is not a distro", cfg.id))?
             .clone();
         let user = HostUser::from_label(
-            cfg.labels
-                .get(LABEL_USER)
+            label_lookup(&cfg.labels, LABEL_USER)
                 .with_context(|| format!("distro `{name}` has no user label"))?,
         )?;
-        let home_mount = cfg
-            .labels
-            .get(LABEL_HOME_MOUNT)
-            .map_or(Ok(HomeMount::Rw), |s| s.parse())?;
+        let home_mount =
+            label_lookup(&cfg.labels, LABEL_HOME_MOUNT).map_or(Ok(HomeMount::Rw), |s| s.parse())?;
         let mounts = cfg
             .mounts
             .iter()
@@ -474,10 +485,12 @@ mod tests {
     fn create_args_mirror_machine_config() {
         let a = spec().create_args("/state/sbin.distro", "/Users/dp");
         let joined = a.join(" ");
-        assert!(joined.starts_with("create --name d1 --label org.wsl-compat.distro=d1"));
+        assert!(joined.starts_with(
+            "create --name d1 --label io.github.daphnediane.container-distro.distro=d1"
+        ));
         for want in [
-            "--label org.wsl-compat.home-mount=ro",
-            "--label org.wsl-compat.user=dp:501:20",
+            "--label io.github.daphnediane.container-distro.home-mount=ro",
+            "--label io.github.daphnediane.container-distro.user=dp:501:20",
             "--entrypoint /sbin.distro/init",
             "--volume /state/sbin.distro:/sbin.distro:ro",
             "--volume /Users/dp:/Users/dp:ro",
@@ -505,7 +518,9 @@ mod tests {
         let s = spec();
         let json = format!(
             r#"{{"configuration":{{"id":"d1",
-              "labels":{{"org.wsl-compat.distro":"d1","org.wsl-compat.home-mount":"ro","org.wsl-compat.user":"dp:501:20"}},
+              "labels":{{"io.github.daphnediane.container-distro.distro":"d1",
+                        "io.github.daphnediane.container-distro.home-mount":"ro",
+                        "io.github.daphnediane.container-distro.user":"dp:501:20"}},
               "mounts":[{{"source":"/state/sbin.distro","destination":"/sbin.distro","options":["ro"]}},
                         {{"source":"/Users/dp","destination":"/Users/dp","options":["ro"]}},
                         {{"source":"/Volumes/X","destination":"/mnt/x","options":[]}}],

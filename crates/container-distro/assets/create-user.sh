@@ -53,5 +53,5 @@ chmod 440 "$sudoers"
 
 if [ -d /etc/doas.d ] || command -v doas >/dev/null 2>&1; then
     mkdir -p /etc/doas.d
-    echo "permit nopass $CONTAINER_USER" >/etc/doas.d/wsl-compat.conf
+    echo "permit nopass $CONTAINER_USER" >/etc/doas.d/container-distro.conf
 fi

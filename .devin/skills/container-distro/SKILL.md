@@ -1,0 +1,89 @@
+---
+name: container-distro
+description: How `cm` (WSL-compatible wrapper) and the `container distro` plugin map onto Apple's `container` CLI, and how to verify them
+---
+
+# container-distro (`cm` + `container distro`)
+
+A Cargo workspace with three crates:
+
+- `crates/cm` — the `cm` binary: `wsl.exe` argument semantics on top of
+  Apple's `container` CLI. Optionally symlinked to `wsl`.
+- `crates/container-distro` — a library plus the `container-distro`
+  binary. It registers as the `container distro` CLI plugin and creates
+  machine-like containers ("distros") with what `container machine`
+  lacks: mounts outside `$HOME`, published ports, export/import, `set`.
+- `crates/cm-core` — shared plumbing: `container` CLI wrappers and serde
+  types, `naming` (persistent names/labels), `oci` (rootfs tar → OCI
+  layout), `forward` (TCP forwarder), `table`.
+
+Persistent names (labels `io.github.daphnediane.container-distro.*`, the
+state dir `~/Library/Application Support/container-distro/`) all come
+from `cm_core::naming`; see `doc/naming.md` before changing any of them.
+
+## `cm` argument mapping (machines)
+
+- No args / `-d <m>` / `-u <u>` / `--cd <dir>` / `--shell-type <t>` →
+  `container machine run -i` (`exec()`ed for TTY passthrough)
+- `-e <cmd...>` → argv-exact: each arg is single-quoted, because
+  `machine run` shell-evaluates its args (apple/container#1954)
+- `-- <cmd...>` or bare positional args → run via the guest shell (WSL
+  semantics)
+- `-l` → WSL-style name list; `-l -v` → exact `NAME STATE VERSION`
+  table (VERSION is always `2`); `-l -v -v` → extra columns from
+  `machine inspect`; `-q`, `--running`
+- `-s <m>` → `machine set-default`; `-t <m>` → `machine stop`;
+  `--unregister <m>` → `machine rm`
+- `--shutdown` stops running machines; `--shutdown --system` also runs
+  `container system stop`
+- `--install <image>` (`--name`, `--no-launch`, `--cpus`, `--memory`,
+  `--home-mount`) → `machine create`, then a shell
+- `--forward HOST[:GUEST]` (repeatable, `-d` selects) → foreground
+  localhost → machine-IP TCP forwarder
+- `--status` → `container system status`
+- `--export`/`--import` are punted (see `doc/gaps/export-import.md`);
+  the prototype lives on branch `wip/export-import`
+
+Before any machine operation `cm` runs `container system start` if
+services are down.
+
+## `container distro` (plugin / library)
+
+A distro is a regular container: our `assets/init` is the entrypoint
+(mounted read-only at `/sbin.distro`), it has `--cap-add ALL`, no masked
+or read-only paths, `--ssh`, the host account passed through
+`CONTAINER_*` env, and the home directory at the same path. `run` uses
+`container exec` (argv-exact). `set` snapshots the rootfs (`export` →
+OCI layout → `image load`) and recreates the container. Ports default to
+`127.0.0.1`. Only an explicit `--set-default` sets the default distro.
+
+`cm` integration (one namespace over machines + distros, linking the
+library rather than exec'ing the plugin) is in progress:
+`crates/cm/src/backend.rs`.
+
+## Host filesystem (machines)
+
+`container machine` mounts macOS `$HOME` via virtiofs at the **same
+path**; nothing outside `$HOME` is shared (container 1.5.0;
+apple/container#1805, #2278). Distros add arbitrary `-v SRC:DST[:ro]`
+mounts and `--automount` (`/Volumes/<X>` → `/mnt/<x>`).
+
+## Verify
+
+```bash
+cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+container machine list                       # machines for testing
+cm -l; cm -l -v; cm -l -v -v                 # WSL-shaped lists
+echo hi | cm -d alpine -- cat                # stdin reaches the guest
+cm -d alpine -e printf ':%s:\n' 'a b'        # -> :a b:
+D=./target/debug/container-distro
+$D create -n d1 -v /Volumes/X:/mnt/x -p 8080 alpine:latest
+$D run -n d1 -- id                           # host uid, provisioned user
+$D set d1 --cpus 2                           # recreate, state preserved
+$D rm -f d1
+```
+
+Test machine: `container machine create --name alpine --set-default alpine:latest`.
+Installing the plugin needs root:
+`sudo container-distro install-plugin` (after `cargo install --path crates/container-distro`).

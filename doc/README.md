@@ -1,4 +1,4 @@
-# wsl-compat docs
+# container-distro docs
 
 Design notes and research documents for `cm`. These are working documents —
 they describe options and tradeoffs, not commitments.

@@ -409,7 +409,7 @@ mod tests {
     }
 
     const CONTAINER_JSON: &str = r#"[{"configuration":{"capAdd":["ALL"],"id":"d1",
-        "labels":{"org.wsl-compat.distro":"d1"},
+        "labels":{"io.github.daphnediane.container-distro.distro":"d1"},
         "mounts":[{"destination":"/mnt/x","options":["ro"],"source":"/Volumes/X","type":{"virtiofs":{}}}],
         "publishedPorts":[{"containerPort":80,"count":1,"hostAddress":"127.0.0.1","hostPort":8080,"proto":"tcp"}],
         "resources":{"cpuOverhead":0,"cpus":4,"memoryInBytes":1073741824},

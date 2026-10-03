@@ -8,9 +8,9 @@
 
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand, ValueEnum};
-
-use crate::spec::{HomeMount, MountSpec, PublishSpec};
+use clap::{Parser, Subcommand, ValueEnum};
+use container_distro::ops::CreateOptions;
+use container_distro::spec::{HomeMount, MountSpec, PublishSpec};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -34,42 +34,6 @@ pub enum Format {
     Json,
 }
 
-#[derive(Debug, Args)]
-pub struct CreateOpts {
-    /// Share a host directory: SRC:DST[:ro] (repeatable)
-    #[arg(short = 'v', long = "volume", value_name = "SRC:DST[:ro]")]
-    pub volumes: Vec<MountSpec>,
-
-    /// Share every /Volumes/<name> at /mnt/<name> (like WSL's /mnt/<drive>)
-    #[arg(long)]
-    pub automount: bool,
-
-    /// Publish a port: [HOST_IP:]HOST_PORT[:GUEST_PORT][/PROTO]; HOST_IP
-    /// defaults to 127.0.0.1 (repeatable)
-    #[arg(short = 'p', long = "publish", value_name = "SPEC")]
-    pub publish: Vec<PublishSpec>,
-
-    /// Number of virtual CPUs (default: half the host's)
-    #[arg(long)]
-    pub cpus: Option<u64>,
-
-    /// Memory, e.g. 8G (default: half the host's)
-    #[arg(long)]
-    pub memory: Option<String>,
-
-    /// How to share your macOS home directory
-    #[arg(long, value_enum, default_value_t = HomeMount::Rw)]
-    pub home_mount: HomeMount,
-
-    /// Create without booting
-    #[arg(long)]
-    pub no_boot: bool,
-
-    /// Make this the default distro
-    #[arg(long)]
-    pub set_default: bool,
-}
-
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Create a distro from an image and boot it
@@ -78,7 +42,7 @@ pub enum Command {
         #[arg(short = 'n', long)]
         name: Option<String>,
         #[command(flatten)]
-        opts: CreateOpts,
+        opts: CreateOptions,
         /// Image reference, e.g. alpine:latest
         image: String,
     },
@@ -195,7 +159,7 @@ pub enum Command {
         name: String,
         file: PathBuf,
         #[command(flatten)]
-        opts: CreateOpts,
+        opts: CreateOptions,
     },
 
     /// Register as a `container` CLI plugin so `container distro` works

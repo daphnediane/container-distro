@@ -10,21 +10,93 @@ use std::env;
 use std::fs;
 use std::io::{self, IsTerminal};
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode, Stdio};
+use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use cm_core::container::{
     self, ContainerInfo, container_cmd, default_machine_name, ensure_started, validate_name,
 };
-use cm_core::distro::{DistroSummary, LABEL_DISTRO, LABEL_HOME_MOUNT, state_dir};
+use cm_core::naming::{label_lookup, state_dir};
 use cm_core::oci;
-use cm_core::table::{columns, human_bytes};
+use serde::{Deserialize, Serialize};
 
-use crate::cli::{CreateOpts, Format};
-use crate::spec::{DistroSpec, HostUser, INIT_DIR, SpecChanges, automounts};
+use crate::spec::{
+    DistroSpec, HomeMount, HostUser, INIT_DIR, LABEL_DISTRO, LABEL_HOME_MOUNT, MountSpec,
+    PublishSpec, SpecChanges, automounts,
+};
+
+/// One distro, as reported by [`summaries`] (and `list --format json`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DistroSummary {
+    pub id: String,
+    pub status: String,
+    #[serde(default)]
+    pub default: bool,
+    #[serde(default)]
+    pub ip_address: Option<String>,
+    #[serde(default)]
+    pub cpus: Option<u64>,
+    #[serde(default)]
+    pub memory: Option<u64>,
+    #[serde(default)]
+    pub image: Option<String>,
+    #[serde(default)]
+    pub platform: Option<String>,
+    #[serde(default)]
+    pub home_mount: Option<String>,
+    /// User mounts as `SRC:DST[:ro]`.
+    #[serde(default)]
+    pub mounts: Vec<String>,
+    /// Published ports as `IP:HOST:GUEST/PROTO`.
+    #[serde(default)]
+    pub ports: Vec<String>,
+}
+
+impl DistroSummary {
+    pub fn is_running(&self) -> bool {
+        self.status == "running"
+    }
+}
+
+/// Options shared by `create` and `import`.
+#[derive(Debug, Clone, Default, clap::Args)]
+pub struct CreateOptions {
+    /// Share a host directory: SRC:DST[:ro] (repeatable)
+    #[arg(short = 'v', long = "volume", value_name = "SRC:DST[:ro]")]
+    pub volumes: Vec<MountSpec>,
+
+    /// Share every /Volumes/<name> at /mnt/<name> (like WSL's /mnt/<drive>)
+    #[arg(long)]
+    pub automount: bool,
+
+    /// Publish a port: [HOST_IP:]HOST_PORT[:GUEST_PORT][/PROTO]; HOST_IP
+    /// defaults to 127.0.0.1 (repeatable)
+    #[arg(short = 'p', long = "publish", value_name = "SPEC")]
+    pub publish: Vec<PublishSpec>,
+
+    /// Number of virtual CPUs (default: half the host's)
+    #[arg(long)]
+    pub cpus: Option<u64>,
+
+    /// Memory, e.g. 8G (default: half the host's)
+    #[arg(long)]
+    pub memory: Option<String>,
+
+    /// How to share your macOS home directory
+    #[arg(long, value_enum, default_value_t = HomeMount::Rw)]
+    pub home_mount: HomeMount,
+
+    /// Create without booting
+    #[arg(long)]
+    pub no_boot: bool,
+
+    /// Make this the default distro
+    #[arg(long)]
+    pub set_default: bool,
+}
 
 const INIT_SCRIPT: &str = include_str!("../assets/init");
 const CREATE_USER_SCRIPT: &str = include_str!("../assets/create-user.sh");
@@ -138,27 +210,27 @@ fn write_default(name: Option<&str>) -> Result<()> {
 }
 
 /// All distro containers.
-fn distros() -> Result<Vec<ContainerInfo>> {
+pub fn distros() -> Result<Vec<ContainerInfo>> {
     Ok(container::list_containers()?
         .into_iter()
-        .filter(|c| c.configuration.labels.contains_key(LABEL_DISTRO))
+        .filter(|c| label_lookup(&c.configuration.labels, LABEL_DISTRO).is_some())
         .collect())
 }
 
-fn find(name: &str) -> Result<ContainerInfo> {
+pub fn find(name: &str) -> Result<ContainerInfo> {
     distros()?
         .into_iter()
         .find(|c| c.id() == name)
         .with_context(|| format!("no distro named `{name}`"))
 }
 
-fn resolve(name: Option<String>) -> Result<String> {
+pub fn resolve(name: Option<String>) -> Result<String> {
     name.or_else(default_name).context(
         "no distro given and no default set (use -n NAME or `container distro set-default`)",
     )
 }
 
-fn build_spec(name: String, image: String, opts: &CreateOpts) -> Result<DistroSpec> {
+fn build_spec(name: String, image: String, opts: &CreateOptions) -> Result<DistroSpec> {
     validate_name(&name)?;
     let mut mounts = opts.volumes.clone();
     if opts.automount {
@@ -223,7 +295,7 @@ fn ensure_running(name: &str) -> Result<ContainerInfo> {
     find(name)
 }
 
-fn create_from_spec(spec: &DistroSpec, no_boot: bool, set_default: bool) -> Result<ExitCode> {
+fn create_from_spec(spec: &DistroSpec, no_boot: bool, set_default: bool) -> Result<String> {
     check_sources(spec)?;
     if distros()?.iter().any(|c| c.id() == spec.name) {
         bail!("distro `{}` already exists", spec.name);
@@ -232,14 +304,16 @@ fn create_from_spec(spec: &DistroSpec, no_boot: bool, set_default: bool) -> Resu
     if !no_boot {
         boot(&spec.name)?;
     }
-    if set_default || default_name().is_none() {
+    // Only on request: under `cm`'s unified namespace a distro default
+    // overrides the default machine.
+    if set_default {
         write_default(Some(&spec.name))?;
     }
-    println!("{}", spec.name);
-    Ok(ExitCode::SUCCESS)
+    Ok(spec.name.clone())
 }
 
-pub fn create(name: Option<String>, opts: &CreateOpts, image: &str) -> Result<ExitCode> {
+/// Create (and unless `no_boot`, boot) a distro; returns its name.
+pub fn create(name: Option<String>, opts: &CreateOptions, image: &str) -> Result<String> {
     ensure_started()?;
     let name = name.unwrap_or_else(|| default_machine_name(image));
     let spec = build_spec(name, image.to_string(), opts)?;
@@ -259,7 +333,7 @@ fn summarize(c: &ContainerInfo, default: Option<&str>) -> DistroSummary {
         memory: cfg.resources.as_ref().and_then(|r| r.memory_in_bytes),
         image: cfg.image.as_ref().map(|i| i.reference.clone()),
         platform: cfg.platform.as_ref().map(ToString::to_string),
-        home_mount: cfg.labels.get(LABEL_HOME_MOUNT).cloned(),
+        home_mount: label_lookup(&cfg.labels, LABEL_HOME_MOUNT).cloned(),
         mounts: spec
             .as_ref()
             .map(|s| s.mounts.iter().map(ToString::to_string).collect())
@@ -271,61 +345,19 @@ fn summarize(c: &ContainerInfo, default: Option<&str>) -> DistroSummary {
     }
 }
 
-pub fn list(quiet: bool, running: bool, format: Format) -> Result<ExitCode> {
-    ensure_started()?;
+/// All distros, sorted by name.
+pub fn summaries(running_only: bool) -> Result<Vec<DistroSummary>> {
     let default = default_name();
     let mut rows: Vec<DistroSummary> = distros()?
         .iter()
-        .filter(|c| !running || c.is_running())
+        .filter(|c| !running_only || c.is_running())
         .map(|c| summarize(c, default.as_deref()))
         .collect();
     rows.sort_by(|a, b| a.id.cmp(&b.id));
-    if quiet {
-        for r in &rows {
-            println!("{}", r.id);
-        }
-        return Ok(ExitCode::SUCCESS);
-    }
-    if format == Format::Json {
-        println!("{}", serde_json::to_string(&rows)?);
-        return Ok(ExitCode::SUCCESS);
-    }
-    let dash = || "-".to_string();
-    let mut table = vec![
-        [
-            "NAME", "IMAGE", "STATE", "IP", "CPUS", "MEMORY", "MOUNTS", "PORTS", "DEFAULT",
-        ]
-        .map(String::from)
-        .to_vec(),
-    ];
-    for r in &rows {
-        table.push(vec![
-            r.id.clone(),
-            r.image.clone().unwrap_or_else(dash),
-            r.status.clone(),
-            r.ip_address.clone().unwrap_or_else(dash),
-            r.cpus.map_or_else(dash, |c| c.to_string()),
-            r.memory.map_or_else(dash, human_bytes),
-            if r.mounts.is_empty() {
-                dash()
-            } else {
-                r.mounts.join(",")
-            },
-            if r.ports.is_empty() {
-                dash()
-            } else {
-                r.ports.join(",")
-            },
-            if r.default { "*".into() } else { String::new() },
-        ]);
-    }
-    for line in columns(&table, 2) {
-        println!("{}", line.trim_end());
-    }
-    Ok(ExitCode::SUCCESS)
+    Ok(rows)
 }
 
-pub fn inspect(names: &[String]) -> Result<ExitCode> {
+pub fn inspect(names: &[String]) -> Result<()> {
     ensure_started()?;
     for n in names {
         find(n)?;
@@ -333,27 +365,27 @@ pub fn inspect(names: &[String]) -> Result<ExitCode> {
     let mut args = vec!["inspect"];
     args.extend(names.iter().map(String::as_str));
     run_container(&args)?;
-    Ok(ExitCode::SUCCESS)
+    Ok(())
 }
 
-pub fn start(name: &str) -> Result<ExitCode> {
+pub fn start(name: &str) -> Result<()> {
     ensure_started()?;
     find(name)?;
     boot(name)?;
-    Ok(ExitCode::SUCCESS)
+    Ok(())
 }
 
-pub fn stop(names: &[String]) -> Result<ExitCode> {
+pub fn stop(names: &[String]) -> Result<()> {
     ensure_started()?;
     for n in names {
         if find(n)?.is_running() {
             run_container_quiet(&["stop", n])?;
         }
     }
-    Ok(ExitCode::SUCCESS)
+    Ok(())
 }
 
-pub fn delete(force: bool, names: &[String]) -> Result<ExitCode> {
+pub fn delete(force: bool, names: &[String]) -> Result<()> {
     ensure_started()?;
     for n in names {
         let info = find(n)?;
@@ -369,7 +401,7 @@ pub fn delete(force: bool, names: &[String]) -> Result<ExitCode> {
             write_default(None)?;
         }
     }
-    Ok(ExitCode::SUCCESS)
+    Ok(())
 }
 
 /// Default working directory: the host cwd's guest path if it is shared
@@ -381,6 +413,7 @@ fn default_workdir(spec: &DistroSpec, home: &str) -> String {
         .unwrap_or_else(|| spec.user.guest_home())
 }
 
+#[derive(Debug, Clone, Default)]
 pub struct RunOpts {
     pub name: Option<String>,
     pub user: Option<String>,
@@ -392,11 +425,12 @@ pub struct RunOpts {
     pub command: Vec<String>,
 }
 
-/// Exec into the distro via `container exec`.
+/// Build the `container exec` command that runs `o` in its distro,
+/// booting the distro first if needed. The caller execs it.
 ///
 /// Unlike `container machine run`, `container exec` takes an argv vector,
 /// so commands arrive exactly as given (no shell re-evaluation).
-pub fn run(o: RunOpts) -> Result<ExitCode> {
+pub fn run_command(o: RunOpts) -> Result<Command> {
     ensure_started()?;
     let name = resolve(o.name)?;
     let info = ensure_running(&name)?;
@@ -440,7 +474,7 @@ pub fn run(o: RunOpts) -> Result<ExitCode> {
     } else {
         cmd.args(&o.command);
     }
-    Err(anyhow::Error::from(cmd.exec()).context("failed to exec `container exec`"))
+    Ok(cmd)
 }
 
 fn timestamp() -> u64 {
@@ -479,7 +513,7 @@ fn remove_snapshot_images(name: &str, keep: Option<&str>) {
 
 /// `container distro set`: recreate the container with new settings on a
 /// snapshot of its current filesystem.
-pub fn set(name: &str, changes: &SpecChanges) -> Result<ExitCode> {
+pub fn set(name: &str, changes: &SpecChanges) -> Result<()> {
     ensure_started()?;
     if changes.is_empty() {
         bail!("nothing to change (see `container distro set --help`)");
@@ -522,19 +556,19 @@ pub fn set(name: &str, changes: &SpecChanges) -> Result<ExitCode> {
         boot(name)?;
     }
     remove_snapshot_images(name, Some(&snapshot));
-    Ok(ExitCode::SUCCESS)
+    Ok(())
 }
 
-pub fn set_default(name: Option<&str>) -> Result<ExitCode> {
+pub fn set_default(name: Option<&str>) -> Result<()> {
     if let Some(n) = name {
         ensure_started()?;
         find(n)?;
     }
     write_default(name)?;
-    Ok(ExitCode::SUCCESS)
+    Ok(())
 }
 
-pub fn export(name: &str, output: Option<&Path>) -> Result<ExitCode> {
+pub fn export(name: &str, output: Option<&Path>) -> Result<()> {
     ensure_started()?;
     find(name)?;
     let mut args = vec!["export".to_string(), name.to_string()];
@@ -544,10 +578,11 @@ pub fn export(name: &str, output: Option<&Path>) -> Result<ExitCode> {
     }
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     run_container(&args)?;
-    Ok(ExitCode::SUCCESS)
+    Ok(())
 }
 
-pub fn import(name: &str, file: &Path, opts: &CreateOpts) -> Result<ExitCode> {
+/// Create a distro from a rootfs tar; returns its name.
+pub fn import(name: &str, file: &Path, opts: &CreateOptions) -> Result<String> {
     validate_name(name)?;
     ensure_started()?;
     if distros()?.iter().any(|c| c.id() == name) {
