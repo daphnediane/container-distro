@@ -165,6 +165,7 @@ so `git`/`ssh` operations use your host agent with no extra setup.
 Development of this project has been assisted by AI coding tools:
 
 - [Devin]
+- [Claude Code]
 
 Most of the code and documentation here was AI-generated and manually
 reviewed. Take the documentation as a slightly out-of-date roadmap, no
@@ -172,3 +173,4 @@ matter the polish of the AI verbiage. Here be dragons.
 
 [BSD-2-Clause License]: LICENSE
 [Devin]: https://www.devin.ai/
+[Claude Code]: https://claude.ai/code
