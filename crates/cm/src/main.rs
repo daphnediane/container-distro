@@ -7,7 +7,6 @@
 //! `cm` — a WSL-compatible command-line wrapper for Apple container machines.
 
 mod cli;
-mod container;
 
 use std::os::unix::process::CommandExt;
 use std::process::{ExitCode, ExitStatus};
@@ -15,6 +14,7 @@ use std::process::{ExitCode, ExitStatus};
 use anyhow::{Context, Result};
 use clap::Parser;
 use cli::{Action, Args, ShellType};
+use cm_core::container;
 
 fn main() -> ExitCode {
     let args = Args::parse();

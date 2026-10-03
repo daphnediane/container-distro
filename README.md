@@ -12,7 +12,7 @@ cm                # container machine run
 ## Install
 
 ```bash
-cargo install --path .
+cargo install --path crates/cm
 # optionally alias to `wsl`:
 ln -s "$(which cm)" ~/.local/bin/wsl   # or any dir on PATH
 ```
