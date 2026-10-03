@@ -16,7 +16,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use cm_core::container::{
-    self, ContainerInfo, container_cmd, default_machine_name, ensure_started, validate_name,
+    self, ContainerInfo, Machine, container_cmd, default_machine_name, ensure_started,
+    validate_name,
 };
 use cm_core::naming::{label_lookup, state_dir};
 use cm_core::oci;
@@ -93,7 +94,7 @@ pub struct CreateOptions {
     #[arg(long)]
     pub no_boot: bool,
 
-    /// Make this the default distro
+    /// Make this the default distro (automatic when nothing is the default)
     #[arg(long)]
     pub set_default: bool,
 }
@@ -295,17 +296,37 @@ fn ensure_running(name: &str) -> Result<ContainerInfo> {
     find(name)
 }
 
+/// Whether nothing is the default: no default distro among `distros` (a
+/// stale one doesn't count) and no default machine.
+fn no_default(
+    distro_default: Option<&str>,
+    distros: &[ContainerInfo],
+    machines: &[Machine],
+) -> bool {
+    let distro_set = distro_default.is_some_and(|d| distros.iter().any(|c| c.id() == d));
+    !distro_set && !machines.iter().any(|m| m.default)
+}
+
 fn create_from_spec(spec: &DistroSpec, no_boot: bool, set_default: bool) -> Result<String> {
     check_sources(spec)?;
-    if distros()?.iter().any(|c| c.id() == spec.name) {
+    let existing = distros()?;
+    if existing.iter().any(|c| c.id() == spec.name) {
         bail!("distro `{}` already exists", spec.name);
     }
     create_container(spec)?;
     if !no_boot {
         boot(&spec.name)?;
     }
-    // Only on request: under `cm`'s unified namespace a distro default
-    // overrides the default machine.
+    // On request, or (like `container machine create`) when nothing is the
+    // default. Otherwise leave it alone: under `cm`'s unified namespace a
+    // distro default overrides the default machine. If machines can't be
+    // listed, a distro is the only usable target anyway.
+    let set_default = set_default
+        || no_default(
+            default_name().as_deref(),
+            &existing,
+            &container::list_machines().unwrap_or_default(),
+        );
     if set_default {
         write_default(Some(&spec.name))?;
     }
@@ -599,4 +620,35 @@ pub fn import(name: &str, file: &Path, opts: &CreateOptions) -> Result<String> {
     oci::load_rootfs(rootfs, &reference)?;
     let spec = build_spec(name.to_string(), reference, opts)?;
     create_from_spec(&spec, opts.no_boot, opts.set_default)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn distro(id: &str) -> ContainerInfo {
+        serde_json::from_str(&format!(
+            r#"{{"configuration":{{"id":"{id}"}},"id":"{id}"}}"#
+        ))
+        .unwrap()
+    }
+
+    fn machine(id: &str, default: bool) -> Machine {
+        serde_json::from_str(&format!(
+            r#"{{"id":"{id}","status":"running","default":{default}}}"#
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn no_default_rule() {
+        let d = [distro("d1")];
+        assert!(no_default(None, &d, &[]));
+        assert!(no_default(None, &d, &[machine("m", false)]));
+        assert!(!no_default(Some("d1"), &d, &[]));
+        // A stale default (distro deleted) doesn't count.
+        assert!(no_default(Some("gone"), &d, &[]));
+        assert!(!no_default(Some("gone"), &d, &[machine("m", true)]));
+        assert!(!no_default(None, &[], &[machine("m", true)]));
+    }
 }

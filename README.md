@@ -113,7 +113,8 @@ On top of that:
 `cm` sees distros and machines as one set of WSL distributions:
 `cm -d NAME` resolves a distro first, then a machine. A default distro
 (`cm -s NAME`) wins over the default machine; setting a machine as
-default clears it. When the cwd is under a shared path, sessions start
+default clears it. A new distro becomes the default when no machine or
+distro is. When the cwd is under a shared path, sessions start
 at its guest path (`/Volumes/Code/x` → `/mnt/code/x`). `cm` links the
 distro library directly, so the plugin install is optional.
 `CM_BACKEND=machine` makes `cm` ignore distros.
