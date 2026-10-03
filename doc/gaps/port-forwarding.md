@@ -1,7 +1,10 @@
 # Gap: no localhost port forwarding
 
 **Status:** partially closed — `cm --forward HOST[:GUEST]` (L0, static,
-foreground) shipped; WSL-style automatic forwarding still open
+foreground) works for machines and distros; distros also publish ports
+natively (`container distro create -p`, `cm --install --publish`,
+default host IP `127.0.0.1`). WSL-style automatic forwarding is still
+open
 **Cheapest fix level:** L0 (manual forwarder) · [L2.5](../lower-level-integration.md#the-plugin-route--l25)
 for WSL-like automatic forwarding · L3/L4 for full control
 

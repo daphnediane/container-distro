@@ -1,9 +1,20 @@
 # container-distro (`cm`)
 
-A [WSL](https://github.com/microsoft/WSL)-compatible command-line wrapper for
-[Apple container machines](https://github.com/apple/container/blob/main/docs/container-machine.md).
+A [WSL](https://github.com/microsoft/WSL)-compatible command line for
+Apple's [`container`](https://github.com/apple/container), in two parts:
 
-With no arguments, `cm` opens a login shell in the default container machine:
+- **`cm`** — `wsl.exe`-style commands over
+  [container machines](https://github.com/apple/container/blob/main/docs/container-machine.md)
+  _and_ distros.
+- **`container distro`** — a `container` plugin (and library) that
+  creates **distros**: machine-like containers (your account provisioned
+  inside, home shared at the same path, the image's init as PID 1) plus
+  what machines lack — host directories outside `$HOME`, published
+  ports, export/import, and changing settings after creation. See
+  [Distros](#distros).
+
+With no arguments, `cm` opens a login shell in the default machine (or
+the default distro, if one is set):
 
 ```bash
 cm                # container machine run
@@ -15,6 +26,10 @@ cm                # container machine run
 cargo install --path crates/cm
 # optionally alias to `wsl`:
 ln -s "$(which cm)" ~/.local/bin/wsl   # or any dir on PATH
+
+# optional: the `container distro` subcommand (cm doesn't need it)
+cargo install --path crates/container-distro
+sudo container-distro install-plugin   # -> /usr/local/libexec/container-plugins/distro
 ```
 
 ## Usage
@@ -27,7 +42,7 @@ cm [OPTIONS] [-- <COMMAND LINE>]
 
 | Option               | Description                                           |
 | -------------------- | ----------------------------------------------------- |
-| `-d, --distribution` | Machine to use (default machine if omitted)           |
+| `-d, --distribution` | Machine or distro to use (default if omitted)         |
 | `-u, --user`         | Run as the specified user                             |
 | `--cd`               | Working directory inside the machine                  |
 | `--shell-type`       | `standard` (non-login), `login` (default), `none`     |
@@ -39,14 +54,15 @@ cm [OPTIONS] [-- <COMMAND LINE>]
 
 | Option              | Description                                                                             |
 | ------------------- | --------------------------------------------------------------------------------------- |
-| `-l, --list`        | List machines (`--all`, `--running`, `-q`, `-v`, `-v -v`)                               |
-| `-s, --set-default` | Set the default machine                                                                 |
-| `-t, --terminate`   | Stop a running machine                                                                  |
-| `--shutdown`        | Stop all running machines (`--system`: also stop services)                              |
+| `-l, --list`        | List machines and distros (`--all`, `--running`, `-q`, `-v`, `-v -v`)                   |
+| `-s, --set-default` | Set the default machine or distro                                                       |
+| `-t, --terminate`   | Stop a running machine or distro                                                        |
+| `--shutdown`        | Stop all running machines and distros (`--system`: also stop services)                  |
 | `--status`          | Show container system status                                                            |
-| `--unregister`      | Delete a machine and its storage                                                        |
+| `--unregister`      | Delete a machine or distro and its storage                                              |
 | `--install <image>` | Create + boot a machine (`--name`, `--no-launch`, `--cpus`, `--memory`, `--home-mount`) |
-| `--forward <p[:g]>` | Forward localhost port `p` to the machine's port `g`                                    |
+|                     | …or a distro with `--distro`, `--share SRC:DST[:ro]`, `--publish [IP:]HOST[:GUEST]`     |
+| `--forward <p[:g]>` | Forward localhost port `p` to port `g` of the machine or distro                         |
 | `--version`         | Show `cm` and `container` versions                                                      |
 
 If `container` services aren't running, `cm` runs `container system start`
@@ -66,7 +82,53 @@ echo hi | cm -- cat               # stdin is piped through
 cm -t alpine                      # stop it
 cm --forward 3000                 # localhost:3000 -> machine:3000
 cm --install alpine:latest --name dev   # create and launch a machine
+cm --install ubuntu:24.04 --name work --share /Volumes/Code:/mnt/code --publish 3000
+                                  # ...a distro with an extra mount and a port
 ```
+
+## Distros
+
+`container machine` can't share anything outside `$HOME` or publish
+ports, and its settings are fixed at creation. A **distro** is a regular
+`container` container configured the way the machine plugin configures a
+machine:
+
+- the host account is provisioned inside (same name/uid/gid,
+  passwordless sudo), with `SSH_AUTH_SOCK` forwarded
+- `$HOME` is shared at the same path (`--home-mount rw|ro|none`)
+- the image's own init (`/sbin/init`) runs as PID 1 — or an idle PID 1
+  for images without one
+- all capabilities, no masked paths
+
+On top of that:
+
+| Feature                | How                                                                                               |
+| ---------------------- | ------------------------------------------------------------------------------------------------- |
+| Mounts outside `$HOME` | `-v /Volumes/Code:/mnt/code[:ro]`; `--automount` maps every `/Volumes/<X>` to `/mnt/<x>`          |
+| Published ports        | `-p 3000`, `-p 8080:80`, `-p 0.0.0.0:8080:80/udp` (host IP defaults to `127.0.0.1`)               |
+| Change settings later  | `container distro set NAME --cpus 4 --add-volume … --publish …` (recreates, keeps the filesystem) |
+| Export / import        | `container distro export NAME -o f.tar`, `container distro import NAME f.tar[.gz]`                |
+| Exact argv             | `run` uses `container exec`, so arguments are never re-split                                      |
+
+`cm` sees distros and machines as one set of WSL distributions:
+`cm -d NAME` resolves a distro first, then a machine. A default distro
+(`cm -s NAME`) wins over the default machine; setting a machine as
+default clears it. When the cwd is under a shared path, sessions start
+at its guest path (`/Volumes/Code/x` → `/mnt/code/x`). `cm` links the
+distro library directly, so the plugin install is optional.
+`CM_BACKEND=machine` makes `cm` ignore distros.
+
+```bash
+container distro create -n dev -v /Volumes/Code:/mnt/code -p 3000 alpine:latest
+container distro run -n dev -- uname -a
+container distro ls
+container distro set dev --memory 8G --unpublish 3000
+container distro rm -f dev
+```
+
+Distros are tracked with `io.github.daphnediane.container-distro.*`
+labels (see [doc/naming.md](doc/naming.md)). Regular containers get one
+extra vCPU of overhead (`nproc` shows `cpus + 1`).
 
 ## Differences from WSL
 
@@ -80,7 +142,8 @@ WSL mounts every Windows drive under `/mnt/<letter>` (e.g. `C:\` →
 directory is shared into the guest via virtiofs **at the same absolute
 path** — `/Users/<name>` on the Mac is `/Users/<name>` in the machine.
 
-The flip side is that **nothing outside `$HOME` is shared**. There is no
+The flip side is that **a machine shares nothing outside `$HOME`** (use a
+[distro](#distros) for that). There is no
 `/mnt/...` equivalent and, as of `container` 1.5.0, `container machine`
 has no option for additional mounts — the only configurable share is the
 home mount (`rw` by default; `ro` or `none` via
@@ -141,15 +204,18 @@ so `git`/`ssh` operations use your host agent with no extra setup.
 ### Management gaps
 
 - `cm -l -v` prints WSL's `NAME STATE VERSION` table; VERSION is always
-  `2` (machines are full VMs). `-v -v` adds `container`-specific columns.
+  `2` (machines and distros are full VMs). `-v -v` adds
+  `container`-specific columns including KIND (`machine`/`distro`).
 - Machine names must be lowercase DNS-style (`[a-z0-9-]`); WSL distro
   names are unrestricted.
 - `--shutdown` stops machines but leaves `container` services running;
   `--shutdown --system` also runs `container system stop` (which stops
   every container, not just machines).
-- No equivalents for `--export`/`--import` (see
-  [doc/gaps/export-import.md](doc/gaps/export-import.md)), `--update`, `--manage`,
-  `--mount` (VHDs), or `wsl.conf`.
+- `cm --export`/`--import` are not implemented: machine export is
+  blocked upstream (see [doc/gaps/export-import.md](doc/gaps/export-import.md)).
+  Distros support it via `container distro export`/`import`.
+- No equivalents for `--update`, `--manage`, `--mount` (VHDs), or
+  `wsl.conf`.
 
 ## Notes
 

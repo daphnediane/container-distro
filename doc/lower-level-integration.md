@@ -251,6 +251,17 @@ envelope, at the cost of one Swift-or-C-ABI XPC daemon we control. It is
 also the only option where `container` remains fully responsible for
 VM security boundaries.
 
+**Implemented (CLI-plugin form).** `crates/container-distro` takes the
+"CLI plugin alone" shortcut: no daemon. It composes `container create`
+(our init as entrypoint, cap ALL, no masked paths, `--ssh`, `CONTAINER_*`
+env), `exec`, `export` and `image load`. It ships as a library (which
+`cm` links directly) plus a `container distro` plugin binary
+(`install-plugin` registers it under
+`<prefix>/libexec/container-plugins/distro`). Distros are recognized by
+label rather than by a plugin-owned store. A `core` daemon plugin
+remains the next step only if we need things a CLI can't do, such as
+watching guest listeners for automatic port forwarding.
+
 ## Can Rust interop with Swift?
 
 Yes, with caveats. There is no toolchain-level Swift↔Rust bridge (Swift

@@ -1,8 +1,10 @@
 # Gap: `--export` / `--import`
 
-**Status:** punted — the obvious L0 recipe doesn't work for machines
+**Status:** punted for machines — the obvious L0 recipe doesn't work
 (`container` 1.5.0, build d265d66). Prototype parked on branch
-`wip/export-import`.
+`wip/export-import`. **Works for distros:** `container distro
+export`/`import` (regular containers export fine, and imported images
+boot).
 **Fix level:** upstream fix for export; host-side ext4 reader (L0, no
 guest tools) as a workaround; import blocked on an unexplained boot
 failure

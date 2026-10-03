@@ -1,9 +1,11 @@
 # Gap: no mounts outside `$HOME`
 
-**Status:** open — the biggest functional gap vs WSL
+**Status:** closed for distros — `container distro create -v SRC:DST[:ro]`
+/ `--automount` / `cm --install --share` (L2.5 CLI plugin composing
+`container create`; no daemon). Still open for `container machine`
+itself (upstream #1805, #2278).
 **Cheapest fix level:** [L2.5](../lower-level-integration.md#the-plugin-route--l25)
-(own daemon plugin) · also fixable at [L3](../lower-level-integration.md#l3--containerization-directly)
-· cheapest of all might be an upstream PR
+(done, as a CLI plugin) · for machines, an upstream PR
 
 ## What WSL does
 
@@ -109,8 +111,12 @@ ours). Add a +1 and our use case rather than filing a duplicate.
 
 ## Recommendation
 
-File the upstream feature request first — it's a small ask and the
-plugin's own code shows it's trivially expressible. If it stalls or is
-rejected, prototype the L0 `container create` composition (cheap spike,
-proves the semantics) and graduate to an L2.5 plugin if we want machine
-lifecycle management alongside it.
+Done via the "L0 approximation" option above, packaged as the
+`container distro` plugin/library. A spike confirmed that our own init
+(a reimplementation of the machine init's env contract) provisions the
+user correctly from a plain `container create`. Distros are tracked by
+label, not by `machine list`; `cm` merges both. Mounts are virtiofs, so
+they keep the host volume's case sensitivity and uid mapping.
+
+Still worth supporting #1805/#2278 upstream so plain machines get it
+too; then distros remain useful for ports, `set`, and export/import.

@@ -14,16 +14,16 @@ One document per gap, each noting the integration level (see the rung
 definitions in [lower-level-integration](lower-level-integration.md#rung-by-rung-how-low-can-cm-go))
 that would fix it:
 
-| Gap                                                                 | Cheapest fix                            |
-| ------------------------------------------------------------------- | --------------------------------------- |
-| [Mounts outside `$HOME`](gaps/mounts-outside-home.md)               | upstream PR, else L2.5 plugin           |
-| [Localhost port forwarding](gaps/port-forwarding.md)                | L0 `cm --forward` (done); auto = L2.5   |
-| [`--export` / `--import`](gaps/export-import.md)                    | punted — upstream export bug            |
-| [Configuration files](gaps/configuration-files.md)                  | L0 host config; guest `wsl.conf` harder |
-| [`-v` verbose list](gaps/verbose-list.md)                           | done (L0)                               |
-| [Subprocess overhead / JSON scraping](gaps/subprocess-overhead.md)  | L2 if it ever hurts                     |
-| [Service startup / `--shutdown` semantics](gaps/service-startup.md) | L0 — "stop what we started"             |
-| [`machine run` exec stdio loss](gaps/exec-stdio.md)                 | L0 `-i` + quoting done; race upstream   |
+| Gap                                                                 | Cheapest fix                             |
+| ------------------------------------------------------------------- | ---------------------------------------- |
+| [Mounts outside `$HOME`](gaps/mounts-outside-home.md)               | distros (L2.5, done); machines upstream  |
+| [Localhost port forwarding](gaps/port-forwarding.md)                | `cm --forward`, distro `-p` (done)       |
+| [`--export` / `--import`](gaps/export-import.md)                    | distros done; machines punted (upstream) |
+| [Configuration files](gaps/configuration-files.md)                  | L0 host config; guest `wsl.conf` harder  |
+| [`-v` verbose list](gaps/verbose-list.md)                           | done (L0)                                |
+| [Subprocess overhead / JSON scraping](gaps/subprocess-overhead.md)  | L2 if it ever hurts                      |
+| [Service startup / `--shutdown` semantics](gaps/service-startup.md) | L0 — "stop what we started"              |
+| [`machine run` exec stdio loss](gaps/exec-stdio.md)                 | L0 `-i` + quoting done; race upstream    |
 
 Upstream references:
 

@@ -57,9 +57,12 @@ or read-only paths, `--ssh`, the host account passed through
 OCI layout → `image load`) and recreates the container. Ports default to
 `127.0.0.1`. Only an explicit `--set-default` sets the default distro.
 
-`cm` integration (one namespace over machines + distros, linking the
-library rather than exec'ing the plugin) is in progress:
-`crates/cm/src/backend.rs`.
+`cm` treats machines and distros as one namespace (`crates/cm/src/backend.rs`),
+linking the library rather than exec'ing the plugin: `-d NAME` resolves a
+distro first, then a machine; a default distro overrides the default
+machine; `-l` merges both (KIND column at `-v -v`); `--install --distro`
+/ `--share` / `--publish` create distros. `CM_BACKEND=machine` disables
+distros.
 
 ## Host filesystem (machines)
 
