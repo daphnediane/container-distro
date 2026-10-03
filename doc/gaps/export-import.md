@@ -1,8 +1,11 @@
 # Gap: `--export` / `--import`
 
-**Status:** solvable at **L0** today — no new machinery needed
-**Fix level:** L0 (CLI composition); would get nicer at
-[L2](../lower-level-integration.md#l2--swift-library-products-thin-c-shim-for-rust)/L2.5
+**Status:** punted — the obvious L0 recipe doesn't work for machines
+(`container` 1.5.0, build d265d66). Prototype parked on branch
+`wip/export-import`.
+**Fix level:** upstream fix for export; host-side ext4 reader (L0, no
+guest tools) as a workaround; import blocked on an unexplained boot
+failure
 
 ## What WSL does
 
@@ -13,49 +16,95 @@
 
 ## What we have today
 
-Nothing exposed via `cm`. But `container` has all the primitives — a
-machine's persistent state lives in its backing container, and
-`container machine inspect <m>` reports the `containerId`.
+Nothing exposed via `cm`.
 
-## L0 recipes
+## Export: `container export` can't snapshot machines
 
-- **Export (rootfs tar — WSL-faithful):**
-  `container machine inspect <m>` → `containerId` →
-  `container export <cid> -o file.tar`. Takes a runtime snapshot
-  automatically if the machine is running. Virtiofs mounts (`$HOME`,
-  `/sbin.machine/init`) aren't part of the container filesystem —
-  **verify** they're excluded; that's the desired behavior anyway since
-  `$HOME` is host data. Guest-side mutations (provisioned user accounts,
-  installed packages) live in the container layer and are captured.
-- **Snapshot → image (OCI path):** `container commit <cid> <ref>` +
-  `container image save`/`load` round-trips through standard OCI
-  archives. Better fidelity (image config preserved) but not
-  WSL-tar-compatible. Could be exposed as `cm --export --format oci`.
-- **Import (raw rootfs tar → new machine):** `container image load`
-  only accepts OCI-layout tars (from `image save`), not bare rootfs
-  tars — so `cm --import` needs a wrap step:
-  - `container build` with `FROM scratch` + `ADD rootfs.tar /`, or
-  - emit OCI image layout ourselves — it's just `blobs/sha256/*` +
-    `index.json`, easy to generate in Rust — then `image load`,
-  - then `container machine create --name <m> <ref>`.
-- **Import into an existing machine** is even simpler: stream the tar
-  through `machine run`'s stdin to `tar -xf - -C /`. No OCI involved,
-  but it mutates an existing distro rather than registering a new one —
-  only half of WSL semantics.
+The intended recipe was `container machine inspect <m>` → `containerId`
+→ `container export <cid> -o file.tar`. It fails:
 
-## Caveats
+```console
+$ container export alpine-730439 -o /tmp/a.tar
+Error: failed to export container (cause: "internalError: "failed to snapshot disk
+in container alpine-730439 (cause: "unknown: "Error Domain=NSCocoaErrorDomain
+Code=260 "The file “rootfs.ext4” couldn’t be opened because there is no such
+file." UserInfo={NSFilePath=.../com.apple.container/containers/alpine-730439/rootfs.ext4, ...
+```
+
+**Cause.** `export` assumes the root disk lives at
+`<app-root>/containers/<cid>/rootfs.ext4`, which is true for regular
+containers. A machine's backing container mounts its rootfs from the
+machine plugin's state instead — the container's `rootfs.json`:
+
+```json
+{"source": ".../plugin-state/machine-apiserver/machines/alpine/rootfs.ext4",
+ "destination": "/", "type": {"block": {"format": "ext4", ...}}}
+```
+
+Export ignores the configured rootfs mount source. It's an upstream bug.
+Regular containers, including the planned `container distro` ones, are
+unaffected.
+
+**Upstream:** no existing issue found (searched 2026-10-03: "export",
+"machine export", "rootfs.ext4", "snapshot disk"). The related
+issues are about other things: [#1400](https://github.com/apple/container/issues/1400)
+(export of running containers, closed), [#1265](https://github.com/apple/container/issues/1265)
+(export should write a tar, closed), and [#2325](https://github.com/apple/container/issues/2325)
+(`export -o` deletes an existing directory, open). A new issue is
+warranted, with the repro above.
+
+### Workarounds considered
+
+- **Guest-side tar stream (prototyped, rejected).** Run
+  `machine run --root -- sh -c '<bind-mount / and tar it>'` and capture
+  stdout. It works (byte-identical over 3 runs, no first-write loss), but
+  it depends on `sh`, `mount`, and `tar` being installed in the distro.
+  That's the wrong dependency for an export tool.
+- **Host-side ext4 read (preferred if we revisit).** Take an APFS clone
+  of the machine's `rootfs.ext4` (`cp -c`, instant). The clone is
+  crash-consistent if the machine is running and exact if it's stopped.
+  Walk it with a pure-Rust read-only ext4 reader (`ext4-view`) and write
+  the tar with the `tar` crate. No guest involvement. To verify: does the
+  reader expose device major/minor and xattrs? Also, the machine plugin's
+  state path is internal, so read it from `container inspect`'s rootfs
+  source rather than hard-coding it.
+- **Upstream fix.** Once export honors the rootfs mount source, plain
+  `container export` is the whole implementation.
+
+## Import: imported machines don't boot
+
+The prototype wrapped the rootfs tar in an OCI image layout. The single
+layer is stored as-is (plain or gzip), with the `diff_id` computed over
+the uncompressed stream. It then ran `container image load` and
+`container machine create --no-boot local/<name>:imported`. Loading and
+creating both succeed, and the machine is listed. **Booting fails:**
+
+```console
+$ container machine run -n a2 -- true
+Error: The operation couldn’t be completed. Operation not supported by device
+```
+
+The machine's `stdio.log` shows busybox init running `/etc/inittab`,
+failing `can't run '/sbin/openrc'`, then rebooting. The source machine
+(stock `alpine:latest`) has the same inittab and no openrc but boots
+fine, so the difference lies elsewhere: image config, layer handling, or
+init environment. Root cause not determined. It may be related to
+[#2024](https://github.com/apple/container/issues/2024) (machine create
+succeeds for images that then fail to boot, with a misleading error).
+
+## Caveats (still apply)
 
 - Machine names are lowercase DNS-style (`[a-z0-9-]`); `wsl --import`
-  accepts arbitrary distro names — `cm` must validate/sanitize.
-- WSL `--import` takes an install location (tar → vhd at a path); the
-  machine equivalent keeps state inside `container`'s app root — no
-  location choice, document `--install-location` as accepted-but-ignored
-  or drop it.
-- Verify `container export` on a *machine* container specifically — the
-  machine label (`plugin: machine`) shouldn't matter, but confirm.
+  accepts arbitrary distro names — `cm` must validate.
+- WSL `--import` takes an install location. Machines keep their state
+  inside `container`'s app root, so `cm` would accept the argument for
+  compatibility and ignore it.
 
 ## Recommendation
 
-Implement `--export` and `--import` at L0. `container export` gives the
-tar path for free; for import, generating OCI layout in Rust is
-deterministic and avoids depending on the builder's availability.
+Punt for now. File the export bug upstream. Revisit with the host-side
+ext4 reader for export if upstream is slow. For import, debug the boot
+failure by diffing the inspect output and config of a stock-image
+machine against an imported one. A `container distro` backend (regular
+containers) sidesteps the export bug entirely, so export/import may be
+best delivered there first.

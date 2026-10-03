@@ -75,6 +75,14 @@ drives because the guest is "your" machine; a container machine is the
 same trust level, but we should still make it opt-in and easy to scope
 down (`machine set home-mount=none` style).
 
+## Upstream
+
+Already requested, both open as of 2026-10-03:
+[#1805](https://github.com/apple/container/issues/1805) (user-specified
+mounts in machines) and [#2278](https://github.com/apple/container/issues/2278)
+(multiple virtiofs bind mounts — same case-sensitive-volume motivation as
+ours). Add a +1 and our use case rather than filing a duplicate.
+
 ## Options
 
 - **Upstream PR (preferred long-term).** Add an extra-mounts flag to

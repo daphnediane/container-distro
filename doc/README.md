@@ -18,7 +18,7 @@ that would fix it:
 | ------------------------------------------------------------------- | --------------------------------------- |
 | [Mounts outside `$HOME`](gaps/mounts-outside-home.md)               | upstream PR, else L2.5 plugin           |
 | [Localhost port forwarding](gaps/port-forwarding.md)                | L0 forwarder subcommand                 |
-| [`--export` / `--import`](gaps/export-import.md)                    | L0 — `container export`/`image load`    |
+| [`--export` / `--import`](gaps/export-import.md)                    | punted — upstream export bug            |
 | [Configuration files](gaps/configuration-files.md)                  | L0 host config; guest `wsl.conf` harder |
 | [`-v` verbose list](gaps/verbose-list.md)                           | L0 — `machine inspect` JSON             |
 | [Subprocess overhead / JSON scraping](gaps/subprocess-overhead.md)  | L2 if it ever hurts                     |
