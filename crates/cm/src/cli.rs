@@ -12,6 +12,7 @@
 
 use anyhow::{Result, bail};
 use clap::{ArgAction, Parser, ValueEnum};
+use cm_core::forward::PortMapping;
 
 /// How the macOS home directory is shared into a machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -182,6 +183,11 @@ pub struct Args {
     )]
     pub home_mount: Option<HomeMount>,
 
+    /// Forward 127.0.0.1:HOST_PORT to the machine's GUEST_PORT (repeatable;
+    /// runs in the foreground until interrupted)
+    #[arg(long = "forward", value_name = "HOST_PORT[:GUEST_PORT]")]
+    pub forward: Vec<PortMapping>,
+
     /// Print version information
     #[arg(long = "version")]
     pub version: bool,
@@ -218,6 +224,11 @@ pub enum Action {
     Unregister(String),
     /// `container machine create`, then optionally open a shell.
     Install(InstallOpts),
+    /// Forward localhost ports to a machine.
+    Forward {
+        machine: Option<String>,
+        mappings: Vec<PortMapping>,
+    },
     /// Print cm and container versions.
     Version,
 }
@@ -244,6 +255,13 @@ impl Args {
                 memory: self.memory.clone(),
                 home_mount: self.home_mount,
             })
+        } else if !self.forward.is_empty() {
+            let action = Action::Forward {
+                machine: self.distribution.clone(),
+                mappings: self.forward.clone(),
+            };
+            self.check_no_run_args_except_distribution()?;
+            return Ok(action);
         } else if self.shutdown {
             Action::Shutdown {
                 system: self.system,
@@ -262,10 +280,14 @@ impl Args {
     }
 
     fn check_no_run_args(&self) -> Result<()> {
-        let mut bad = Vec::new();
         if self.distribution.is_some() {
-            bad.push("--distribution");
+            bail!("cannot combine --distribution with a management action");
         }
+        self.check_no_run_args_except_distribution()
+    }
+
+    fn check_no_run_args_except_distribution(&self) -> Result<()> {
+        let mut bad = Vec::new();
         if self.user.is_some() {
             bad.push("--user");
         }
@@ -454,6 +476,39 @@ mod tests {
         assert_eq!(opts.memory.as_deref(), Some("4G"));
         assert_eq!(opts.home_mount, Some(HomeMount::Ro));
         assert!(parse(&["cm", "--cpus", "2"]).is_err());
+    }
+
+    #[test]
+    fn forward_allows_distribution() {
+        let args = parse(&[
+            "cm",
+            "-d",
+            "alpine",
+            "--forward",
+            "8080",
+            "--forward",
+            "3000:80",
+        ])
+        .unwrap();
+        assert_eq!(
+            args.action().unwrap(),
+            Action::Forward {
+                machine: Some("alpine".into()),
+                mappings: vec![
+                    PortMapping {
+                        host: 8080,
+                        guest: 8080
+                    },
+                    PortMapping {
+                        host: 3000,
+                        guest: 80
+                    },
+                ],
+            }
+        );
+        assert!(parse(&["cm", "--forward", "x"]).is_err());
+        let args = parse(&["cm", "--forward", "8080", "-u", "root"]).unwrap();
+        assert!(args.action().is_err());
     }
 
     #[test]

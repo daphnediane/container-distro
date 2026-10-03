@@ -1,6 +1,8 @@
 # Gap: `machine run` exec fidelity — stdin needs `-i`, first writes dropped, argv re-evaled
 
-**Status:** open — upstream bug territory (`container` 1.5.0, build d265d66)
+**Status:** partially closed — `cm` now always passes `-i` (stdin works)
+and single-quotes `-e` arguments (argv exact); the first-write drop is
+still open upstream (not reproduced in later 1.5.0 runs on 2026-10-03)
 **Fix level:** upstream fix in `container machine run` attach sequencing;
 L0 workarounds (`-i` passthrough, attach handshake) cover most cases
 
@@ -27,7 +29,7 @@ hello
 Without `-i` the guest process sees immediate EOF on stdin. `cm` doesn't
 pass `-i` today, so `cm -d m -- cmd` ignores piped input entirely.
 
-### The first guest→host write is dropped — on *either* stream
+### The first guest→host write is dropped — on _either_ stream
 
 ```bash
 $ container machine run -n alpine -i -- sh -c 'echo A; echo B; echo C'
@@ -55,7 +57,7 @@ Observed characteristics (12/12 repro on multi-write `sh -c`):
 - Not fully deterministic: bare executables sometimes survive
   (`echo hi` 6/6, `seq 1 5` 6/6) and sometimes truncate oddly
   (`printf 'a b c\n'` delivered only `a` — presumably split writes losing
-  all but the first). Treat *any* early output as unreliable.
+  all but the first). Treat _any_ early output as unreliable.
 - Exit codes and late stderr are unaffected.
 
 ### argv is not preserved — the guest shell-evaluates the joined command
@@ -81,10 +83,10 @@ Consequences:
   `grep foo bar file` (three patterns).
 - Quoting survives one extra eval round, which is why `sh -c 'a; b; c'`
   works at all — and why the remote extensions' `bash -c '<single-quoted
-  script>'` call style mostly still lands correctly. Fragile but
+script>'` call style mostly still lands correctly. Fragile but
   functional.
 - This also confounds repro of the write-loss bug: in `sh -c 'echo A;
-  echo B; echo C'`, `B`/`C` may be printed by the *outer* eval rather
+echo B; echo C'`, `B`/`C` may be printed by the _outer_ eval rather
   than the inner `sh`.
 
 `#1954` asks for an argv-preserving mode; until it lands, `cm` could
@@ -123,7 +125,7 @@ warranted. The neighborhood is well-populated though:
 ## Options
 
 - **Upstream fix (the real answer).** File `apple/container`: `machine
-  run` starts the guest process before the vsock stdio channels are
+run` starts the guest process before the vsock stdio channels are
   confirmed attached; first writes land before the reader exists. If the
   race is in the CLI's sequencing (spawn-then-attach), an L2 client could
   sequence it correctly itself; if it's in `vminitd`'s process-start
@@ -141,7 +143,7 @@ warranted. The neighborhood is well-populated though:
   alpine doesn't accept fractional args — `sleep 0.05` fails, `sleep 1`
   works).
 - **L2/L2.5** — doesn't inherently help; same `createProcess`/vminitd
-  plumbing. Only relevant if the bug turns out to be in the *CLI's*
+  plumbing. Only relevant if the bug turns out to be in the _CLI's_
   attach ordering, in which case a client that sequences correctly wins.
 
 ## Recommendation

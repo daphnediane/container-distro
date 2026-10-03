@@ -46,6 +46,7 @@ cm [OPTIONS] [-- <COMMAND LINE>]
 | `--status`          | Show container system status                                                            |
 | `--unregister`      | Delete a machine and its storage                                                        |
 | `--install <image>` | Create + boot a machine (`--name`, `--no-launch`, `--cpus`, `--memory`, `--home-mount`) |
+| `--forward <p[:g]>` | Forward localhost port `p` to the machine's port `g`                                    |
 | `--version`         | Show `cm` and `container` versions                                                      |
 
 If `container` services aren't running, `cm` runs `container system start`
@@ -63,6 +64,7 @@ cm -l -v                          # NAME STATE VERSION table
 cm -l -v -v                       # ...plus IP, resources, image
 echo hi | cm -- cat               # stdin is piped through
 cm -t alpine                      # stop it
+cm --forward 3000                 # localhost:3000 -> machine:3000
 cm --install alpine:latest --name dev   # create and launch a machine
 ```
 
@@ -110,7 +112,9 @@ path; host paths outside `$HOME` do not exist in the guest.
 WSL2 forwards guest ports to Windows localhost. A container machine gets
 its own IP on the `machine` network (shown by `cm -l`); services in the
 guest are reachable at that IP only — nothing is bridged to macOS
-localhost.
+localhost automatically. `cm --forward 3000` (or `--forward 8080:80`,
+repeatable, with `-d` to pick the machine) runs a foreground forwarder
+from `127.0.0.1` on the Mac to the machine until you press Ctrl-C.
 
 ### Command execution
 

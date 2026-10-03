@@ -1,6 +1,7 @@
 # Gap: no localhost port forwarding
 
-**Status:** open
+**Status:** partially closed — `cm --forward HOST[:GUEST]` (L0, static,
+foreground) shipped; WSL-style automatic forwarding still open
 **Cheapest fix level:** L0 (manual forwarder) · [L2.5](../lower-level-integration.md#the-plugin-route--l25)
 for WSL-like automatic forwarding · L3/L4 for full control
 
@@ -13,7 +14,7 @@ proxied automatically.
 ## What we have today
 
 A container machine gets its own IP on the `machine` network (shown by
-`cm -l`). Guest services are reachable *at that IP only* — nothing is
+`cm -l`). Guest services are reachable _at that IP only_ — nothing is
 bridged to macOS localhost.
 
 ## Options
@@ -27,7 +28,7 @@ bridged to macOS localhost.
   image contents; not all distros ship sshd.
 - **L2.5 — `network`-type plugin or forwarder daemon.** A custom
   `network` plugin is selected per-network via `container network create
-  --plugin <name>` — that controls IPAM, not forwarding. Better: a small
+--plugin <name>` — that controls IPAM, not forwarding. Better: a small
   `core`/auxiliary plugin running a host-side socket forwarder
   (`container` itself ships a `SocketForwarder` library product to copy
   from), optionally watching guest listeners for WSL-style dynamic

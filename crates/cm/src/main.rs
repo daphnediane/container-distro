@@ -9,13 +9,15 @@
 mod cli;
 mod list;
 
+use std::net::{IpAddr, Ipv4Addr};
 use std::os::unix::process::CommandExt;
-use std::process::{ExitCode, ExitStatus};
+use std::process::{ExitCode, ExitStatus, Stdio};
 
 use anyhow::{Context, Result};
 use clap::Parser;
 use cli::{Action, Args, InstallOpts, ShellType};
 use cm_core::container::{self, ArgvMode};
+use cm_core::forward::PortMapping;
 use list::Entry;
 
 fn main() -> ExitCode {
@@ -49,6 +51,7 @@ fn run(args: Args) -> Result<ExitCode> {
             passthru(&["machine", "rm", &m])
         }
         Action::Install(opts) => install(&opts),
+        Action::Forward { machine, mappings } => forward(machine.as_deref(), &mappings),
         Action::Run => run_in_machine(&args),
     }
 }
@@ -187,6 +190,48 @@ fn install(opts: &InstallOpts) -> Result<ExitCode> {
     }
     let mut cmd = container::run_command(Some(&name), None, None, &[], None, &[], ArgvMode::Shell);
     Err(anyhow::Error::from(cmd.exec()).context("failed to exec `container machine run`"))
+}
+
+/// Forward localhost ports to a machine's IP, booting it if needed.
+fn forward(machine: Option<&str>, mappings: &[PortMapping]) -> Result<ExitCode> {
+    container::ensure_started()?;
+    let find = || -> Result<Option<container::Machine>> {
+        Ok(container::list_machines()?
+            .into_iter()
+            .find(|m| machine.map_or(m.default, |n| m.id == n)))
+    };
+    let label = machine.unwrap_or("default");
+    let mut m = find()?.with_context(|| format!("no `{label}` machine found"))?;
+    if !m.is_running() {
+        let status = container::run_command(
+            Some(&m.id),
+            None,
+            None,
+            &[],
+            None,
+            &["true".to_string()],
+            ArgvMode::Shell,
+        )
+        .stdin(Stdio::null())
+        .status()
+        .context("failed to boot the machine")?;
+        if !status.success() {
+            return Ok(exit_code(status));
+        }
+        m = find()?.with_context(|| format!("machine `{label}` disappeared"))?;
+    }
+    let ip: IpAddr = m
+        .ip_address
+        .as_deref()
+        .with_context(|| format!("machine `{}` has no IP address", m.id))?
+        .split('/')
+        .next()
+        .unwrap_or_default()
+        .parse()
+        .context("failed to parse the machine's IP address")?;
+    eprintln!("Forwarding to machine `{}` (Ctrl-C to stop)", m.id);
+    cm_core::forward::forward(IpAddr::V4(Ipv4Addr::LOCALHOST), ip, mappings)?;
+    Ok(ExitCode::SUCCESS)
 }
 
 fn version() -> Result<ExitCode> {

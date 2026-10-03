@@ -1,6 +1,7 @@
 # Gap: `-v`/`--verbose` on `--list` is a no-op
 
-**Status:** open — cosmetic
+**Status:** closed — `cm -l`, `-l -v` (exact WSL layout, VERSION `2`), and
+`-l -v -v` (extra columns from `machine inspect`) are rendered by `cm`
 **Fix level:** **L0** — the data is already available via `machine inspect`;
 lower levels would only make it cheaper
 
