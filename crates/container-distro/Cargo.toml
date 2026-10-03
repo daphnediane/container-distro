@@ -1,0 +1,18 @@
+[package]
+name = "container-distro"
+description = "`container distro` plugin: machine-like distros with extra mounts and published ports"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "container-distro"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+cm-core.workspace = true
+serde_json.workspace = true
+tempfile = "3"

@@ -1,0 +1,107 @@
+#!/bin/sh
+# Copyright (c) 2026 Daphne Pfister
+# SPDX-License-Identifier: BSD-2-Clause
+#
+# container-distro init: PID 1 and in-guest helper for `container distro`
+# containers. Mounted read-only at /sbin.distro. Follows the same
+# environment contract as `container machine`'s init so images behave the
+# same under both.
+#
+#   (no args)   boot: set the hostname, hand the SSH agent socket to the
+#               user, exec the image's init system — or idle as PID 1 if
+#               the image has none
+#   -u          first-time user setup (root only; idempotent)
+#   -s          exec the user's shell (interactive, non-login)
+#   -l          exec the user's shell as a login shell
+#   -c CMD...   run CMD through the user's shell (`$SHELL -c "$*"`)
+#
+# Environment (set at create): CONTAINER_MACHINE_ID, CONTAINER_USER,
+# CONTAINER_UID, CONTAINER_GID, CONTAINER_HOME.
+
+set -e
+
+default_shell() {
+    s=
+    ID=
+    if [ -r /etc/os-release ]; then
+        # shellcheck disable=SC1091
+        ID=$(. /etc/os-release && echo "${ID:-}") || ID=
+    fi
+    case "${ID:-}" in
+    ubuntu | debian)
+        [ -r /etc/adduser.conf ] && s=$(unset DSHELL; . /etc/adduser.conf && echo "${DSHELL:-}") || s=
+        ;;
+    *)
+        [ -r /etc/default/useradd ] && s=$(unset SHELL; . /etc/default/useradd && echo "${SHELL:-}") || s=
+        ;;
+    esac
+    for c in "$s" /bin/bash /bin/sh; do
+        if [ -n "$c" ] && [ -x "$c" ]; then
+            echo "$c"
+            return
+        fi
+    done
+    echo /bin/sh
+}
+
+user_shell() {
+    s=$(awk -F: -v u="$(id -u)" '$3 == u { print $7; exit }' /etc/passwd 2>/dev/null || true)
+    if [ -n "$s" ] && [ -x "$s" ]; then
+        echo "$s"
+    else
+        default_shell
+    fi
+}
+
+boot() {
+    if [ -n "${CONTAINER_MACHINE_ID:-}" ]; then
+        echo "$CONTAINER_MACHINE_ID" >/etc/hostname
+        hostname "$CONTAINER_MACHINE_ID" 2>/dev/null || true
+    fi
+    if [ -n "${SSH_AUTH_SOCK:-}" ] && [ -S "$SSH_AUTH_SOCK" ] && [ -n "${CONTAINER_UID:-}" ]; then
+        chown "$CONTAINER_UID:${CONTAINER_GID:-$CONTAINER_UID}" "$SSH_AUTH_SOCK" || true
+    fi
+    for i in /sbin/init /usr/sbin/init /lib/systemd/systemd; do
+        if [ -x "$i" ]; then
+            exec "$i"
+        fi
+    done
+    # No init system (a plain application image): idle as PID 1 and exit
+    # cleanly when the container is stopped.
+    trap 'exit 0' TERM INT
+    while :; do
+        sleep 3600 &
+        wait $! || true
+    done
+}
+
+case "${1:-}" in
+"")
+    boot
+    ;;
+-u)
+    if [ "$(id -u)" != 0 ]; then
+        echo "init -u must run as root" >&2
+        exit 1
+    fi
+    CONTAINER_SHELL=$(default_shell) /sbin.distro/create-user.sh
+    echo 1 >/etc/.distro.initialized
+    ;;
+-s)
+    exec "$(user_shell)"
+    ;;
+-l)
+    sh=$(user_shell)
+    # argv[0] starting with '-' marks a login shell; `-l` is the portable
+    # spelling most shells (bash, zsh, ash, dash) also accept.
+    exec "$sh" -l
+    ;;
+-c)
+    shift
+    exec "$(user_shell)" -c "$*"
+    ;;
+*)
+    echo "usage: init [-u | -s | -l | -c CMD...]" >&2
+    exit 2
+    ;;
+esac

@@ -71,6 +71,108 @@ pub struct ImageInfo {
     pub reference: String,
 }
 
+/// A container as reported by `container list --format json` / `inspect`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContainerInfo {
+    pub configuration: ContainerConfig,
+    #[serde(default)]
+    pub status: ContainerStatus,
+}
+
+impl ContainerInfo {
+    pub fn id(&self) -> &str {
+        &self.configuration.id
+    }
+
+    pub fn is_running(&self) -> bool {
+        self.status.state == "running"
+    }
+
+    /// The first IPv4 address, without its prefix length.
+    pub fn ipv4(&self) -> Option<&str> {
+        self.status
+            .networks
+            .iter()
+            .find_map(|n| n.ipv4_address.as_deref())
+            .and_then(|a| a.split('/').next())
+    }
+}
+
+/// The subset of a container's configuration that `cm` cares about.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContainerConfig {
+    pub id: String,
+    #[serde(default)]
+    pub labels: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub mounts: Vec<MountInfo>,
+    #[serde(default)]
+    pub published_ports: Vec<PublishedPort>,
+    #[serde(default)]
+    pub resources: Option<Resources>,
+    #[serde(default)]
+    pub image: Option<ImageInfo>,
+    #[serde(default)]
+    pub platform: Option<Platform>,
+}
+
+/// A filesystem mount in a container's configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MountInfo {
+    pub source: String,
+    pub destination: String,
+    #[serde(default)]
+    pub options: Vec<String>,
+}
+
+impl MountInfo {
+    pub fn read_only(&self) -> bool {
+        self.options.iter().any(|o| o == "ro")
+    }
+}
+
+/// A published (host → container) port.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublishedPort {
+    #[serde(default)]
+    pub host_address: Option<String>,
+    pub host_port: u16,
+    pub container_port: u16,
+    #[serde(default)]
+    pub proto: Option<String>,
+}
+
+/// CPU and memory allocation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Resources {
+    #[serde(default)]
+    pub cpus: Option<u64>,
+    #[serde(default)]
+    pub memory_in_bytes: Option<u64>,
+}
+
+/// Runtime status of a container.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContainerStatus {
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub networks: Vec<NetworkStatus>,
+}
+
+/// One network attachment of a running container.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkStatus {
+    #[serde(default)]
+    pub ipv4_address: Option<String>,
+}
+
 /// A `container` CLI invocation; `CONTAINER_CLI` overrides the binary path.
 pub fn container_cmd() -> Command {
     Command::new(env::var("CONTAINER_CLI").unwrap_or_else(|_| "container".into()))
@@ -131,6 +233,11 @@ pub fn json_output<T: DeserializeOwned>(args: &[&str]) -> Result<T> {
 /// All machines known to `container`.
 pub fn list_machines() -> Result<Vec<Machine>> {
     json_output(&["machine", "list", "--format", "json"])
+}
+
+/// All containers, running or not.
+pub fn list_containers() -> Result<Vec<ContainerInfo>> {
+    json_output(&["list", "--all", "--format", "json"])
 }
 
 /// `container machine inspect` for one machine.
@@ -228,6 +335,22 @@ pub fn resolve_shell(machine: Option<&str>, user: Option<&str>) -> String {
     shell.unwrap_or_else(|| "/bin/sh".to_string())
 }
 
+/// Check a machine/distro name: lowercase DNS-style (`[a-z0-9-]`, not
+/// starting or ending with `-`), as `container` requires.
+pub fn validate_name(name: &str) -> Result<()> {
+    let ok = !name.is_empty()
+        && name.len() <= 63
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        && !name.starts_with('-')
+        && !name.ends_with('-');
+    if !ok {
+        bail!("invalid name `{name}`: use lowercase letters, digits, and `-` (e.g. `ubuntu-24`)");
+    }
+    Ok(())
+}
+
 /// Derive a machine name from an image reference (`alpine:latest` → `alpine-latest`).
 pub fn default_machine_name(image: &str) -> String {
     image
@@ -283,6 +406,46 @@ mod tests {
         let round: MachineDetail =
             serde_json::from_str(&serde_json::to_string(d).unwrap()).unwrap();
         assert_eq!(&round, d);
+    }
+
+    const CONTAINER_JSON: &str = r#"[{"configuration":{"capAdd":["ALL"],"id":"d1",
+        "labels":{"org.wsl-compat.distro":"d1"},
+        "mounts":[{"destination":"/mnt/x","options":["ro"],"source":"/Volumes/X","type":{"virtiofs":{}}}],
+        "publishedPorts":[{"containerPort":80,"count":1,"hostAddress":"127.0.0.1","hostPort":8080,"proto":"tcp"}],
+        "resources":{"cpuOverhead":0,"cpus":4,"memoryInBytes":1073741824},
+        "image":{"reference":"docker.io/library/alpine:latest"},
+        "platform":{"architecture":"arm64","os":"linux"}},
+        "id":"d1",
+        "status":{"networks":[{"ipv4Address":"192.168.64.13/24","network":"default"}],"state":"running"}}]"#;
+
+    #[test]
+    fn test_container_info_deserialize() {
+        let c: Vec<ContainerInfo> = serde_json::from_str(CONTAINER_JSON).unwrap();
+        let c = &c[0];
+        assert_eq!(c.id(), "d1");
+        assert!(c.is_running());
+        assert_eq!(c.ipv4(), Some("192.168.64.13"));
+        assert!(c.configuration.mounts[0].read_only());
+        assert_eq!(c.configuration.published_ports[0].host_port, 8080);
+        let round: ContainerInfo =
+            serde_json::from_str(&serde_json::to_string(c).unwrap()).unwrap();
+        assert_eq!(&round, c);
+    }
+
+    #[test]
+    fn test_container_info_stopped_minimal() {
+        let c: ContainerInfo =
+            serde_json::from_str(r#"{"configuration":{"id":"x"},"status":{"state":"stopped"}}"#)
+                .unwrap();
+        assert!(!c.is_running() && c.ipv4().is_none());
+    }
+
+    #[test]
+    fn names_are_dns_style() {
+        assert!(validate_name("ubuntu-24").is_ok());
+        for bad in ["", "Ubuntu", "a_b", "-a", "a-", "a.b"] {
+            assert!(validate_name(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

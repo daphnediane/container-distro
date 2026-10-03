@@ -1,0 +1,270 @@
+/*
+ * Copyright (c) 2026 Daphne Pfister
+ * SPDX-License-Identifier: BSD-2-Clause
+ * See LICENSE file for full license text
+ */
+
+//! `container distro` command line: docker/podman-style subcommands.
+
+use std::path::PathBuf;
+
+use clap::{Args, Parser, Subcommand, ValueEnum};
+
+use crate::spec::{HomeMount, MountSpec, PublishSpec};
+
+#[derive(Debug, Parser)]
+#[command(
+    name = "container distro",
+    version,
+    about = "Machine-like Linux distros for Apple `container`, with extra mounts and published ports",
+    long_about = "Creates long-lived, machine-like containers (\"distros\"): your macOS account is \
+                  provisioned inside, your home directory is shared at the same path, and the \
+                  image's init system runs as PID 1 — like `container machine`, plus host \
+                  directories outside $HOME, published ports, export/import, and `set` for \
+                  changing settings after creation."
+)]
+pub struct Cli {
+    #[command(subcommand)]
+    pub command: Command,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum Format {
+    Table,
+    Json,
+}
+
+#[derive(Debug, Args)]
+pub struct CreateOpts {
+    /// Share a host directory: SRC:DST[:ro] (repeatable)
+    #[arg(short = 'v', long = "volume", value_name = "SRC:DST[:ro]")]
+    pub volumes: Vec<MountSpec>,
+
+    /// Share every /Volumes/<name> at /mnt/<name> (like WSL's /mnt/<drive>)
+    #[arg(long)]
+    pub automount: bool,
+
+    /// Publish a port: [HOST_IP:]HOST_PORT[:GUEST_PORT][/PROTO]; HOST_IP
+    /// defaults to 127.0.0.1 (repeatable)
+    #[arg(short = 'p', long = "publish", value_name = "SPEC")]
+    pub publish: Vec<PublishSpec>,
+
+    /// Number of virtual CPUs (default: half the host's)
+    #[arg(long)]
+    pub cpus: Option<u64>,
+
+    /// Memory, e.g. 8G (default: half the host's)
+    #[arg(long)]
+    pub memory: Option<String>,
+
+    /// How to share your macOS home directory
+    #[arg(long, value_enum, default_value_t = HomeMount::Rw)]
+    pub home_mount: HomeMount,
+
+    /// Create without booting
+    #[arg(long)]
+    pub no_boot: bool,
+
+    /// Make this the default distro
+    #[arg(long)]
+    pub set_default: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    /// Create a distro from an image and boot it
+    Create {
+        /// Distro name (default: derived from the image)
+        #[arg(short = 'n', long)]
+        name: Option<String>,
+        #[command(flatten)]
+        opts: CreateOpts,
+        /// Image reference, e.g. alpine:latest
+        image: String,
+    },
+
+    /// List distros
+    #[command(visible_alias = "ls")]
+    List {
+        /// Only names
+        #[arg(short, long)]
+        quiet: bool,
+        /// Only running distros
+        #[arg(long)]
+        running: bool,
+        #[arg(long, value_enum, default_value_t = Format::Table)]
+        format: Format,
+    },
+
+    /// Show distros' container configuration as JSON
+    Inspect {
+        #[arg(required = true)]
+        names: Vec<String>,
+    },
+
+    /// Boot a stopped distro
+    Start { name: String },
+
+    /// Stop running distros
+    Stop {
+        #[arg(required = true)]
+        names: Vec<String>,
+    },
+
+    /// Delete distros and their storage
+    #[command(visible_alias = "rm")]
+    Delete {
+        /// Stop running distros first
+        #[arg(short, long)]
+        force: bool,
+        #[arg(required = true)]
+        names: Vec<String>,
+    },
+
+    /// Run a command or interactive shell in a distro, booting it if needed
+    Run {
+        /// Distro (default distro if omitted)
+        #[arg(short = 'n', long)]
+        name: Option<String>,
+        /// Run as USER (name or uid[:gid]); default: your account
+        #[arg(short, long, conflicts_with = "root")]
+        user: Option<String>,
+        /// Run as root
+        #[arg(long)]
+        root: bool,
+        /// Working directory (default: the current directory if it is
+        /// under the shared home, else the guest home)
+        #[arg(short = 'w', long = "workdir", visible_alias = "cwd")]
+        workdir: Option<String>,
+        /// Environment variable KEY=VALUE (or KEY to inherit)
+        #[arg(short, long)]
+        env: Vec<String>,
+        /// Run the command line through the user's shell (`$SHELL -c`)
+        #[arg(long)]
+        shell: bool,
+        /// Interactive shell is non-login
+        #[arg(long)]
+        no_login: bool,
+        /// Command and arguments (default: a login shell)
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+    },
+
+    /// Change cpus/memory/mounts/ports (recreates the container, keeping
+    /// its filesystem)
+    Set {
+        name: String,
+        #[arg(long)]
+        cpus: Option<u64>,
+        #[arg(long)]
+        memory: Option<String>,
+        #[arg(long, value_enum)]
+        home_mount: Option<HomeMount>,
+        /// Add (or replace, by DST) a mount: SRC:DST[:ro]
+        #[arg(long = "add-volume", value_name = "SRC:DST[:ro]")]
+        add_volumes: Vec<MountSpec>,
+        /// Remove the mount at guest path DST
+        #[arg(long = "rm-volume", value_name = "DST")]
+        rm_volumes: Vec<String>,
+        /// Publish a port (replaces one on the same host port)
+        #[arg(long = "publish", value_name = "SPEC")]
+        publish: Vec<PublishSpec>,
+        /// Stop publishing HOST_PORT
+        #[arg(long = "unpublish", value_name = "HOST_PORT")]
+        unpublish: Vec<u16>,
+    },
+
+    /// Set (or with --clear, unset) the default distro
+    SetDefault {
+        #[arg(required_unless_present = "clear")]
+        name: Option<String>,
+        #[arg(long, conflicts_with = "name")]
+        clear: bool,
+    },
+
+    /// Write a distro's root filesystem as a tar
+    Export {
+        name: String,
+        /// Output file (default: stdout)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Create a distro from a rootfs tar or tar.gz (`-` reads stdin)
+    Import {
+        name: String,
+        file: PathBuf,
+        #[command(flatten)]
+        opts: CreateOpts,
+    },
+
+    /// Register as a `container` CLI plugin so `container distro` works
+    InstallPlugin {
+        /// Plugin directory (default: <container prefix>/libexec/container-plugins)
+        #[arg(long)]
+        plugin_dir: Option<PathBuf>,
+    },
+
+    /// Remove the `container distro` plugin registration
+    UninstallPlugin {
+        #[arg(long)]
+        plugin_dir: Option<PathBuf>,
+    },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(argv: &[&str]) -> Result<Cli, clap::Error> {
+        Cli::try_parse_from(argv)
+    }
+
+    #[test]
+    fn create_with_mounts_and_ports() {
+        let cli = parse(&[
+            "distro",
+            "create",
+            "-n",
+            "d1",
+            "-v",
+            "/Volumes/X:/mnt/x:ro",
+            "-p",
+            "8080",
+            "--cpus",
+            "2",
+            "alpine",
+        ])
+        .unwrap();
+        let Command::Create { name, opts, image } = cli.command else {
+            panic!("expected create");
+        };
+        assert_eq!(name.as_deref(), Some("d1"));
+        assert_eq!(image, "alpine");
+        assert!(opts.volumes[0].read_only);
+        assert_eq!(opts.publish[0].host_port, 8080);
+        assert_eq!(opts.home_mount, HomeMount::Rw);
+    }
+
+    #[test]
+    fn run_passes_command_verbatim() {
+        let cli = parse(&["distro", "run", "-n", "d1", "--", "ls", "-la"]).unwrap();
+        let Command::Run { command, .. } = cli.command else {
+            panic!("expected run");
+        };
+        assert_eq!(command, ["ls", "-la"]);
+        assert!(parse(&["distro", "run", "--root", "-u", "x"]).is_err());
+    }
+
+    #[test]
+    fn set_default_clear() {
+        assert!(parse(&["distro", "set-default"]).is_err());
+        assert!(parse(&["distro", "set-default", "--clear"]).is_ok());
+        assert!(parse(&["distro", "set-default", "d1", "--clear"]).is_err());
+    }
+
+    #[test]
+    fn bad_volume_rejected() {
+        assert!(parse(&["distro", "create", "-v", "relative:/x", "alpine"]).is_err());
+    }
+}

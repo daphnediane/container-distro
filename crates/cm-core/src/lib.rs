@@ -8,5 +8,7 @@
 //! `container` CLI and the serde types for its JSON output.
 
 pub mod container;
+pub mod distro;
 pub mod forward;
+pub mod oci;
 pub mod table;
