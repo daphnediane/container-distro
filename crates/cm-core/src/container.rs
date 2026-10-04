@@ -450,25 +450,44 @@ pub fn run_command(
     cmd
 }
 
+/// The shell probe run inside the machine to find the login shell.
+const SHELL_PROBE: &str = r#"getent passwd "$(id -un)" 2>/dev/null | cut -d: -f7"#;
+
+/// Build the `machine run` command that evaluates [`SHELL_PROBE`].
+///
+/// `machine run` shell-evaluates its arguments joined into `"$*"`
+/// (apple/container#1954), so the probe is one pre-joined string —
+/// passing argv-style `["sh", "-c", "..."]` would be re-split and `-c`
+/// would swallow only the first word.
+fn shell_probe_command(machine: Option<&str>, user: Option<&str>) -> Command {
+    let mut cmd = run_command(
+        machine,
+        user,
+        None,
+        &[],
+        None,
+        &[SHELL_PROBE.to_string()],
+        ArgvMode::Shell,
+    );
+    cmd.stdin(Stdio::null());
+    cmd
+}
+
 /// Resolve the login shell for the given user inside the machine.
 ///
 /// Falls back to `/bin/sh` if the lookup fails for any reason.
 pub fn resolve_shell(machine: Option<&str>, user: Option<&str>) -> String {
-    let command = vec![
-        "sh".to_string(),
-        "-c".to_string(),
-        r#"getent passwd "$(id -un)" 2>/dev/null | cut -d: -f7"#.to_string(),
-    ];
-    let mut cmd = run_command(machine, user, None, &[], None, &command, ArgvMode::Shell);
-    let out = cmd.stdin(Stdio::null()).output();
-    let shell = out.ok().and_then(|o| {
-        let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
-        if o.status.success() && s.starts_with('/') {
-            Some(s)
-        } else {
-            None
-        }
-    });
+    let shell = shell_probe_command(machine, user)
+        .output()
+        .ok()
+        .and_then(|o| {
+            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if o.status.success() && s.starts_with('/') {
+                Some(s)
+            } else {
+                None
+            }
+        });
     shell.unwrap_or_else(|| "/bin/sh".to_string())
 }
 
@@ -730,6 +749,28 @@ mod tests {
         assert_eq!(
             args_of(&cmd),
             ["machine", "run", "-i", "--", "'printf'", "':%s:'", "'a b'"]
+        );
+    }
+
+    /// The probe must arrive as ONE argument — `machine run` joins and
+    /// re-evals its args, so an argv-shaped probe would lose `-c`'s
+    /// payload (apple/container#1954; this was the C12 bug).
+    #[test]
+    fn shell_probe_is_single_arg() {
+        let cmd = shell_probe_command(Some("dev"), Some("root"));
+        assert_eq!(
+            args_of(&cmd),
+            [
+                "machine",
+                "run",
+                "-i",
+                "-n",
+                "dev",
+                "-u",
+                "root",
+                "--",
+                SHELL_PROBE
+            ]
         );
     }
 

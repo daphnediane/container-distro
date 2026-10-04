@@ -153,7 +153,7 @@ commits that follow this document.
 | C9  | Low        | Forwarder: unbounded thread per connection, no timeouts                                                                                                | **Fixed** — 64-conn semaphore cap; backlog queues excess (no idle timeout by design)                           |
 | C10 | Low        | `--automount` mounts every `/Volumes/*` rw (DMGs, USB, network shares); lowercase/`→`- collisions produce duplicate targets                            | Open — opt-in, document                                                                                        |
 | C11 | Info       | `uninstall` check-then-delete TOCTOU; snapshot images cleaned by name prefix not label                                                                 | Open — minor                                                                                                   |
-| C12 | Info (bug) | `resolve_shell` probe breaks under `machine run` re-eval → always falls back to `/bin/sh`                                                              | Open — pass probe pre-quoted                                                                                   |
+| C12 | Info (bug) | `resolve_shell` probe breaks under `machine run` re-eval → always falls back to `/bin/sh`                                                              | **Fixed** — probe passed as one pre-joined string                                                              |
 
 ## Risks introduced by gap-closing work
 
@@ -192,7 +192,7 @@ Each open gap adds attack surface; flagging the traps up front.
 1. This document + README security section — **done**
 2. `--no-ssh` flag (T2's off-switch; small) — **open**
 3. C1–C5, C7, C9, C12 — each lands as its own commit and flips its
-   status in the findings table (**done:** C1–C5, C7, C9; open: C12)
+   status in the findings table (**done:** C1–C5, C7, C9, C12)
 4. Non-loopback `--publish` warning — **open**
 5. `cargo audit`/`cargo deny` in CI; fuzz the `FromStr` parsers
    (`MountSpec`, `PublishSpec`, `PortMapping`) — **open**
