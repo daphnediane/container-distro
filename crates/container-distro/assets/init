@@ -12,7 +12,8 @@
 #               the image has none
 #   -u          user setup, run on every boot (root only; idempotent —
 #               create-user.sh provisions each user once via a per-user
-#               sentinel, preserving admin edits)
+#               sentinel, preserving admin edits; grant-admin.sh, when
+#               mounted, grants sudo/doas once the same way)
 #   -s          exec the user's shell (interactive, non-login)
 #   -l          exec the user's shell as a login shell
 #   -c CMD...   run CMD through the user's shell (`$SHELL -c "$*"`)
@@ -87,6 +88,11 @@ case "${1:-}" in
         exit 1
     fi
     CONTAINER_SHELL=$(default_shell) /sbin.distro/create-user.sh
+    # Restricted distros mount an init-assets directory without
+    # grant-admin.sh, so no privilege-granting code runs in them.
+    if [ -x /sbin.distro/grant-admin.sh ]; then
+        /sbin.distro/grant-admin.sh
+    fi
     echo 1 >/etc/.distro.initialized
     ;;
 -s)

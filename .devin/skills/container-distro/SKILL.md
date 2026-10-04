@@ -60,6 +60,15 @@ or read-only paths, `--ssh`, the host account passed through
 OCI layout → `image load`) and recreates the container. Ports default to
 `127.0.0.1`. Only an explicit `--set-default` sets the default distro.
 
+`create`/`import` take `--restricted` (alias `--untrusted`): a defaults
+preset giving `--home-mount none --network none --no-ssh --no-sudo`
+(explicit flags still apply; `cm --install --restricted` implies
+`--distro`). `--no-sudo` distros mount `sbin.distro.restricted/`, which
+lacks `grant-admin.sh`; the `admin` label records `true`/`false`/`never`
+(`never` = predates the grant env — `set` recreates don't re-arm it, an
+explicit `--sudo` does). `set` accepts `--network`, `--ssh`/`--no-ssh`,
+`--sudo`/`--no-sudo`.
+
 `cm` treats machines and distros as one namespace (`crates/cm/src/backend.rs`),
 linking the library rather than exec'ing the plugin: `-d NAME` resolves a
 distro first, then a machine; a default distro overrides the default

@@ -27,6 +27,9 @@ pub struct InstallOpts {
     pub home_mount: Option<HomeMount>,
     /// Create a `container distro` instead of a machine.
     pub distro: bool,
+    /// Restricted defaults (no mounts, network, agent, sudo). Implies
+    /// `--distro` — machines can't be restricted.
+    pub restricted: bool,
     pub shares: Vec<MountSpec>,
     pub publish: Vec<PublishSpec>,
 }
@@ -34,7 +37,7 @@ pub struct InstallOpts {
 impl InstallOpts {
     /// `--distro`, or any distro-only option, selects a distro.
     pub fn wants_distro(&self) -> bool {
-        self.distro || !self.shares.is_empty() || !self.publish.is_empty()
+        self.distro || self.restricted || !self.shares.is_empty() || !self.publish.is_empty()
     }
 }
 
@@ -179,6 +182,12 @@ pub struct Args {
     #[arg(long = "distro", requires = "install")]
     pub distro: bool,
 
+    /// Restricted defaults for a distro created by --install: no home or
+    /// extra mounts, no network, no SSH agent, no sudo/doas (implies
+    /// --distro). A convenience preset, not a sandbox.
+    #[arg(long = "restricted", visible_alias = "untrusted", requires = "install")]
+    pub restricted: bool,
+
     /// Share a host directory into a distro created by --install:
     /// SRC:DST[:ro] (repeatable; implies --distro)
     #[arg(long = "share", requires = "install", value_name = "SRC:DST[:ro]")]
@@ -262,6 +271,7 @@ impl Args {
                 memory: self.memory.clone(),
                 home_mount: self.home_mount,
                 distro: self.distro,
+                restricted: self.restricted,
                 shares: self.shares.clone(),
                 publish: self.publish.clone(),
             })
@@ -462,6 +472,7 @@ mod tests {
                 memory: None,
                 home_mount: None,
                 distro: false,
+                restricted: false,
                 shares: vec![],
                 publish: vec![],
             })
@@ -537,7 +548,15 @@ mod tests {
             panic!("expected install");
         };
         assert!(opts.wants_distro());
+        for flag in ["--restricted", "--untrusted"] {
+            let args = parse(&["cm", "--install", "alpine", flag]).unwrap();
+            let Action::Install(opts) = args.action().unwrap() else {
+                panic!("expected install");
+            };
+            assert!(opts.restricted && opts.wants_distro(), "{flag}");
+        }
         assert!(parse(&["cm", "--publish", "8080"]).is_err());
+        assert!(parse(&["cm", "--restricted"]).is_err());
     }
 
     #[test]

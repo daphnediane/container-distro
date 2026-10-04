@@ -130,6 +130,12 @@ pub struct ContainerConfig {
     pub mounts: Vec<MountInfo>,
     #[serde(default)]
     pub published_ports: Vec<PublishedPort>,
+    /// Network attachments; empty when created with `--network none`.
+    #[serde(default)]
+    pub networks: Vec<NetworkAttachment>,
+    /// Whether the SSH agent socket is forwarded in (`--ssh` at create).
+    #[serde(default)]
+    pub ssh: bool,
     #[serde(default)]
     pub resources: Option<Resources>,
     #[serde(default)]
@@ -154,6 +160,13 @@ impl MountInfo {
     pub fn read_only(&self) -> bool {
         self.options.iter().any(|o| o == "ro")
     }
+}
+
+/// A network attachment in a container's configuration. Additional
+/// per-attachment options (hostname, mtu, …) are not modeled.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NetworkAttachment {
+    pub network: String,
 }
 
 /// A published (host → container) port.

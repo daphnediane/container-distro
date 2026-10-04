@@ -130,6 +130,11 @@ fn run(cli: Cli) -> Result<()> {
             cpus,
             memory,
             home_mount,
+            network,
+            ssh,
+            no_ssh,
+            sudo,
+            no_sudo,
             add_volumes,
             rm_volumes,
             publish,
@@ -140,6 +145,21 @@ fn run(cli: Cli) -> Result<()> {
                 cpus,
                 memory,
                 home_mount,
+                network,
+                ssh: if ssh {
+                    Some(true)
+                } else if no_ssh {
+                    Some(false)
+                } else {
+                    None
+                },
+                admin: if sudo {
+                    Some(true)
+                } else if no_sudo {
+                    Some(false)
+                } else {
+                    None
+                },
                 add_mounts: add_volumes,
                 remove_mounts: rm_volumes,
                 add_publish: publish,

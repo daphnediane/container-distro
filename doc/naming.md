@@ -24,16 +24,17 @@ project domain, `io.github.<user>.<project>` is the usual choice.
 
 ## Where names persist
 
-| What                     | Where                                                                                 | Derived from                |
-| ------------------------ | ------------------------------------------------------------------------------------- | --------------------------- |
-| Distro marker label      | `<LABEL_PREFIX>.distro=<name>` on each distro container                               | `LABEL_PREFIX`              |
-| Home-mount label         | `<LABEL_PREFIX>.home-mount=rw\|ro\|none`                                              | `LABEL_PREFIX`              |
-| User label               | `<LABEL_PREFIX>.user=<name>:<uid>:<gid>`                                              | `LABEL_PREFIX`              |
-| State directory          | `~/Library/Application Support/<APP_NAME>/` (`sbin.distro/`, `default-distro`)        | `APP_NAME`                  |
-| Plugin metadata          | `<prefix>/libexec/container-plugins/distro/config.toml` (`author`, `abstract`)        | `APP_NAME`                  |
-| Plugin / subcommand name | `container distro`, `bin/distro`                                                      | `plugin::PLUGIN_NAME`       |
-| Snapshot / import images | `local/distro-<name>:<timestamp>` / `:imported-<timestamp>`                           | hard-coded in `ops`         |
-| In-guest files           | `/sbin.distro` mount, `/etc/.distro.initialized`, `/etc/doas.d/container-distro.conf` | hard-coded in `spec`/assets |
+| What                     | Where                                                                                                                                                         | Derived from                |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- |
+| Distro marker label      | `<LABEL_PREFIX>.distro=<name>` on each distro container                                                                                                       | `LABEL_PREFIX`              |
+| Home-mount label         | `<LABEL_PREFIX>.home-mount=rw\|ro\|none`                                                                                                                      | `LABEL_PREFIX`              |
+| Admin label              | `<LABEL_PREFIX>.admin=true\|false\|never` (sudo/doas grant policy)                                                                                            | `LABEL_PREFIX`              |
+| User label               | `<LABEL_PREFIX>.user=<name>:<uid>:<gid>`                                                                                                                      | `LABEL_PREFIX`              |
+| State directory          | `~/Library/Application Support/<APP_NAME>/` (`sbin.distro/` and `sbin.distro.restricted/` init assets, `default-distro`)                                      | `APP_NAME`                  |
+| Plugin metadata          | `<prefix>/libexec/container-plugins/distro/config.toml` (`author`, `abstract`)                                                                                | `APP_NAME`                  |
+| Plugin / subcommand name | `container distro`, `bin/distro`                                                                                                                              | `plugin::PLUGIN_NAME`       |
+| Snapshot / import images | `local/distro-<name>:<timestamp>` / `:imported-<timestamp>`                                                                                                   | hard-coded in `ops`         |
+| In-guest files           | `/sbin.distro` mount, `/etc/.distro.initialized`, `/etc/.distro.user.<name>`, `/etc/.distro.admin.<name>`, `/etc/sudoers.d/<name>`, `/etc/doas.d/<name>.conf` | hard-coded in `spec`/assets |
 
 The plugin subcommand (`container distro`) and the in-guest paths are
 user-facing and baked into existing containers. Renaming them is a

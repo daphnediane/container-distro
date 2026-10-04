@@ -60,6 +60,10 @@ pub struct DistroSummary {
     /// Published ports as `IP:HOST:GUEST/PROTO`.
     #[serde(default)]
     pub ports: Vec<String>,
+    /// No shares, no network, no agent, no privilege grant — what
+    /// `--restricted` produces.
+    #[serde(default)]
+    pub restricted: bool,
 }
 
 impl DistroSummary {
@@ -93,8 +97,34 @@ pub struct CreateOptions {
     pub memory: Option<String>,
 
     /// How to share your macOS home directory
-    #[arg(long, value_enum, default_value_t = HomeMount::Rw)]
-    pub home_mount: HomeMount,
+    #[arg(long, value_enum)]
+    pub home_mount: Option<HomeMount>,
+
+    /// Attach to a container network by name ("none" for no network)
+    #[arg(long, value_name = "NAME")]
+    pub network: Option<String>,
+
+    /// Forward the host SSH agent socket into the distro
+    #[arg(long, conflicts_with = "no_ssh")]
+    pub ssh: bool,
+
+    /// Do not forward the host SSH agent socket
+    #[arg(long)]
+    pub no_ssh: bool,
+
+    /// Grant the provisioned user passwordless sudo/doas
+    #[arg(long, conflicts_with = "no_sudo")]
+    pub sudo: bool,
+
+    /// Do not grant the provisioned user sudo/doas
+    #[arg(long)]
+    pub no_sudo: bool,
+
+    /// Restricted defaults for semi-trusted images: home mount none, no
+    /// network, no SSH agent, no sudo/doas. Explicit flags still apply.
+    /// A convenience preset, not a sandbox.
+    #[arg(long, visible_alias = "untrusted")]
+    pub restricted: bool,
 
     /// Create without booting
     #[arg(long)]
@@ -107,6 +137,7 @@ pub struct CreateOptions {
 
 const INIT_SCRIPT: &str = include_str!("../assets/init");
 const CREATE_USER_SCRIPT: &str = include_str!("../assets/create-user.sh");
+const GRANT_ADMIN_SCRIPT: &str = include_str!("../assets/grant-admin.sh");
 
 /// Run a `container` command with inherited stdio; fail on non-zero exit.
 fn run_container(args: &[&str]) -> Result<()> {
@@ -227,15 +258,26 @@ fn default_resources() -> (u64, String) {
     ((cpus / 2).max(1), mem)
 }
 
-/// Write the init assets to the host directory mounted at `/sbin.distro`,
-/// refreshing them if this build's copies differ.
-fn assets_dir() -> Result<PathBuf> {
-    let dir = state_dir()?.join("sbin.distro");
-    fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
-    for (name, body) in [
+/// Write the init assets into `dir`, refreshing them if this build's
+/// copies differ. `admin` selects the flavor: only admin distros get
+/// `grant-admin.sh`, so restricted guests have no privilege-granting
+/// code at all.
+fn write_assets(dir: &Path, admin: bool) -> Result<()> {
+    fs::create_dir_all(dir).with_context(|| format!("failed to create {}", dir.display()))?;
+    let mut files = vec![
         ("init", INIT_SCRIPT),
         ("create-user.sh", CREATE_USER_SCRIPT),
-    ] {
+    ];
+    if admin {
+        files.push(("grant-admin.sh", GRANT_ADMIN_SCRIPT));
+    } else {
+        // No stray grant script may linger in the restricted flavor.
+        match fs::remove_file(dir.join("grant-admin.sh")) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            r => r.with_context(|| format!("failed to clean {}", dir.display()))?,
+        }
+    }
+    for (name, body) in files {
         let path = dir.join(name);
         if fs::read_to_string(&path).ok().as_deref() != Some(body) {
             fs::write(&path, body)
@@ -243,7 +285,26 @@ fn assets_dir() -> Result<PathBuf> {
         }
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755))?;
     }
-    Ok(dir)
+    Ok(())
+}
+
+/// Refresh both init-assets flavors (called on every boot).
+fn refresh_assets() -> Result<()> {
+    let state = state_dir()?;
+    write_assets(&state.join("sbin.distro"), true)?;
+    write_assets(&state.join("sbin.distro.restricted"), false)
+}
+
+/// The host directory a distro mounts at `/sbin.distro`, refreshed to
+/// this build's copies.
+fn assets_dir(admin: bool) -> Result<PathBuf> {
+    refresh_assets()?;
+    let flavor = if admin {
+        "sbin.distro"
+    } else {
+        "sbin.distro.restricted"
+    };
+    Ok(state_dir()?.join(flavor))
 }
 
 fn default_file() -> Result<PathBuf> {
@@ -320,16 +381,44 @@ fn build_spec(name: String, image: String, opts: &CreateOptions) -> Result<Distr
         }
     }
     let (def_cpus, def_mem) = default_resources();
-    Ok(DistroSpec {
+    // --restricted is a defaults preset; explicit flags still apply.
+    let r = opts.restricted;
+    let admin = if opts.sudo {
+        true
+    } else if opts.no_sudo {
+        false
+    } else {
+        !r
+    };
+    let spec = DistroSpec {
         name,
         image,
         cpus: Some(opts.cpus.unwrap_or(def_cpus)),
         memory: Some(opts.memory.clone().unwrap_or(def_mem)),
-        home_mount: opts.home_mount,
+        home_mount: opts
+            .home_mount
+            .unwrap_or(if r { HomeMount::None } else { HomeMount::Rw }),
         mounts,
         publish: opts.publish.clone(),
+        network: opts
+            .network
+            .clone()
+            .or_else(|| r.then(|| "none".to_string())),
+        ssh: if opts.ssh {
+            true
+        } else if opts.no_ssh {
+            false
+        } else {
+            !r
+        },
+        admin,
+        admin_grant: admin,
         user: host_user()?,
-    })
+    };
+    if spec.network.as_deref() == Some("none") && !spec.publish.is_empty() {
+        eprintln!("container-distro: published ports have no effect without a network");
+    }
+    Ok(spec)
 }
 
 fn check_sources(spec: &DistroSpec) -> Result<()> {
@@ -342,7 +431,7 @@ fn check_sources(spec: &DistroSpec) -> Result<()> {
 }
 
 fn create_container(spec: &DistroSpec) -> Result<()> {
-    let assets = assets_dir()?;
+    let assets = assets_dir(spec.admin)?;
     let args = spec.create_args(&assets.to_string_lossy(), &host_home()?);
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     run_container_quiet(&args)
@@ -350,7 +439,7 @@ fn create_container(spec: &DistroSpec) -> Result<()> {
 
 /// Boot a distro and (idempotently) provision the user account.
 fn boot(name: &str) -> Result<()> {
-    assets_dir()?;
+    refresh_assets()?;
     run_container_quiet(&["start", name])?;
     let init = format!("{INIT_DIR}/init");
     run_container(&["exec", "--user", "0:0", name, &init, "-u"])
@@ -435,6 +524,7 @@ fn summarize(c: &ContainerInfo, default: Option<&str>, app_root: Option<&Path>) 
             .as_ref()
             .map(|s| s.publish.iter().map(ToString::to_string).collect())
             .unwrap_or_default(),
+        restricted: spec.as_ref().is_some_and(DistroSpec::is_restricted),
     }
 }
 
@@ -783,6 +873,16 @@ mod tests {
     /// mounted read-only at their production `/sbin.distro` path.
     /// Returns the exit code, or None if the run failed to start.
     fn sh_in_guest(image: &str, argv: &[&str]) -> Option<i32> {
+        sh_in_guest_dir(
+            Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/assets")),
+            image,
+            argv,
+        )
+    }
+
+    /// Like [`sh_in_guest`] but mounts `dir`, so tests can assemble a
+    /// restricted init-assets flavor (no `grant-admin.sh`).
+    fn sh_in_guest_dir(dir: &Path, image: &str, argv: &[&str]) -> Option<i32> {
         container_cmd()
             .args([
                 "run",
@@ -790,10 +890,7 @@ mod tests {
                 "--entrypoint",
                 "/bin/sh",
                 "--volume",
-                &format!(
-                    "{}:{INIT_DIR}:ro",
-                    concat!(env!("CARGO_MANIFEST_DIR"), "/assets")
-                ),
+                &format!("{}:{INIT_DIR}:ro", dir.display()),
             ])
             .arg(image)
             .args(argv)
@@ -843,25 +940,26 @@ mod tests {
         };
         let script = r#"
             set -e
-            s=/sbin.distro/create-user.sh
+            export CONTAINER_USER=daphne CONTAINER_UID=501 CONTAINER_GID=20 \
+                CONTAINER_HOME=/home/daphne CONTAINER_ADMIN=1
             mkdir -p /etc/doas.d
-            CONTAINER_USER=daphne CONTAINER_UID=501 CONTAINER_GID=20 \
-                CONTAINER_HOME=/home/daphne $s
+            /sbin.distro/init -u
             grep -q '^daphne:x:501:20::/home/daphne:' /etc/passwd
             grep -q '^daphne ' /etc/sudoers.d/daphne
             grep -q 'daphne' /etc/doas.d/daphne.conf
             [ -f /etc/.distro.user.daphne ]
+            [ -f /etc/.distro.admin.daphne ]
             # An admin removal survives re-provisioning (sentinel gate).
             rm /etc/sudoers.d/daphne /etc/doas.d/daphne.conf
-            CONTAINER_USER=daphne CONTAINER_UID=501 CONTAINER_GID=20 \
-                CONTAINER_HOME=/home/daphne $s
+            /sbin.distro/init -u
             [ ! -e /etc/sudoers.d/daphne ]
             [ ! -e /etc/doas.d/daphne.conf ]
             [ "$(grep -c '^daphne:' /etc/passwd)" = 1 ]
             # A different CONTAINER_USER is still provisioned.
             CONTAINER_USER=other CONTAINER_UID=502 CONTAINER_GID=20 \
-                CONTAINER_HOME=/home/other $s
+                CONTAINER_HOME=/home/other /sbin.distro/init -u
             grep -q '^other:x:502:20::/home/other:' /etc/passwd
+            grep -q '^other ' /etc/sudoers.d/other
         "#;
         assert_eq!(sh_in_guest(&image, &["-c", script]), Some(0));
     }
@@ -876,7 +974,7 @@ mod tests {
         let script = r#"
             set -e
             export CONTAINER_USER=daphne CONTAINER_UID=501 CONTAINER_GID=20 \
-                CONTAINER_HOME=/home/daphne
+                CONTAINER_HOME=/home/daphne CONTAINER_ADMIN=1
             /sbin.distro/init -u
             [ -f /etc/.distro.initialized ]
             rm /etc/sudoers.d/daphne
@@ -885,6 +983,60 @@ mod tests {
             CONTAINER_USER=other CONTAINER_UID=502 /sbin.distro/init -u
             grep -q '^other:' /etc/passwd
             [ -f /etc/.distro.user.other ]
+        "#;
+        assert_eq!(sh_in_guest(&image, &["-c", script]), Some(0));
+    }
+
+    /// A restricted distro mounts an assets dir without grant-admin.sh:
+    /// `init -u` provisions the account but no privilege files exist.
+    #[test]
+    fn restricted_boot_grants_nothing() {
+        let Some(image) = test_image("restricted_boot_grants_nothing") else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        for f in ["init", "create-user.sh"] {
+            fs::copy(
+                Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/assets")).join(f),
+                dir.path().join(f),
+            )
+            .unwrap();
+        }
+        let script = r#"
+            set -e
+            export CONTAINER_USER=daphne CONTAINER_UID=501 CONTAINER_GID=20 \
+                CONTAINER_HOME=/home/daphne
+            /sbin.distro/init -u
+            grep -q '^daphne:' /etc/passwd
+            [ ! -e /etc/sudoers.d/daphne ]
+            [ ! -e /etc/doas.d/daphne.conf ]
+            [ ! -e /etc/.distro.admin.daphne ]
+        "#;
+        assert_eq!(
+            sh_in_guest_dir(dir.path(), &image, &["-c", script]),
+            Some(0)
+        );
+    }
+
+    /// Without CONTAINER_ADMIN (a container created before the split,
+    /// or `admin=never`) grant-admin.sh defers: no grant, no sentinel —
+    /// a later armed `set --sudo` still grants.
+    #[test]
+    fn grant_admin_requires_env() {
+        let Some(image) = test_image("grant_admin_requires_env") else {
+            return;
+        };
+        let script = r#"
+            set -e
+            export CONTAINER_USER=daphne CONTAINER_UID=501 CONTAINER_GID=20 \
+                CONTAINER_HOME=/home/daphne
+            /sbin.distro/create-user.sh
+            /sbin.distro/grant-admin.sh
+            [ ! -e /etc/sudoers.d/daphne ]
+            [ ! -e /etc/.distro.admin.daphne ]
+            CONTAINER_ADMIN=1 /sbin.distro/grant-admin.sh
+            grep -q '^daphne ' /etc/sudoers.d/daphne
+            [ -f /etc/.distro.admin.daphne ]
         "#;
         assert_eq!(sh_in_guest(&image, &["-c", script]), Some(0));
     }

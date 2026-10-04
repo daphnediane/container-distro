@@ -52,18 +52,18 @@ cm [OPTIONS] [-- <COMMAND LINE>]
 
 ### Manage machines
 
-| Option              | Description                                                                             |
-| ------------------- | --------------------------------------------------------------------------------------- |
-| `-l, --list`        | List machines and distros (`--all`, `--running`, `-q`, `-v`, `-v -v`)                   |
-| `-s, --set-default` | Set the default machine or distro                                                       |
-| `-t, --terminate`   | Stop a running machine or distro                                                        |
-| `--shutdown`        | Stop all running machines and distros (`--system`: also stop services)                  |
-| `--status`          | Show container system status                                                            |
-| `--unregister`      | Delete a machine or distro and its storage                                              |
-| `--install <image>` | Create + boot a machine (`--name`, `--no-launch`, `--cpus`, `--memory`, `--home-mount`) |
-|                     | …or a distro with `--distro`, `--share SRC:DST[:ro]`, `--publish [IP:]HOST[:GUEST]`     |
-| `--forward <p[:g]>` | (experimental) Forward localhost port `p` to port `g` of the machine or distro          |
-| `--version`         | Show `cm` and `container` versions                                                      |
+| Option              | Description                                                                                         |
+| ------------------- | --------------------------------------------------------------------------------------------------- |
+| `-l, --list`        | List machines and distros (`--all`, `--running`, `-q`, `-v`, `-v -v`)                               |
+| `-s, --set-default` | Set the default machine or distro                                                                   |
+| `-t, --terminate`   | Stop a running machine or distro                                                                    |
+| `--shutdown`        | Stop all running machines and distros (`--system`: also stop services)                              |
+| `--status`          | Show container system status                                                                        |
+| `--unregister`      | Delete a machine or distro and its storage                                                          |
+| `--install <image>` | Create + boot a machine (`--name`, `--no-launch`, `--cpus`, `--memory`, `--home-mount`)             |
+|                     | …or a distro with `--distro`, `--share SRC:DST[:ro]`, `--publish [IP:]HOST[:GUEST]`, `--restricted` |
+| `--forward <p[:g]>` | (experimental) Forward localhost port `p` to port `g` of the machine or distro                      |
+| `--version`         | Show `cm` and `container` versions                                                                  |
 
 If `container` services aren't running, `cm` runs `container system start`
 first.
@@ -109,6 +109,7 @@ On top of that:
 | Change settings later  | `container distro set NAME --cpus 4 --add-volume … --publish …` (recreates, keeps the filesystem) |
 | Export / import        | `container distro export NAME -o f.tar`, `container distro import NAME f.tar[.gz]`                |
 | Exact argv             | `run` uses `container exec`, so arguments are never re-split                                      |
+| Restricted mode        | `--restricted` (`--untrusted`): no mounts, no network, no agent, no sudo — see below              |
 
 `cm` sees distros and machines as one set of WSL distributions:
 `cm -d NAME` resolves a distro first, then a machine. A default distro
@@ -126,6 +127,30 @@ container distro ls
 container distro set dev --memory 8G --unpublish 3000
 container distro rm -f dev
 ```
+
+### Restricted distros
+
+`create --restricted` (alias `--untrusted`) flips the create-time
+defaults for semi-trusted images: `--home-mount none`, `--network none`,
+no SSH-agent forwarding (`--no-ssh`), and no sudo/doas grant
+(`--no-sudo`). It also applies to `import` and to
+`cm --install IMAGE --restricted` (which implies `--distro`).
+
+It is a **defaults preset, not a sandbox**: explicit flags still apply
+(`--restricted -v /dir:/dir` shares one directory back), `container
+distro set` can reopen any hole, and you can always `run --root` or
+`exec` as `0:0` — the guest is still *your* session. Inside the guest
+the account is still provisioned as you (name/uid/gid), and the container
+keeps `--cap-add ALL`; what changes is that nothing of yours is
+reachable and no privilege-granting code is even mounted. See
+[doc/security.md](doc/security.md).
+
+The granular flags work standalone too: `--network NAME` picks a
+container network (`none` isolates), `--ssh`/`--no-ssh` control agent
+forwarding, `--sudo`/`--no-sudo` control privilege provisioning, and the
+same flags on `set` change them after creation — except `--no-sudo`,
+which stops future grants but can't remove sudoers/doas files already
+inside the guest.
 
 Distros are tracked with `io.github.daphnediane.container-distro.*`
 labels (see [doc/naming.md](doc/naming.md)). Regular containers get one
@@ -242,6 +267,9 @@ roughly equivalent to code run on the host as you:
 - The provisioned user has passwordless sudo and the guest runs with all
   capabilities — guest user → guest root is instant (that's also the WSL
   model; the VM boundary, not capabilities, is what contains the guest).
+- `create --restricted` removes the mount, network, agent, and sudo
+  conveniences for semi-trusted images — a defaults preset, not a
+  sandbox (see [Restricted distros](#restricted-distros)).
 - `container distro import` applies all of the above to an arbitrary
   rootfs tar — importing an image is trusting it with your identity.
 - `--publish`/`--forward` bind `127.0.0.1` unless you say otherwise —

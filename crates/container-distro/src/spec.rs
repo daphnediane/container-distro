@@ -27,6 +27,14 @@ pub const LABEL_DISTRO: &str = "distro";
 pub const LABEL_HOME_MOUNT: &str = "home-mount";
 /// The provisioned account as `name:uid:gid`.
 pub const LABEL_USER: &str = "user";
+/// Whether the provisioned account gets sudo/doas: `true` (armed — the
+/// `CONTAINER_ADMIN` env is set), `false` (restricted assets mounted),
+/// or `never` (the distro predates the grant env, so `init -u` never
+/// re-creates privilege files an admin removed).
+///
+/// Not recoverable from `container inspect`, unlike `ssh` and
+/// `networks`, so it persists as a label; absent means "never".
+pub const LABEL_ADMIN: &str = "admin";
 /// Guest path where the init assets are mounted.
 pub const INIT_DIR: &str = "/sbin.distro";
 
@@ -202,7 +210,35 @@ pub struct DistroSpec {
     pub home_mount: HomeMount,
     pub mounts: Vec<MountSpec>,
     pub publish: Vec<PublishSpec>,
+    /// Network to attach (`None` = `container`'s default; `"none"` =
+    /// no interfaces beyond loopback).
+    pub network: Option<String>,
+    /// Forward the host SSH agent socket (`container create --ssh`).
+    pub ssh: bool,
+    /// Provision sudo/doas for the user (mounts `grant-admin.sh`).
+    pub admin: bool,
+    /// Emit `CONTAINER_ADMIN=1` so `init -u` grants privileges at the
+    /// next boot (label value `true` vs `never`). Kept separate from
+    /// `admin`: a distro created before the admin label existed still
+    /// allows privileges (`admin = true`, assets mounted) but is never
+    /// armed, so `set` recreates won't re-grant sudoers an admin
+    /// deliberately removed — only an explicit `set --sudo` does.
+    pub admin_grant: bool,
     pub user: HostUser,
+}
+
+impl DistroSpec {
+    /// Whether the distro is cut off from the host conveniences: no
+    /// shares, no network, no agent, no privilege grant. What
+    /// `--restricted` produces; explicit flags can reopen individual
+    /// holes.
+    pub fn is_restricted(&self) -> bool {
+        self.home_mount == HomeMount::None
+            && self.mounts.is_empty()
+            && self.network.as_deref() == Some("none")
+            && !self.ssh
+            && !self.admin
+    }
 }
 
 impl DistroSpec {
@@ -232,6 +268,20 @@ impl DistroSpec {
             "--label",
             format!("{}={}", label_key(LABEL_USER), self.user.to_label()),
         );
+        push(
+            "--label",
+            format!(
+                "{}={}",
+                label_key(LABEL_ADMIN),
+                if !self.admin {
+                    "false"
+                } else if self.admin_grant {
+                    "true"
+                } else {
+                    "never"
+                }
+            ),
+        );
         push("--entrypoint", format!("{INIT_DIR}/init"));
         push("--volume", format!("{assets_dir}:{INIT_DIR}:ro"));
         match self.home_mount {
@@ -244,6 +294,9 @@ impl DistroSpec {
         }
         for p in &self.publish {
             push("--publish", p.to_string());
+        }
+        if let Some(n) = &self.network {
+            push("--network", n.clone());
         }
         if let Some(c) = self.cpus {
             push("--cpus", c.to_string());
@@ -263,7 +316,12 @@ impl DistroSpec {
         ] {
             push("--env", format!("{k}={v}"));
         }
-        a.push("--ssh".into());
+        if self.admin_grant {
+            push("--env", "CONTAINER_ADMIN=1".into());
+        }
+        if self.ssh {
+            a.push("--ssh".into());
+        }
         a.push(self.image.clone());
         a
     }
@@ -283,6 +341,13 @@ impl DistroSpec {
         )?;
         let home_mount =
             label_lookup(&cfg.labels, LABEL_HOME_MOUNT).map_or(Ok(HomeMount::Rw), |s| s.parse())?;
+        // Only an explicit `true` re-arms the grant env: `never` and a
+        // missing label (distros predating the label) keep `admin` —
+        // the assets are mounted — but `init -u` won't re-create
+        // privilege files an admin removed.
+        let admin_label = label_lookup(&cfg.labels, LABEL_ADMIN);
+        let admin = admin_label.is_none_or(|s| s != "false");
+        let admin_grant = admin_label.is_some_and(|s| s == "true");
         let mounts = cfg
             .mounts
             .iter()
@@ -306,6 +371,15 @@ impl DistroSpec {
                 proto: p.proto.clone().unwrap_or_else(|| "tcp".to_string()),
             })
             .collect();
+        // `container create` attaches the default network unless told
+        // otherwise; an empty list is what `--network none` leaves. The
+        // default attachment normalizes to `None` — the same as never
+        // having passed `--network`.
+        let network = match cfg.networks.first() {
+            None => Some("none".to_string()),
+            Some(n) if n.network == "default" => None,
+            Some(n) => Some(n.network.clone()),
+        };
         let resources = cfg.resources.as_ref();
         Ok(DistroSpec {
             name,
@@ -321,6 +395,10 @@ impl DistroSpec {
             home_mount,
             mounts,
             publish,
+            network,
+            ssh: cfg.ssh,
+            admin,
+            admin_grant,
             user,
         })
     }
@@ -360,6 +438,13 @@ pub struct SpecChanges {
     pub cpus: Option<u64>,
     pub memory: Option<String>,
     pub home_mount: Option<HomeMount>,
+    /// Replace the network attachment (`none` disables, `default`
+    /// restores the usual one).
+    pub network: Option<String>,
+    /// Turn SSH-agent forwarding on or off.
+    pub ssh: Option<bool>,
+    /// Turn privilege (sudo/doas) provisioning on or off.
+    pub admin: Option<bool>,
     pub add_mounts: Vec<MountSpec>,
     /// Guest paths of mounts to remove.
     pub remove_mounts: Vec<String>,
@@ -385,6 +470,18 @@ impl SpecChanges {
         }
         if let Some(h) = self.home_mount {
             s.home_mount = h;
+        }
+        if let Some(n) = &self.network {
+            s.network = Some(n.clone());
+        }
+        if let Some(v) = self.ssh {
+            s.ssh = v;
+        }
+        if let Some(v) = self.admin {
+            s.admin = v;
+            // An explicit `--sudo`/`--no-sudo` is a fresh decision, so
+            // the grant env follows it.
+            s.admin_grant = v;
         }
         for t in &self.remove_mounts {
             let before = s.mounts.len();
@@ -467,6 +564,10 @@ mod tests {
             home_mount: HomeMount::Ro,
             mounts: vec!["/Volumes/X:/mnt/x".parse().unwrap()],
             publish: vec!["8080:80".parse().unwrap()],
+            network: None,
+            ssh: true,
+            admin: true,
+            admin_grant: true,
             user: user(),
         }
     }
@@ -505,6 +606,7 @@ mod tests {
         for want in [
             "--label io.github.daphnediane.container-distro.home-mount=ro",
             "--label io.github.daphnediane.container-distro.user=dp:501:20",
+            "--label io.github.daphnediane.container-distro.admin=true",
             "--entrypoint /sbin.distro/init",
             "--volume /state/sbin.distro:/sbin.distro:ro",
             "--volume /Users/dp:/Users/dp:ro",
@@ -528,17 +630,48 @@ mod tests {
     }
 
     #[test]
+    fn create_args_restricted() {
+        let mut s = spec();
+        s.home_mount = HomeMount::None;
+        s.mounts.clear();
+        s.publish.clear();
+        s.network = Some("none".into());
+        s.ssh = false;
+        s.admin = false;
+        s.admin_grant = false;
+        assert!(s.is_restricted());
+        let joined = s.create_args("/s", "/Users/dp").join(" ");
+        for want in [
+            "--label io.github.daphnediane.container-distro.admin=false",
+            "--label io.github.daphnediane.container-distro.home-mount=none",
+            "--network none",
+        ] {
+            assert!(joined.contains(want), "missing `{want}` in `{joined}`");
+        }
+        for absent in ["--ssh", "--publish", "/Users/dp:/Users/dp"] {
+            assert!(
+                !joined.contains(absent),
+                "unexpected `{absent}` in `{joined}`"
+            );
+        }
+        assert!(!spec().is_restricted());
+    }
+
+    #[test]
     fn spec_round_trips_through_container_info() {
         let s = spec();
         let json = format!(
             r#"{{"configuration":{{"id":"d1",
               "labels":{{"io.github.daphnediane.container-distro.distro":"d1",
                         "io.github.daphnediane.container-distro.home-mount":"ro",
-                        "io.github.daphnediane.container-distro.user":"dp:501:20"}},
+                        "io.github.daphnediane.container-distro.user":"dp:501:20",
+                        "io.github.daphnediane.container-distro.admin":"true"}},
               "mounts":[{{"source":"/state/sbin.distro","destination":"/sbin.distro","options":["ro"]}},
                         {{"source":"/Users/dp","destination":"/Users/dp","options":["ro"]}},
                         {{"source":"/Volumes/X","destination":"/mnt/x","options":[]}}],
               "publishedPorts":[{{"hostAddress":"127.0.0.1","hostPort":8080,"containerPort":80,"proto":"tcp"}}],
+              "networks":[{{"network":"default"}}],
+              "ssh":true,
               "resources":{{"cpus":2,"memoryInBytes":{}}},
               "image":{{"reference":"alpine:latest"}}}},
               "status":{{"state":"stopped"}}}}"#,
@@ -557,9 +690,65 @@ mod tests {
     }
 
     #[test]
+    fn restricted_round_trips_through_container_info() {
+        let json = r#"{"configuration":{"id":"r1",
+              "labels":{"io.github.daphnediane.container-distro.distro":"r1",
+                        "io.github.daphnediane.container-distro.home-mount":"none",
+                        "io.github.daphnediane.container-distro.user":"dp:501:20",
+                        "io.github.daphnediane.container-distro.admin":"false"},
+              "mounts":[{"source":"/state/sbin.distro.restricted","destination":"/sbin.distro","options":["ro"]}],
+              "networks":[],
+              "ssh":false,
+              "image":{"reference":"alpine:latest"}},
+              "status":{"state":"stopped"}}"#;
+        let info: ContainerInfo = serde_json::from_str(json).unwrap();
+        let back = DistroSpec::from_container(&info, "/Users/dp").unwrap();
+        assert_eq!(back.network.as_deref(), Some("none"));
+        assert!(!back.ssh && !back.admin && !back.admin_grant);
+        assert_eq!(back.home_mount, HomeMount::None);
+        assert!(back.is_restricted());
+    }
+
+    /// A distro created before the admin label existed keeps granting
+    /// (it already did) but gets no grant env, so `set` won't recreate
+    /// sudoers an admin removed.
+    #[test]
+    fn unlabeled_admin_keeps_grant_without_env() {
+        let json = r#"{"configuration":{"id":"old",
+              "labels":{"io.github.daphnediane.container-distro.distro":"old",
+                        "io.github.daphnediane.container-distro.user":"dp:501:20"},
+              "networks":[{"network":"default"}],
+              "ssh":true,
+              "image":{"reference":"alpine:latest"}},
+              "status":{"state":"stopped"}}"#;
+        let info: ContainerInfo = serde_json::from_str(json).unwrap();
+        let back = DistroSpec::from_container(&info, "/Users/dp").unwrap();
+        assert!(back.admin && !back.admin_grant);
+        // The recreated container is labeled `never`: still allowed,
+        // still not armed — and it stays that way across plain `set`s.
+        let joined = back.create_args("/s", "/h").join(" ");
+        assert!(joined.contains("container-distro.admin=never"), "{joined}");
+        assert!(!joined.contains("CONTAINER_ADMIN"));
+        // An explicit `set --sudo` is what re-arms the grant env.
+        let rearmed = SpecChanges {
+            admin: Some(true),
+            ..SpecChanges::default()
+        }
+        .apply(&back)
+        .unwrap();
+        assert!(rearmed.admin_grant);
+        let joined = rearmed.create_args("/s", "/h").join(" ");
+        assert!(joined.contains("container-distro.admin=true"), "{joined}");
+        assert!(joined.contains("CONTAINER_ADMIN=1"), "{joined}");
+    }
+
+    #[test]
     fn set_changes_apply() {
         let changes = SpecChanges {
             cpus: Some(4),
+            network: Some("none".into()),
+            ssh: Some(false),
+            admin: Some(false),
             add_mounts: vec!["/Volumes/Y:/mnt/x:ro".parse().unwrap()],
             remove_publish: vec![8080],
             add_publish: vec!["9000".parse().unwrap()],
@@ -567,6 +756,8 @@ mod tests {
         };
         let s = changes.apply(&spec()).unwrap();
         assert_eq!(s.cpus, Some(4));
+        assert_eq!(s.network.as_deref(), Some("none"));
+        assert!(!s.ssh && !s.admin && !s.admin_grant);
         assert_eq!(s.mounts.len(), 1);
         assert_eq!(s.mounts[0].source, "/Volumes/Y");
         assert_eq!(s.publish.len(), 1);

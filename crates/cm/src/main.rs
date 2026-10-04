@@ -324,7 +324,8 @@ fn install(opts: &InstallOpts) -> Result<ExitCode> {
             publish: opts.publish.clone(),
             cpus: opts.cpus.map(u64::from),
             memory: opts.memory.clone(),
-            home_mount: opts.home_mount.unwrap_or_default(),
+            home_mount: opts.home_mount,
+            restricted: opts.restricted,
             ..CreateOptions::default()
         };
         let name = distro::create(Some(name), &create, &opts.image)?;

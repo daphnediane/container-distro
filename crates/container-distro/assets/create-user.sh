@@ -4,7 +4,9 @@
 #
 # First-time account setup for `container distro`: creates CONTAINER_USER
 # with CONTAINER_UID/CONTAINER_GID and home CONTAINER_HOME, populated from
-# /etc/skel, with passwordless sudo (and doas, if present).
+# /etc/skel. Privilege grants (passwordless sudo/doas) live in the
+# separate grant-admin.sh, which `init -u` runs next when it is mounted —
+# restricted distros mount an init-assets directory without it.
 #
 # Edits /etc/passwd, /etc/group and /etc/shadow directly so it works on
 # images without useradd/adduser. Provisions each user once: the
@@ -77,21 +79,6 @@ if [ ! -d "$CONTAINER_HOME" ]; then
         cp -a /etc/skel/. "$CONTAINER_HOME"/
     fi
     chown -R "$CONTAINER_UID:$CONTAINER_GID" "$CONTAINER_HOME"
-fi
-
-# Privilege files are only created when absent, so a forced
-# re-provision (sentinel removed) doesn't clobber admin edits either.
-mkdir -p /etc/sudoers.d
-sudoers=/etc/sudoers.d/$safe_user
-if [ ! -e "$sudoers" ]; then
-    echo "$CONTAINER_USER ALL=(ALL) NOPASSWD:ALL" >"$sudoers"
-    chmod 440 "$sudoers"
-fi
-
-if [ -d /etc/doas.d ] || command -v doas >/dev/null 2>&1; then
-    mkdir -p /etc/doas.d
-    doas=/etc/doas.d/$safe_user.conf
-    [ -e "$doas" ] || echo "permit nopass $CONTAINER_USER" >"$doas"
 fi
 
 # Written last: a failed provision retries on the next boot.

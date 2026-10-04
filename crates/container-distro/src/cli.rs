@@ -124,6 +124,22 @@ pub enum Command {
         memory: Option<String>,
         #[arg(long, value_enum)]
         home_mount: Option<HomeMount>,
+        /// Attach to network NAME ("none" disables, "default" restores)
+        #[arg(long, value_name = "NAME")]
+        network: Option<String>,
+        /// Forward the host SSH agent socket into the distro
+        #[arg(long, conflicts_with = "no_ssh")]
+        ssh: bool,
+        /// Stop forwarding the host SSH agent socket
+        #[arg(long)]
+        no_ssh: bool,
+        /// Grant the provisioned user passwordless sudo/doas
+        #[arg(long, conflicts_with = "no_sudo")]
+        sudo: bool,
+        /// Stop provisioning sudo/doas (does not remove existing grants
+        /// inside the guest)
+        #[arg(long)]
+        no_sudo: bool,
         /// Add (or replace, by DST) a mount: SRC:DST[:ro]
         #[arg(long = "add-volume", value_name = "SRC:DST[:ro]")]
         add_volumes: Vec<MountSpec>,
@@ -211,7 +227,26 @@ mod tests {
         assert_eq!(image, "alpine");
         assert!(opts.volumes[0].read_only);
         assert_eq!(opts.publish[0].host_port, 8080);
-        assert_eq!(opts.home_mount, HomeMount::Rw);
+        assert_eq!(opts.home_mount, None);
+    }
+
+    #[test]
+    fn create_restricted_and_alias() {
+        for flag in ["--restricted", "--untrusted"] {
+            let cli = parse(&["distro", "create", flag, "alpine"]).unwrap();
+            let Command::Create { opts, .. } = cli.command else {
+                panic!("expected create");
+            };
+            assert!(opts.restricted, "{flag}");
+        }
+        // Granular overrides combine with it; conflicting pairs don't.
+        let cli = parse(&["distro", "create", "--restricted", "--ssh", "alpine"]).unwrap();
+        let Command::Create { opts, .. } = cli.command else {
+            panic!("expected create");
+        };
+        assert!(opts.ssh);
+        assert!(parse(&["distro", "create", "--ssh", "--no-ssh", "alpine"]).is_err());
+        assert!(parse(&["distro", "create", "--sudo", "--no-sudo", "alpine"]).is_err());
     }
 
     #[test]

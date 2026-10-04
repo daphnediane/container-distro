@@ -53,8 +53,8 @@ for as long as the guest runs.
 
 - **Accepted because:** it matches `container machine` and is the feature
   that makes `git`/`ssh` "just work" in-guest, a core WSL-ism.
-- **Mitigations that exist:** none in-distro yet — `--no-ssh` is the
-  cheap off-switch; tracked in the [checklist](#pre-10-checklist).
+- **Mitigations that exist:** `--no-ssh` at create or `set --no-ssh`;
+  `--restricted` turns it off along with everything else.
 - **Re-evaluate if:** T1 is re-evaluated, or agent confirmation /
   per-key scoping becomes desirable. macOS's `ssh-agent` supports
   per-use confirmation which would blunt this entirely.
@@ -70,6 +70,12 @@ every shared host path.
   (the VM boundary, not capabilities, is what contains the guest); WSL
   users are full administrators in their distro. Kernel caps inside a VM
   are far less dangerous than in a shared-kernel container.
+- **Mitigations that exist:** `--no-sudo`/`--restricted` skips the
+  privilege grant — restricted distros mount an init-assets dir that
+  doesn't contain `grant-admin.sh`, so no provisioning code in the guest
+  creates sudoers at all. Caps stay: init systems need them and the VM
+  contains them — see [Restricted distros](#restricted-distros) for why
+  that's still not a sandbox.
 - **Re-evaluate if:** T1 changes — caps matter more once mounts are the
   only host surface, not less.
 
@@ -82,8 +88,9 @@ it your identity and home directory.
 
 - **Accepted because:** WSL `--import` has the same shape and the user is
   expected to know what they're importing.
-- **Mitigations that exist:** the same `--home-mount` knob; an import
-  could pass `--home-mount none` + `--no-ssh` once those exist.
+- **Mitigations that exist:** `import --restricted` wraps the rootfs with
+  no mounts, no network, no agent, and no privilege grant — the intended
+  path for rootfses you didn't build.
 - **Re-evaluate if:** we add a curated/"online list" import path
   (remote-WSL interop doc mentions `--list --online`), at which point a
   safer default (`--home-mount none` for import specifically) is worth
@@ -134,6 +141,37 @@ self-affecting only, since only the user can create containers.
   label model is what makes distros discoverable at all.
 - **Re-evaluate if:** shared/multi-user machines matter, or container
   gains a stronger ownership model.
+
+## Restricted distros
+
+`create --restricted` (alias `--untrusted`, also on `import` and
+`cm --install`) flips the create-time defaults: `--home-mount none`,
+`--network none` (loopback only — no interface, DNS, or outbound),
+`--no-ssh`, and `--no-sudo` (the assets dir mounted at `/sbin.distro`
+lacks `grant-admin.sh`, so no privilege-granting code exists in the
+guest). It exists for semi-trusted images — generated code, random
+images, imported rootfses (T4).
+
+**It is not a panacea, and not a sandbox.** What it does not do:
+
+- It's a defaults preset, not policy: `-v`/`--automount`/`-p`/
+  `--home-mount`/`--network`/`--ssh`/`--sudo` reopen holes on the same
+  command line, and `container distro set` reopens them later.
+- It's your session either way: `container distro run --root` or
+  `container exec -u 0:0` still yields guest root — restricted only
+  stops the provisioned *user* from being granted sudo.
+- `--cap-add ALL` and unmasked `/proc`/`/sys` stay: init systems need
+  them and caps are contained by the VM — but "no sudo" is a
+  convenience boundary inside the guest, not a wall.
+- Your identity still goes in: name/uid/gid are provisioned and readable
+  in `/etc/passwd`, process lists, and `CONTAINER_*` env.
+- `--no-sudo` (including via `set`) prevents future grants; it cannot
+  remove sudoers/doas files already written into a rootfs.
+- No network also means no published ports and no in-guest package
+  installs — `--restricted` distros are bring-your-own-bits.
+
+What remains trusted: the VM boundary (the real containment), the
+`container` daemon, and the host account running the commands.
 
 ## Findings and resolutions
 
@@ -190,7 +228,9 @@ Each open gap adds attack surface; flagging the traps up front.
 ## Pre-1.0 checklist
 
 1. This document + README security section — **done**
-2. `--no-ssh` flag (T2's off-switch; small) — **open**
+2. `--no-ssh` flag (T2's off-switch; small) — **done** (`--ssh`/`--no-ssh`
+   plus `--restricted`; also `--network`, `--sudo`/`--no-sudo`, and the
+   `grant-admin.sh` asset split)
 3. C1–C5, C7, C9, C12 — each lands as its own commit and flips its
    status in the findings table (**done:** C1–C5, C6, C7, C9, C10
    partial, C12)
