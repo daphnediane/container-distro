@@ -196,9 +196,24 @@ pub struct NetworkStatus {
     pub ipv4_address: Option<String>,
 }
 
+/// Where apple/container's installer puts the CLI (per its docs and
+/// released installers). Preferred over a bare PATH lookup so a hijacked
+/// PATH can't substitute a different binary.
+pub const INSTALLED_CONTAINER_PATH: &str = "/usr/local/bin/container";
+
+/// The `container` binary to invoke: `CONTAINER_CLI`, else the installed
+/// location, else whatever PATH resolves.
+pub fn container_binary() -> &'static str {
+    if Path::new(INSTALLED_CONTAINER_PATH).is_file() {
+        INSTALLED_CONTAINER_PATH
+    } else {
+        "container"
+    }
+}
+
 /// A `container` CLI invocation; `CONTAINER_CLI` overrides the binary path.
 pub fn container_cmd() -> Command {
-    Command::new(env::var("CONTAINER_CLI").unwrap_or_else(|_| "container".into()))
+    Command::new(env::var("CONTAINER_CLI").unwrap_or_else(|_| container_binary().into()))
 }
 
 fn system_status() -> Option<serde_json::Value> {

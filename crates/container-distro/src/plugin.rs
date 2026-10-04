@@ -44,19 +44,31 @@ pub fn plugin_root_for(container_bin: &Path) -> Option<PathBuf> {
     )
 }
 
+fn find_on_path(name: &Path) -> Option<PathBuf> {
+    env::var_os("PATH").and_then(|paths| {
+        env::split_paths(&paths)
+            .map(|d| d.join(name))
+            .find(|p| p.is_file())
+    })
+}
+
 fn container_bin() -> Result<PathBuf> {
-    let name = env::var_os("CONTAINER_CLI").unwrap_or_else(|| "container".into());
-    let name = PathBuf::from(name);
-    let found = if name.components().count() > 1 {
-        Some(name)
+    // CONTAINER_CLI wins; then the documented install location; then PATH.
+    let found = if let Some(name) = env::var_os("CONTAINER_CLI").map(PathBuf::from) {
+        if name.components().count() > 1 {
+            Some(name)
+        } else {
+            find_on_path(&name)
+        }
     } else {
-        env::var_os("PATH").and_then(|paths| {
-            env::split_paths(&paths)
-                .map(|d| d.join(&name))
-                .find(|p| p.is_file())
-        })
+        let installed = Path::new(cm_core::container::INSTALLED_CONTAINER_PATH);
+        if installed.is_file() {
+            Some(installed.to_path_buf())
+        } else {
+            find_on_path(Path::new("container"))
+        }
     };
-    let bin = found.context("`container` not found on PATH")?;
+    let bin = found.context("`container` not found (expected its install location or PATH)")?;
     fs::canonicalize(&bin).with_context(|| format!("failed to resolve {}", bin.display()))
 }
 

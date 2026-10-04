@@ -96,9 +96,13 @@ hijacked `PATH` or `CONTAINER_CLI` runs an arbitrary binary as the user.
 
 - **Accepted because:** it is the standard Unix tool resolution model
   and `CONTAINER_CLI` is a documented feature for testing.
-- **Mitigations in progress:** prefer the upstream install location
-  (`/usr/local/bin/container`) when present; stop spawning `id`/`sysctl`
-  in favor of library calls (C2).
+- **Mitigations that exist:** the installed location
+  (`/usr/local/bin/container`) is preferred over PATH when present, and
+  `id`/`sysctl` are no longer spawned — `getpwuid_r`, `getuid`/`getgid`,
+  and `sysctlbyname` do the lookups in-process (C2). If we later need
+  richer system introspection (CPU/memory/processes, e.g. watching guest
+  listeners for auto port-forwarding), the `sysinfo` crate is the
+  documented switch point — see `default_resources` in ops.rs.
 - **Re-evaluate if:** `cm` is ever run in privileged contexts (it should
   not be — no setuid, and `sudo cm` writes state under root's home;
   consider refusing euid 0 except for `install-plugin`).
@@ -136,20 +140,20 @@ self-affecting only, since only the user can create containers.
 Numbered C1–C12 from the 2026-10-03 review. Status reflects the fix
 commits that follow this document.
 
-| #   | Severity   | Issue                                                                                                                                                  | Status                                                   |
-| --- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------- |
-| C1  | Medium     | `install-plugin` symlinks `bin/distro` → a user-writable binary; other users would exec it with their privileges                                       | **Fixed** — binary is copied, not linked                 |
-| C2  | Medium     | `id`/`sysctl` spawned via `PATH` — hijack → code exec as user                                                                                          | Open — use libc calls; prefer `/usr/local/bin/container` |
-| C3  | Medium     | `CONTAINER_USER`/`UID`/`GID`/`HOME` interpolated unvalidated into root-run shell code (`create-user.sh` sudoers path traversal, passwd-line injection) | Open — validate in script and `host_user()`              |
-| C4  | Medium     | `-d`/`-s`/`-t`/`--unregister` values passed unvalidated → flag smuggling into inner `container` CLI (`cm -t=-f` → `machine stop -f`)                   | Open — `validate_name` before passthru                   |
-| C5  | Medium     | `distro export -o <dir>` hits upstream [#2325](https://github.com/apple/container/issues/2325) — `export` deletes an existing directory                | Open — reject existing dirs in `ops::export`             |
-| C6  | Low        | Distro silently shadows a machine of the same name on `-d` (warning only in `cm -l`)                                                                   | Open — warn at resolution time                           |
-| C7  | Low        | `init -u` re-provisions on every boot: sudoers re-added, owner can't lock down their distro                                                            | Open — honor `/etc/.distro.initialized`                  |
-| C8  | Low        | Idle-PID1 loop doesn't reap zombies                                                                                                                    | Open — `CHLD` trap or `wait`-all loop                    |
-| C9  | Low        | Forwarder: unbounded thread per connection, no timeouts                                                                                                | Open — connection cap                                    |
-| C10 | Low        | `--automount` mounts every `/Volumes/*` rw (DMGs, USB, network shares); lowercase/`→`- collisions produce duplicate targets                            | Open — opt-in, document                                  |
-| C11 | Info       | `uninstall` check-then-delete TOCTOU; snapshot images cleaned by name prefix not label                                                                 | Open — minor                                             |
-| C12 | Info (bug) | `resolve_shell` probe breaks under `machine run` re-eval → always falls back to `/bin/sh`                                                              | Open — pass probe pre-quoted                             |
+| #   | Severity   | Issue                                                                                                                                                  | Status                                                                                                         |
+| --- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| C1  | Medium     | `install-plugin` symlinks `bin/distro` → a user-writable binary; other users would exec it with their privileges                                       | **Fixed** — binary is copied, not linked                                                                       |
+| C2  | Medium     | `id`/`sysctl` spawned via `PATH` — hijack → code exec as user                                                                                          | **Fixed** — libc `getpwuid_r`/`getuid`/`getgid`/`sysctlbyname`; `container` prefers `/usr/local/bin/container` |
+| C3  | Medium     | `CONTAINER_USER`/`UID`/`GID`/`HOME` interpolated unvalidated into root-run shell code (`create-user.sh` sudoers path traversal, passwd-line injection) | Open — validate in script and `host_user()`                                                                    |
+| C4  | Medium     | `-d`/`-s`/`-t`/`--unregister` values passed unvalidated → flag smuggling into inner `container` CLI (`cm -t=-f` → `machine stop -f`)                   | Open — `validate_name` before passthru                                                                         |
+| C5  | Medium     | `distro export -o <dir>` hits upstream [#2325](https://github.com/apple/container/issues/2325) — `export` deletes an existing directory                | Open — reject existing dirs in `ops::export`                                                                   |
+| C6  | Low        | Distro silently shadows a machine of the same name on `-d` (warning only in `cm -l`)                                                                   | Open — warn at resolution time                                                                                 |
+| C7  | Low        | `init -u` re-provisions on every boot: sudoers re-added, owner can't lock down their distro                                                            | Open — honor `/etc/.distro.initialized`                                                                        |
+| C8  | Low        | Idle-PID1 loop doesn't reap zombies                                                                                                                    | Open — `CHLD` trap or `wait`-all loop                                                                          |
+| C9  | Low        | Forwarder: unbounded thread per connection, no timeouts                                                                                                | Open — connection cap                                                                                          |
+| C10 | Low        | `--automount` mounts every `/Volumes/*` rw (DMGs, USB, network shares); lowercase/`→`- collisions produce duplicate targets                            | Open — opt-in, document                                                                                        |
+| C11 | Info       | `uninstall` check-then-delete TOCTOU; snapshot images cleaned by name prefix not label                                                                 | Open — minor                                                                                                   |
+| C12 | Info (bug) | `resolve_shell` probe breaks under `machine run` re-eval → always falls back to `/bin/sh`                                                              | Open — pass probe pre-quoted                                                                                   |
 
 ## Risks introduced by gap-closing work
 
@@ -188,7 +192,7 @@ Each open gap adds attack surface; flagging the traps up front.
 1. This document + README security section — **done**
 2. `--no-ssh` flag (T2's off-switch; small) — **open**
 3. C1–C5, C7, C9, C12 — each lands as its own commit and flips its
-   status in the findings table (**done:** C1; open: C2–C5, C7, C9, C12)
+   status in the findings table (**done:** C1–C2; open: C3–C5, C7, C9, C12)
 4. Non-loopback `--publish` warning — **open**
 5. `cargo audit`/`cargo deny` in CI; fuzz the `FromStr` parsers
    (`MountSpec`, `PublishSpec`, `PortMapping`) — **open**

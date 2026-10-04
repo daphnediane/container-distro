@@ -138,35 +138,76 @@ fn host_home() -> Result<String> {
     env::var("HOME").context("HOME is not set")
 }
 
-fn command_stdout(cmd: &str, args: &[&str]) -> Result<String> {
-    let out = Command::new(cmd)
-        .args(args)
-        .output()
-        .with_context(|| format!("failed to run `{cmd}`"))?;
-    if !out.status.success() {
-        bail!("`{cmd} {}` failed", args.join(" "));
+/// The login name for `uid`, via `getpwuid_r` — no subprocess for a
+/// PATH-hijackable `id` lookup.
+fn passwd_name(uid: libc::uid_t) -> Option<String> {
+    // SAFETY: `pwd` is zeroed, `buf` is valid, and `result` is checked
+    // before `pwd.pw_name` (which points into `buf`) is read.
+    let mut pwd = unsafe { std::mem::zeroed::<libc::passwd>() };
+    let mut result = std::ptr::null_mut();
+    let mut buf = vec![0u8; 1024];
+    loop {
+        let rc = unsafe {
+            libc::getpwuid_r(
+                uid,
+                &mut pwd,
+                buf.as_mut_ptr().cast(),
+                buf.len(),
+                &mut result,
+            )
+        };
+        if rc == 0 && !result.is_null() {
+            // SAFETY: on success pwd.pw_name is a valid C string in `buf`.
+            return unsafe { std::ffi::CStr::from_ptr(pwd.pw_name) }
+                .to_str()
+                .ok()
+                .map(str::to_string);
+        }
+        if rc == libc::ERANGE {
+            buf.resize(buf.len() * 2, 0);
+        } else {
+            return None;
+        }
     }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 fn host_user() -> Result<HostUser> {
-    Ok(HostUser {
-        name: command_stdout("id", &["-un"])?,
-        uid: command_stdout("id", &["-u"])?.parse()?,
-        gid: command_stdout("id", &["-g"])?.parse()?,
-    })
+    // SAFETY: getuid/getgid take no arguments and cannot fail.
+    let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
+    let name = passwd_name(uid).with_context(|| format!("no passwd entry for uid {uid}"))?;
+    Ok(HostUser { name, uid, gid })
+}
+
+/// Host RAM in bytes via `sysctlbyname` — no `sysctl` subprocess.
+fn host_memsize() -> Option<u64> {
+    let mut mem: u64 = 0;
+    let mut len = std::mem::size_of_val(&mem);
+    // SAFETY: the name is a NUL-terminated literal; out pointers are valid.
+    let rc = unsafe {
+        libc::sysctlbyname(
+            c"hw.memsize".as_ptr(),
+            (&raw mut mem).cast(),
+            &mut len,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    (rc == 0 && len == std::mem::size_of::<u64>()).then_some(mem)
 }
 
 /// Defaults matching `container machine`: half the host's CPUs and memory.
+///
+/// These one-off libc calls (getpwuid_r/getuid/getgid, sysctlbyname,
+/// available_parallelism) stay dependency-free on purpose; if we ever
+/// need live process/network/disk introspection — e.g. watching guest
+/// listeners for WSL-style automatic port forwarding — the `sysinfo`
+/// crate (CPU count, memory, processes, users) is the switch point.
 fn default_resources() -> (u64, String) {
     let cpus = std::thread::available_parallelism().map_or(2, |n| n.get() as u64);
-    let mem = command_stdout("sysctl", &["-n", "hw.memsize"])
-        .ok()
-        .and_then(|s| s.parse::<u64>().ok())
-        .map_or_else(
-            || "4G".to_string(),
-            |b| format!("{}M", b / 2 / (1024 * 1024)),
-        );
+    let mem = host_memsize().map_or_else(
+        || "4G".to_string(),
+        |b| format!("{}M", b / 2 / (1024 * 1024)),
+    );
     ((cpus / 2).max(1), mem)
 }
 

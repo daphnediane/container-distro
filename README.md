@@ -249,7 +249,8 @@ for re-evaluation, is in [doc/security.md](doc/security.md).
 ## Notes
 
 - `container machine run` requires a TTY for interactive shells (as does `cm`).
-- `container` is resolved from `PATH`; set `CONTAINER_CLI` to override.
+- `container` is resolved from `/usr/local/bin/container` (the upstream
+  install location), then `PATH`; set `CONTAINER_CLI` to override.
 
 ## License
 
