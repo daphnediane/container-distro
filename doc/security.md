@@ -147,11 +147,11 @@ commits that follow this document.
 | C3  | Medium     | `CONTAINER_USER`/`UID`/`GID`/`HOME` interpolated unvalidated into root-run shell code (`create-user.sh` sudoers path traversal, passwd-line injection) | **Fixed** — charset checks in `create-user.sh` and `host_user()`                                               |
 | C4  | Medium     | `-d`/`-s`/`-t`/`--unregister` values passed unvalidated → flag smuggling into inner `container` CLI (`cm -t=-f` → `machine stop -f`)                   | **Fixed** — `validate_name`/`validate_user` on all passthru args                                               |
 | C5  | Medium     | `distro export -o <dir>` hits upstream [#2325](https://github.com/apple/container/issues/2325) — `export` deletes an existing directory                | **Fixed** — existing dirs rejected in `ops::export`                                                            |
-| C6  | Low        | Distro silently shadows a machine of the same name on `-d` (warning only in `cm -l`)                                                                   | Open — warn at resolution time                                                                                 |
+| C6  | Low        | Distro silently shadows a machine of the same name on `-d` (warning only in `cm -l`)                                                                   | **Fixed** — resolution-time warning when a distro shadows a machine                                            |
 | C7  | Low        | `init -u` re-provisions on every boot: sudoers re-added, owner can't lock down their distro                                                            | **Fixed** — per-user `/etc/.distro.user.*` sentinel; admin edits preserved                                     |
 | C8  | Low        | Idle-PID1 loop doesn't reap zombies                                                                                                                    | Open — `CHLD` trap or `wait`-all loop                                                                          |
 | C9  | Low        | Forwarder: unbounded thread per connection, no timeouts                                                                                                | **Fixed** — 64-conn semaphore cap; backlog queues excess (no idle timeout by design)                           |
-| C10 | Low        | `--automount` mounts every `/Volumes/*` rw (DMGs, USB, network shares); lowercase/`→`- collisions produce duplicate targets                            | Open — opt-in, document                                                                                        |
+| C10 | Low        | `--automount` mounts every `/Volumes/*` rw (DMGs, USB, network shares); lowercase/`→`- collisions produce duplicate targets                            | **Partial** — case preserved, target collisions deduped + warned; rw-all-`/Volumes` remains an accepted opt-in |
 | C11 | Info       | `uninstall` check-then-delete TOCTOU; snapshot images cleaned by name prefix not label                                                                 | Open — minor                                                                                                   |
 | C12 | Info (bug) | `resolve_shell` probe breaks under `machine run` re-eval → always falls back to `/bin/sh`                                                              | **Fixed** — probe passed as one pre-joined string                                                              |
 
@@ -192,9 +192,12 @@ Each open gap adds attack surface; flagging the traps up front.
 1. This document + README security section — **done**
 2. `--no-ssh` flag (T2's off-switch; small) — **open**
 3. C1–C5, C7, C9, C12 — each lands as its own commit and flips its
-   status in the findings table (**done:** C1–C5, C7, C9, C12)
+   status in the findings table (**done:** C1–C5, C6, C7, C9, C10
+   partial, C12)
 4. Non-loopback `--publish` warning — **open**
 5. `cargo audit`/`cargo deny` in CI; fuzz the `FromStr` parsers
    (`MountSpec`, `PublishSpec`, `PortMapping`) — **open**
 6. Decide init-assets location vs. shared home (T6) — **open**
-7. C6/C8/C10/C11 — **open, low**
+7. C8 (PID 1 zombie reaping), C11 (uninstall TOCTOU / prefix cleanup) —
+   **open, low**; C10's rw-all-`/Volumes` surface stays an accepted
+   opt-in trade-off

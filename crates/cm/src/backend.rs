@@ -14,7 +14,7 @@
 use std::env;
 
 use anyhow::Result;
-use cm_core::container::Machine;
+use cm_core::container::{self, Machine};
 use container_distro::ops::{self as distro, DistroSummary};
 
 /// What a `-d NAME` (or the default) refers to.
@@ -60,7 +60,17 @@ pub fn resolve(name: Option<&str>) -> Result<Target> {
         .iter()
         .map(|c| c.id().to_string())
         .collect();
-    Ok(resolve_target(name, &names, default.as_deref()))
+    let target = resolve_target(name, &names, default.as_deref());
+    // A distro silently shadows a machine of the same name — warn at
+    // resolution time, not only in `-l` output.
+    if let Target::Distro(d) = &target
+        && container::list_machines()
+            .map(|ms| ms.iter().any(|m| &m.id == d))
+            .unwrap_or(false)
+    {
+        eprintln!("cm: `{d}` is both a machine and a distro; using the distro");
+    }
+    Ok(target)
 }
 
 /// All distros, or none when distro support is off.

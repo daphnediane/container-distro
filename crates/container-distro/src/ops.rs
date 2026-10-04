@@ -306,10 +306,17 @@ fn build_spec(name: String, image: String, opts: &CreateOptions) -> Result<Distr
                 (e.file_name().to_string_lossy().into_owned(), is_link)
             })
             .collect();
+        let mut taken: std::collections::HashSet<String> =
+            mounts.iter().map(|x| x.target.clone()).collect();
         for m in automounts(&entries) {
-            if !mounts.iter().any(|x| x.target == m.target) {
-                mounts.push(m);
+            if !taken.insert(m.target.clone()) {
+                eprintln!(
+                    "container-distro: skipping automount {}: {} is already a mount target",
+                    m.source, m.target
+                );
+                continue;
             }
+            mounts.push(m);
         }
     }
     let (def_cpus, def_mem) = default_resources();

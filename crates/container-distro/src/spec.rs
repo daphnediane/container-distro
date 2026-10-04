@@ -416,18 +416,32 @@ impl SpecChanges {
 /// Map `/Volumes` entries to `/mnt/<name>` mounts (WSL's `/mnt/<drive>`).
 ///
 /// `entries` are `(name, is_symlink)` pairs; symlinks (the boot volume's
-/// `Macintosh HD -> /`) are skipped. Names are lowercased with spaces
-/// turned into `-`.
+/// `Macintosh HD -> /`) are skipped. Names keep their case — the
+/// filesystem may be case-sensitive — with spaces turned into `-`.
+/// When two volumes map to the same target (`My Photos` and
+/// `My-Photos`), the alphabetically first wins and the rest are skipped
+/// with a warning.
 pub fn automounts(entries: &[(String, bool)]) -> Vec<MountSpec> {
-    let mut v: Vec<MountSpec> = entries
+    let mut names: Vec<&str> = entries
         .iter()
         .filter(|(name, is_link)| !is_link && !name.starts_with('.'))
-        .map(|(name, _)| MountSpec {
-            source: format!("/Volumes/{name}"),
-            target: format!("/mnt/{}", name.to_lowercase().replace(' ', "-")),
-            read_only: false,
-        })
+        .map(|(name, _)| name.as_str())
         .collect();
+    names.sort_unstable();
+    let mut seen = std::collections::HashSet::new();
+    let mut v = Vec::new();
+    for name in names {
+        let target = format!("/mnt/{}", name.replace(' ', "-"));
+        if !seen.insert(target.clone()) {
+            eprintln!("container-distro: skipping /Volumes/{name}: {target} already automounted");
+            continue;
+        }
+        v.push(MountSpec {
+            source: format!("/Volumes/{name}"),
+            target,
+            read_only: false,
+        });
+    }
     v.sort_by(|a, b| a.target.cmp(&b.target));
     v
 }
@@ -595,8 +609,29 @@ mod tests {
         assert_eq!(
             m.iter().map(ToString::to_string).collect::<Vec<_>>(),
             [
-                "/Volumes/CaseSens:/mnt/casesens",
-                "/Volumes/My Photos:/mnt/my-photos"
+                "/Volumes/CaseSens:/mnt/CaseSens",
+                "/Volumes/My Photos:/mnt/My-Photos"
+            ]
+        );
+    }
+
+    /// Colliding targets keep the alphabetically first volume and drop
+    /// the rest (with a warning on stderr).
+    #[test]
+    fn automount_target_collisions() {
+        let entries = [
+            ("My-Photos".to_string(), false),
+            ("My Photos".to_string(), false),
+            ("My  Photos".to_string(), false),
+        ];
+        let m = automounts(&entries);
+        // "My  Photos" → "My--Photos" is distinct; the other two collide
+        // on /mnt/My-Photos and "My Photos" sorts before "My-Photos".
+        assert_eq!(
+            m.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            [
+                "/Volumes/My  Photos:/mnt/My--Photos",
+                "/Volumes/My Photos:/mnt/My-Photos"
             ]
         );
     }
