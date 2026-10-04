@@ -658,9 +658,21 @@ pub fn set_default(name: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+/// `container export` deletes an existing output directory
+/// (apple/container#2325) — refuse before it can.
+fn check_export_output(o: &Path) -> Result<()> {
+    if o.is_dir() {
+        bail!("export output `{}` is an existing directory", o.display());
+    }
+    Ok(())
+}
+
 pub fn export(name: &str, output: Option<&Path>) -> Result<()> {
     ensure_started()?;
     find(name)?;
+    if let Some(o) = output {
+        check_export_output(o)?;
+    }
     let mut args = vec!["export".to_string(), name.to_string()];
     if let Some(o) = output {
         args.push("--output".into());
@@ -763,6 +775,19 @@ mod tests {
         // Legitimate shapes still pass.
         assert!(validate_env("daphne", "501", "20", "/home/daphne"));
         assert!(validate_env("a.b-c_d", "0", "0", "/home/a.b-c_d"));
+    }
+
+    #[test]
+    fn export_output_rejects_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(check_export_output(dir.path()).is_err());
+        // A missing path and an existing regular file are both fine —
+        // `set` exports onto a pre-created tempfile.
+        let missing = dir.path().join("out.tar");
+        assert!(check_export_output(&missing).is_ok());
+        let file = dir.path().join("exists.tar");
+        fs::write(&file, b"").unwrap();
+        assert!(check_export_output(&file).is_ok());
     }
 
     #[test]
