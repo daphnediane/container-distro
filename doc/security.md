@@ -150,7 +150,7 @@ commits that follow this document.
 | C6  | Low        | Distro silently shadows a machine of the same name on `-d` (warning only in `cm -l`)                                                                   | Open — warn at resolution time                                                                                 |
 | C7  | Low        | `init -u` re-provisions on every boot: sudoers re-added, owner can't lock down their distro                                                            | **Fixed** — per-user `/etc/.distro.user.*` sentinel; admin edits preserved                                     |
 | C8  | Low        | Idle-PID1 loop doesn't reap zombies                                                                                                                    | Open — `CHLD` trap or `wait`-all loop                                                                          |
-| C9  | Low        | Forwarder: unbounded thread per connection, no timeouts                                                                                                | Open — connection cap                                                                                          |
+| C9  | Low        | Forwarder: unbounded thread per connection, no timeouts                                                                                                | **Fixed** — 64-conn semaphore cap; backlog queues excess (no idle timeout by design)                           |
 | C10 | Low        | `--automount` mounts every `/Volumes/*` rw (DMGs, USB, network shares); lowercase/`→`- collisions produce duplicate targets                            | Open — opt-in, document                                                                                        |
 | C11 | Info       | `uninstall` check-then-delete TOCTOU; snapshot images cleaned by name prefix not label                                                                 | Open — minor                                                                                                   |
 | C12 | Info (bug) | `resolve_shell` probe breaks under `machine run` re-eval → always falls back to `/bin/sh`                                                              | Open — pass probe pre-quoted                                                                                   |
@@ -192,7 +192,7 @@ Each open gap adds attack surface; flagging the traps up front.
 1. This document + README security section — **done**
 2. `--no-ssh` flag (T2's off-switch; small) — **open**
 3. C1–C5, C7, C9, C12 — each lands as its own commit and flips its
-   status in the findings table (**done:** C1–C5, C7; open: C9, C12)
+   status in the findings table (**done:** C1–C5, C7, C9; open: C12)
 4. Non-loopback `--publish` warning — **open**
 5. `cargo audit`/`cargo deny` in CI; fuzz the `FromStr` parsers
    (`MountSpec`, `PublishSpec`, `PortMapping`) — **open**
