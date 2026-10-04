@@ -1,18 +1,20 @@
 # Gap: no localhost port forwarding
 
 **Status:** partially closed — `cm --forward HOST[:GUEST]` (L0, static,
-foreground) works for machines and distros; distros also publish ports
-natively (`container distro create -p`, `cm --install --publish`,
-default host IP `127.0.0.1`). WSL-style automatic forwarding is still
-open
+foreground, **experimental**) works for machines and distros; distros
+also publish ports natively (`container distro create -p`,
+`cm --install --publish`, `distro set --publish/--unpublish`, default
+host IP `127.0.0.1`). `--forward` is expected to be superseded by
+WSL-style automatic forwarding, which is still open
 **Cheapest fix level:** L0 (manual forwarder) · [L2.5](../lower-level-integration.md#the-plugin-route--l25)
 for WSL-like automatic forwarding · L3/L4 for full control
 
 ## What WSL does
 
 WSL2 defaults to `localhostForwarding=true`: a guest process listening
-on `localhost:3000` is reachable at `localhost:3000` on Windows,
-proxied automatically.
+on `localhost:3000` is reachable at `localhost:3000` on Windows. There
+is no forward list to edit — a Windows-side service watches guest
+listeners and proxies them dynamically as they come and go.
 
 ## What we have today
 
@@ -43,7 +45,11 @@ bridged to macOS localhost.
 
 ## Recommendation
 
-Start with the L0 forwarder subcommand if anyone actually needs this —
-it covers the common "run dev server in guest, open browser on Mac"
-case. Dynamic WSL-parity forwarding is an L2.5 project and probably not
-worth it until requested.
+The L0 forwarder shipped as `cm --forward` and covers the common "run
+dev server in guest, open browser on Mac" case. It is **experimental**:
+for distros, `--publish` (create-time or via `distro set`) is the
+supported path since it uses real runtime publishing rather than a
+userspace proxy. Machines have no publish path, so `--forward` stays
+for them until listener-watching automatic forwarding (L2.5) lands —
+at which point `--forward` should be deprecated outright. Dynamic
+WSL-parity forwarding is probably not worth it until requested.

@@ -190,7 +190,8 @@ pub struct Args {
     pub publish: Vec<PublishSpec>,
 
     /// Forward 127.0.0.1:HOST_PORT to the machine's GUEST_PORT (repeatable;
-    /// runs in the foreground until interrupted)
+    /// runs in the foreground until interrupted). Experimental — for distros
+    /// prefer --publish at install or `container distro set --publish`
     #[arg(long = "forward", value_name = "HOST_PORT[:GUEST_PORT]")]
     pub forward: Vec<PortMapping>,
 

@@ -62,7 +62,7 @@ cm [OPTIONS] [-- <COMMAND LINE>]
 | `--unregister`      | Delete a machine or distro and its storage                                              |
 | `--install <image>` | Create + boot a machine (`--name`, `--no-launch`, `--cpus`, `--memory`, `--home-mount`) |
 |                     | …or a distro with `--distro`, `--share SRC:DST[:ro]`, `--publish [IP:]HOST[:GUEST]`     |
-| `--forward <p[:g]>` | Forward localhost port `p` to port `g` of the machine or distro                         |
+| `--forward <p[:g]>` | (experimental) Forward localhost port `p` to port `g` of the machine or distro          |
 | `--version`         | Show `cm` and `container` versions                                                      |
 
 If `container` services aren't running, `cm` runs `container system start`
@@ -179,6 +179,10 @@ guest are reachable at that IP only — nothing is bridged to macOS
 localhost automatically. `cm --forward 3000` (or `--forward 8080:80`,
 repeatable, with `-d` to pick the machine) runs a foreground forwarder
 from `127.0.0.1` on the Mac to the machine until you press Ctrl-C.
+`--forward` is experimental and may be replaced by automatic
+listener-based forwarding; for distros, prefer `--publish` at install
+time or `container distro set --publish`/`--unpublish`, which use the
+runtime's real port publishing (no userspace proxy).
 
 ### Command execution
 
