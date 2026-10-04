@@ -47,6 +47,20 @@ Export ignores the configured rootfs mount source. It's an upstream bug.
 Regular containers, including the planned `container distro` ones, are
 unaffected.
 
+The mechanism (verified 2026-10-04): a container's data dir holds only
+`runtime-configuration.json` until first start; then the daemon copies
+the image's materialized rootfs (`snapshots/<image-digest>/snapshot`,
+an ext4 file) to `containers/<id>/rootfs.ext4`. Machines instead carry
+`options.rootFsOverride` in `runtime-configuration.json` pointing at
+their plugin-state ext4 — no copy. Two consequences: `export` also fails
+on *never-booted* regular containers (no `rootfs.ext4` yet), and the
+same override lets `container distro set` carry a booted rootfs across a
+recreate. We only patch `runtime-configuration.json` on containers
+`container distro` itself created — never a machine's backing
+container — and point the override at the conventional
+`containers/<id>/rootfs.ext4` path, so `export` still works afterwards
+and `delete` removes the disk with the container.
+
 **Upstream:** no existing issue found (searched 2026-10-03: "export",
 "machine export", "rootfs.ext4", "snapshot disk"). The related
 issues are about other things: [#1400](https://github.com/apple/container/issues/1400)

@@ -254,6 +254,39 @@ pub fn app_root() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+/// The `container` daemon version (`server.version` in `system status`).
+pub fn container_version() -> Option<String> {
+    system_status()?
+        .pointer("/server/version")?
+        .as_str()
+        .map(String::from)
+}
+
+/// `container` `major.minor` versions whose internal storage layout we
+/// have verified: `containers/<id>/rootfs.ext4`,
+/// `containers/<id>/runtime-configuration.json` and its
+/// `options.rootFsOverride`.
+pub const VERIFIED_CONTAINER_MINOR: &[&str] = &["1.5"];
+
+/// Warn (once per process) when the `container` daemon is not a version
+/// whose appRoot internals we have verified. Code paths that read or
+/// write `appRoot` contents directly should call this first — the layout
+/// is not a public interface and may change without notice.
+pub fn warn_unverified_version() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        if let Some(v) = container_version()
+            && !VERIFIED_CONTAINER_MINOR
+                .iter()
+                .any(|k| v == *k || v.starts_with(&format!("{k}.")))
+        {
+            eprintln!(
+                "warning: `container` {v} has not been verified — operations using its internal storage layout may break"
+            );
+        }
+    });
+}
+
 /// Host disk space a container's root filesystem uses: the allocated size
 /// of its sparse `rootfs.ext4`, which is what `container machine list`
 /// reports as DISK.

@@ -56,8 +56,18 @@ A distro is a regular container: our `assets/init` is the entrypoint
 (mounted read-only at `/sbin.distro`), it has `--cap-add ALL`, no masked
 or read-only paths, `--ssh`, the host account passed through
 `CONTAINER_*` env, and the home directory at the same path. `run` uses
-`container exec` (argv-exact). `set` snapshots the rootfs (`export` →
-OCI layout → `image load`) and recreates the container. Ports default to
+`container exec` (argv-exact). `set` recreates the container on the same
+filesystem: it moves `containers/<id>/rootfs.ext4` aside, recreates, moves
+it back, and sets `options.rootFsOverride` in `runtime-configuration.json`
+(the machine-apiserver mechanism) so `start` mounts it instead of copying
+the image snapshot — no tar/image round-trip. Only distro-owned containers
+are patched, never machine backing containers. A never-booted distro has no
+`rootfs.ext4`, so it is recreated from its recorded image (this is also
+why `container export` fails on never-booted distros and on machines,
+whose ext4 lives under `plugin-state/`). Code that reads or writes
+`appRoot` internals calls `warn_unverified_version()` — a once-per-process
+warning when the daemon isn't a `VERIFIED_CONTAINER_MINOR` release. Ports
+default to
 `127.0.0.1`. Only an explicit `--set-default` sets the default distro.
 
 `create`/`import` take `--restricted` (alias `--untrusted`): a defaults

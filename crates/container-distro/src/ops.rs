@@ -531,6 +531,8 @@ fn summarize(c: &ContainerInfo, default: Option<&str>, app_root: Option<&Path>) 
 /// All distros, sorted by name.
 pub fn summaries(running_only: bool) -> Result<Vec<DistroSummary>> {
     let default = default_name();
+    // DISK sizes are read from `container`'s internal storage layout.
+    container::warn_unverified_version();
     let app_root = container::app_root();
     let mut rows: Vec<DistroSummary> = distros()?
         .iter()
@@ -698,8 +700,68 @@ fn remove_snapshot_images(name: &str, keep: Option<&str>) {
     }
 }
 
-/// `container distro set`: recreate the container with new settings on a
-/// snapshot of its current filesystem.
+/// The container's data directory under `container`'s appRoot.
+fn container_dir(id: &str) -> Result<PathBuf> {
+    container::app_root()
+        .map(|r| r.join("containers").join(id))
+        .context("`container system status` did not report an appRoot")
+}
+
+/// Move a container's `rootfs.ext4` out of its data directory so
+/// `container delete` doesn't take it with it. The file only exists once
+/// the container has booted — `None` for a never-started distro, whose
+/// filesystem is still the pristine image (and which `container export`
+/// cannot snapshot for the same reason).
+fn preserve_rootfs(id: &str) -> Result<Option<PathBuf>> {
+    let dir = container_dir(id)?;
+    let rootfs = dir.join("rootfs.ext4");
+    if !rootfs.exists() {
+        return Ok(None);
+    }
+    let staged = dir.with_file_name(format!("{id}.preserve.ext4"));
+    fs::rename(&rootfs, &staged)
+        .with_context(|| format!("failed to preserve {}", rootfs.display()))?;
+    Ok(Some(staged))
+}
+
+/// Mark `rootfs` as the container's root filesystem via `rootFsOverride`
+/// in `runtime-configuration.json`, so `container start` mounts it —
+/// otherwise the daemon copies the image snapshot over `rootfs.ext4`,
+/// which fails once the file already exists. This is the same mechanism
+/// `container machine` uses for its plugin-state disks.
+fn set_rootfs_override(dir: &Path, rootfs: &Path) -> Result<()> {
+    let cfg = dir.join("runtime-configuration.json");
+    let mut v: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(&cfg).with_context(|| format!("failed to read {}", cfg.display()))?,
+    )?;
+    v["options"]["rootFsOverride"] = serde_json::json!({
+        "type": {"block": {"sync": {"fsync": {}}, "format": "ext4", "cache": {"on": {}}}},
+        "source": rootfs,
+        "destination": "/",
+        "options": [],
+    });
+    fs::write(&cfg, serde_json::to_string(&v)?)
+        .with_context(|| format!("failed to write {}", cfg.display()))
+}
+
+/// Move a preserved rootfs back into a freshly created container and mark
+/// it as the container's root filesystem.
+fn restore_rootfs(id: &str, staged: Option<&Path>) -> Result<()> {
+    let Some(staged) = staged else { return Ok(()) };
+    let dir = container_dir(id)?;
+    let rootfs = dir.join("rootfs.ext4");
+    fs::rename(staged, &rootfs).with_context(|| {
+        format!(
+            "failed to restore {} — the preserved copy is at {}",
+            rootfs.display(),
+            staged.display()
+        )
+    })?;
+    set_rootfs_override(&dir, &rootfs)
+}
+
+/// `container distro set`: recreate the container with new settings,
+/// keeping its filesystem.
 pub fn set(name: &str, changes: &SpecChanges) -> Result<()> {
     ensure_started()?;
     if changes.is_empty() {
@@ -707,33 +769,31 @@ pub fn set(name: &str, changes: &SpecChanges) -> Result<()> {
     }
     let info = find(name)?;
     let old = DistroSpec::from_container(&info, &host_home()?)?;
-    let mut new = changes.apply(&old)?;
+    let new = changes.apply(&old)?;
     check_sources(&new)?;
     let was_running = info.is_running();
     if was_running {
         run_container_quiet(&["stop", name])?;
     }
 
-    // Snapshot the current filesystem into an image.
-    let tar = tempfile::Builder::new()
-        .prefix("distro-set-")
-        .suffix(".tar")
-        .tempfile()?;
-    let tar_path = tar.path().to_string_lossy().into_owned();
-    run_container(&["export", name, "--output", &tar_path])?;
-    let snapshot = format!("{}:{}", snapshot_repo(name), timestamp());
-    oci::load_rootfs(tar.path(), &snapshot)?;
-    drop(tar);
-
-    new.image = snapshot.clone();
+    // Carry the materialized rootfs over directly rather than
+    // round-tripping it through `container export` and a snapshot image.
+    // This reads and writes `container`'s internal storage layout.
+    container::warn_unverified_version();
+    let preserved = preserve_rootfs(info.id())?;
     run_container_quiet(&["delete", name])?;
-    if let Err(e) = create_container(&new) {
-        // Restore the old settings on the same snapshot; nothing is lost.
-        let rollback = DistroSpec {
-            image: snapshot.clone(),
-            ..old
-        };
-        create_container(&rollback).context("rollback after a failed `set` also failed")?;
+    if let Err(e) =
+        create_container(&new).and_then(|()| restore_rootfs(info.id(), preserved.as_deref()))
+    {
+        // Restore the old settings on the preserved rootfs; nothing is lost.
+        let _ = run_container_quiet(&["delete", name]);
+        let rollback =
+            create_container(&old).and_then(|()| restore_rootfs(info.id(), preserved.as_deref()));
+        if let Err(r) = rollback {
+            return Err(e.context(format!(
+                "failed to recreate the distro; restoring the previous settings failed too: {r:#}"
+            )));
+        }
         if was_running {
             boot(name)?;
         }
@@ -742,7 +802,7 @@ pub fn set(name: &str, changes: &SpecChanges) -> Result<()> {
     if was_running {
         boot(name)?;
     }
-    remove_snapshot_images(name, Some(&snapshot));
+    remove_snapshot_images(name, Some(new.image.as_str()));
     Ok(())
 }
 
@@ -1046,12 +1106,34 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         assert!(check_export_output(dir.path()).is_err());
         // A missing path and an existing regular file are both fine —
-        // `set` exports onto a pre-created tempfile.
+        // `export` refuses only when it would clobber a directory.
         let missing = dir.path().join("out.tar");
         assert!(check_export_output(&missing).is_ok());
         let file = dir.path().join("exists.tar");
         fs::write(&file, b"").unwrap();
         assert!(check_export_output(&file).is_ok());
+    }
+
+    #[test]
+    fn rootfs_override_patches_runtime_config() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("runtime-configuration.json"),
+            r#"{"options":{"autoRemove":true},"containerConfiguration":{"id":"d1"}}"#,
+        )
+        .unwrap();
+        set_rootfs_override(dir.path(), Path::new("/keep/rootfs.ext4")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(dir.path().join("runtime-configuration.json")).unwrap(),
+        )
+        .unwrap();
+        let o = &v["options"]["rootFsOverride"];
+        assert_eq!(o["source"], "/keep/rootfs.ext4");
+        assert_eq!(o["destination"], "/");
+        assert_eq!(o["type"]["block"]["format"], "ext4");
+        // Existing options survive the patch.
+        assert_eq!(v["options"]["autoRemove"], true);
+        assert_eq!(v["containerConfiguration"]["id"], "d1");
     }
 
     #[test]
