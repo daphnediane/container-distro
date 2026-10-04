@@ -488,7 +488,23 @@ pub fn validate_name(name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Derive a machine name from an image reference (`alpine:latest` → `alpine-latest`).
+/// Check a `--user` value: a username or `uid[:gid]` — nothing that a
+/// `container` flag position could mistake for an option.
+pub fn validate_user(user: &str) -> Result<()> {
+    let ok = !user.is_empty()
+        && !user.starts_with('-')
+        && user
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | ':'));
+    if !ok {
+        bail!("invalid user `{user}`: expected a username or uid[:gid]");
+    }
+    Ok(())
+}
+
+/// Derive a machine name from an image reference (`alpine:latest` →
+/// `alpine-latest`); non-`[a-z0-9]` characters become `-` so the result
+/// always passes [`validate_name`].
 pub fn default_machine_name(image: &str) -> String {
     image
         .rsplit('/')
@@ -497,7 +513,18 @@ pub fn default_machine_name(image: &str) -> String {
         .split('@')
         .next()
         .unwrap_or(image)
-        .replace(':', "-")
+        .to_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_lowercase() || c.is_ascii_digit() {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string()
 }
 
 #[cfg(test)]
@@ -643,13 +670,27 @@ mod tests {
     }
 
     #[test]
+    fn users_are_flag_safe() {
+        for ok in ["root", "daphne", "501", "501:20", "a.b-c_d"] {
+            assert!(validate_user(ok).is_ok(), "{ok}");
+        }
+        for bad in ["", "-u", "--root", "a b", "x;y", "a/b", "x=y"] {
+            assert!(validate_user(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
     fn machine_name_from_image() {
         assert_eq!(default_machine_name("alpine:latest"), "alpine-latest");
         assert_eq!(default_machine_name("alpine"), "alpine");
         assert_eq!(
             default_machine_name("docker.io/library/ubuntu:24.04"),
-            "ubuntu-24.04"
+            "ubuntu-24-04"
         );
+        for bad in ["UBUNTU:24.04", "img@sha256:abc", "-x-", "a_b"] {
+            let n = default_machine_name(bad);
+            assert!(validate_name(&n).is_ok(), "{bad} → {n}");
+        }
     }
 
     #[test]

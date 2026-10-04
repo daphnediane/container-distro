@@ -519,6 +519,9 @@ pub struct RunOpts {
 /// so commands arrive exactly as given (no shell re-evaluation).
 pub fn run_command(o: RunOpts) -> Result<Command> {
     ensure_started()?;
+    if let Some(u) = &o.user {
+        container::validate_user(u)?;
+    }
     let name = resolve(o.name)?;
     let info = ensure_running(&name)?;
     let home = host_home()?;

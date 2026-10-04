@@ -68,8 +68,13 @@ fn exit_code(status: ExitStatus) -> ExitCode {
     ExitCode::from(status.code().map_or(1, |c| c.clamp(0, 255) as u8))
 }
 
-/// Resolve `-d` (or the default), starting services first.
+/// Resolve `-d` (or the default), starting services first. Names are
+/// validated before they're passed to any `container` subcommand so a
+/// flag-shaped value can't smuggle options into the inner CLI.
 fn target(name: Option<&str>) -> Result<Target> {
+    if let Some(n) = name {
+        container::validate_name(n)?;
+    }
     container::ensure_started()?;
     backend::resolve(name)
 }
@@ -82,6 +87,9 @@ fn named_target(name: &str) -> Result<Target> {
 /// Replace this process with the machine's or distro's command, for TTY
 /// passthrough.
 fn run_in_target(args: &Args) -> Result<ExitCode> {
+    if let Some(u) = args.user.as_deref() {
+        container::validate_user(u)?;
+    }
     match target(args.distribution.as_deref())? {
         Target::Machine(m) => run_in_machine(args, m.as_deref()),
         Target::Distro(d) => run_in_distro(args, d),
@@ -306,6 +314,7 @@ fn install(opts: &InstallOpts) -> Result<ExitCode> {
         .name
         .clone()
         .unwrap_or_else(|| container::default_machine_name(&opts.image));
+    container::validate_name(&name)?;
     if opts.wants_distro() {
         if !backend::distros_enabled() {
             bail!("distro options need distro support (unset CM_BACKEND=machine)");

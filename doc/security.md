@@ -145,7 +145,7 @@ commits that follow this document.
 | C1  | Medium     | `install-plugin` symlinks `bin/distro` → a user-writable binary; other users would exec it with their privileges                                       | **Fixed** — binary is copied, not linked                                                                       |
 | C2  | Medium     | `id`/`sysctl` spawned via `PATH` — hijack → code exec as user                                                                                          | **Fixed** — libc `getpwuid_r`/`getuid`/`getgid`/`sysctlbyname`; `container` prefers `/usr/local/bin/container` |
 | C3  | Medium     | `CONTAINER_USER`/`UID`/`GID`/`HOME` interpolated unvalidated into root-run shell code (`create-user.sh` sudoers path traversal, passwd-line injection) | **Fixed** — charset checks in `create-user.sh` and `host_user()`                                               |
-| C4  | Medium     | `-d`/`-s`/`-t`/`--unregister` values passed unvalidated → flag smuggling into inner `container` CLI (`cm -t=-f` → `machine stop -f`)                   | Open — `validate_name` before passthru                                                                         |
+| C4  | Medium     | `-d`/`-s`/`-t`/`--unregister` values passed unvalidated → flag smuggling into inner `container` CLI (`cm -t=-f` → `machine stop -f`)                   | **Fixed** — `validate_name`/`validate_user` on all passthru args                                               |
 | C5  | Medium     | `distro export -o <dir>` hits upstream [#2325](https://github.com/apple/container/issues/2325) — `export` deletes an existing directory                | Open — reject existing dirs in `ops::export`                                                                   |
 | C6  | Low        | Distro silently shadows a machine of the same name on `-d` (warning only in `cm -l`)                                                                   | Open — warn at resolution time                                                                                 |
 | C7  | Low        | `init -u` re-provisions on every boot: sudoers re-added, owner can't lock down their distro                                                            | Open — honor `/etc/.distro.initialized`                                                                        |
@@ -192,7 +192,7 @@ Each open gap adds attack surface; flagging the traps up front.
 1. This document + README security section — **done**
 2. `--no-ssh` flag (T2's off-switch; small) — **open**
 3. C1–C5, C7, C9, C12 — each lands as its own commit and flips its
-   status in the findings table (**done:** C1–C3; open: C4–C5, C7, C9, C12)
+   status in the findings table (**done:** C1–C4; open: C5, C7, C9, C12)
 4. Non-loopback `--publish` warning — **open**
 5. `cargo audit`/`cargo deny` in CI; fuzz the `FromStr` parsers
    (`MountSpec`, `PublishSpec`, `PortMapping`) — **open**
