@@ -175,7 +175,23 @@ fn host_user() -> Result<HostUser> {
     // SAFETY: getuid/getgid take no arguments and cannot fail.
     let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
     let name = passwd_name(uid).with_context(|| format!("no passwd entry for uid {uid}"))?;
+    // The name lands in container labels, CONTAINER_* env, and — inside
+    // the guest — /etc/passwd and a sudoers.d path written by root. Hold
+    // it to the charset create-user.sh accepts.
+    if !safe_user_name(&name) {
+        bail!("refusing to provision unsafe username `{name}`");
+    }
     Ok(HostUser { name, uid, gid })
+}
+
+/// The username charset `create-user.sh` accepts: alphanumerics plus
+/// `.`/`_`/`-`, never leading with `.` or `-`.
+fn safe_user_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with(['-', '.'])
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
 }
 
 /// Host RAM in bytes via `sysctlbyname` — no `sysctl` subprocess.
@@ -688,6 +704,62 @@ mod tests {
             r#"{{"id":"{id}","status":"running","default":{default}}}"#
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn safe_user_name_charset() {
+        for ok in ["daphne", "a.b-c_d", "x", "User1", "0root"] {
+            assert!(safe_user_name(ok), "{ok}");
+        }
+        for bad in ["", "-evil", ".hidden", "a b", "x:y", "a/b", "u$", "u!"] {
+            assert!(!safe_user_name(bad), "{bad}");
+        }
+    }
+
+    /// Run create-user.sh in validate-only mode; exits 0 when the env
+    /// passes the sanitization block and never touches the filesystem.
+    fn validate_env(user: &str, uid: &str, gid: &str, home: &str) -> bool {
+        Command::new("sh")
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/assets/create-user.sh"
+            ))
+            .env("CONTAINER_USER", user)
+            .env("CONTAINER_UID", uid)
+            .env("CONTAINER_GID", gid)
+            .env("CONTAINER_HOME", home)
+            .env("DISTRO_VALIDATE_ONLY", "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    }
+
+    #[test]
+    fn create_user_rejects_unsafe_env() {
+        for bad in ["", "-evil", ".hidden", "bad name", "x:y", "a/b", "u$"] {
+            assert!(!validate_env(bad, "501", "20", "/home/x"), "user {bad}");
+        }
+        for bad in ["", "x", "1.2", "501;rm", " 1"] {
+            assert!(!validate_env("u", bad, "20", "/home/u"), "uid {bad}");
+            assert!(!validate_env("u", "501", bad, "/home/u"), "gid {bad}");
+        }
+        for bad in [
+            "",
+            "relative",
+            "/home/../etc",
+            "/x/..",
+            "../y",
+            "/a b",
+            "/x:y",
+        ] {
+            assert!(!validate_env("u", "501", "20", bad), "home {bad}");
+        }
+        // Legitimate shapes still pass.
+        assert!(validate_env("daphne", "501", "20", "/home/daphne"));
+        assert!(validate_env("a.b-c_d", "0", "0", "/home/a.b-c_d"));
     }
 
     #[test]

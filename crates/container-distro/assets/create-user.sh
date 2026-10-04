@@ -14,6 +14,31 @@ set -e
 : "${CONTAINER_USER:?}" "${CONTAINER_UID:?}" "${CONTAINER_GID:?}" "${CONTAINER_HOME:?}"
 shell=${CONTAINER_SHELL:-/bin/sh}
 
+# These values are interpolated into root-run file edits below —
+# /etc/passwd lines, a sudoers.d filename, mkdir/chown paths — so hold
+# them to safe shapes before writing anything.
+case $CONTAINER_USER in
+"" | -* | .* | *[!a-zA-Z0-9._-]*)
+    echo "create-user: unsafe CONTAINER_USER: $CONTAINER_USER" >&2
+    exit 1
+    ;;
+esac
+case $CONTAINER_UID$CONTAINER_GID in
+*[!0-9]* | "")
+    echo "create-user: non-numeric CONTAINER_UID/CONTAINER_GID" >&2
+    exit 1
+    ;;
+esac
+case $CONTAINER_HOME in
+"" | [!/]* | *[!a-zA-Z0-9._/-]* | */../* | */.. | ../* | ..)
+    echo "create-user: unsafe CONTAINER_HOME: $CONTAINER_HOME" >&2
+    exit 1
+    ;;
+esac
+
+# Test hook: validate and stop, never touching /etc (ops.rs tests).
+[ "${DISTRO_VALIDATE_ONLY:-0}" = 1 ] && exit 0
+
 # has_field FILE FIELD VALUE
 has_field() {
     [ -f "$1" ] && cut -d: -f"$2" "$1" | grep -qx "$3"
