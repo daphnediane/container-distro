@@ -23,7 +23,13 @@ Write commit messages to `./next-commit.txt` in the repository root.
   - <Nested details>
 - <More work>
 
-generated-by: agent (models)
+Prompt: [summarized|verbatim]
+<the user request that motivated this commit>
+
+Followup: [summarized|verbatim]
+<later user prompts handled in this commit, if any>
+
+Co-Authored-By: <agent/model name> <noreply email>
 ```
 
 ## Format Rules
@@ -46,9 +52,17 @@ generated-by: agent (models)
 - Use nested bullets for implementation details
 - Keep bullets accurate to what actually changed
 
+### Prompts
+
+- After the bullets, include a `Prompt:` block recording the user request that motivated the commit
+- Note whether it is quoted verbatim or summarized
+- Add `Followup:` blocks for additional user prompts handled in the same commit
+- Keep these blocks between the bullets and the attribution trailer
+- Omit only when there was no user prompt (e.g., automated or self-directed work)
+
 ### AI Attribution
 
-- Always end with the AI attribution section
+- Always end with a `Co-Authored-By` trailer crediting the AI agent
 - Follow the format specified in `attribution.md`
 - Ask the user for the model name if unknown
 

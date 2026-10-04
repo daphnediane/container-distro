@@ -13,4 +13,4 @@ Prompt: [note if summarized or verbatim]
 Followup: [note if summarized or verbatim]
 [followup]
 
-generated-by: agent (models)
+Co-Authored-By: [agent/model name] <[noreply email]>

@@ -17,8 +17,9 @@
 !/.claude
 /.claude/*
 !/.claude/rules
-!/.claude/workflows
+!/.claude/skills
 !/.claude/settings.json
+!/.claude/.markdownlint.json
 
 # Keep devin rules, skills, and shared settings
 !/.devin

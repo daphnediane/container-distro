@@ -7,11 +7,15 @@ description: AI assistance attribution for commit messages
 
 ## Format
 
-All commit messages must include an AI assistance declaration at the end:
+All commit messages must end with a standard git `Co-Authored-By` trailer
+crediting the AI agent that assisted:
 
 ```
-generated-by: agent (models)
+Co-Authored-By: <agent/model name> <noreply email>
 ```
+
+Use the standard trailer spelling so GitHub and other tools parse it and
+surface the co-author credit.
 
 ## Getting the Model Name
 
@@ -19,14 +23,23 @@ generated-by: agent (models)
 2. **Otherwise:** Use the `ask_user_question` tool to ask the user which AI model is assisting them.
 3. **Last resort:** Leave `[model]` as a placeholder for the user to fill in.
 
+## Email Address
+
+- Use the agent's standard attribution email when it has one:
+  - Claude Code: `noreply@anthropic.com`
+  - Devin: `158243242+devin-ai-integration[bot]@users.noreply.github.com`
+- Otherwise use a `noreply`-style address associated with the agent's vendor,
+  or ask the user which address to use.
+
 ## Examples
 
 ```
-generated-by: devin-desktop (SWE-2)
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Co-Authored-By: Devin (SWE-2) <158243242+devin-ai-integration[bot]@users.noreply.github.com>
 ```
 
 ## Placement
 
-- Always place the attribution after a blank line following the main commit message content
-- This should be the final content in the commit message file
-- No additional content should follow the model name
+- Always place the trailer after a blank line following the main commit message content
+- This should be the final trailer in the commit message file
+- No additional content should follow the trailer
