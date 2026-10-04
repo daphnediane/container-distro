@@ -138,7 +138,7 @@ commits that follow this document.
 
 | #   | Severity   | Issue                                                                                                                                                  | Status                                                   |
 | --- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------- |
-| C1  | Medium     | `install-plugin` symlinks `bin/distro` → a user-writable binary; other users would exec it with their privileges                                       | Open — copy, don't link                                  |
+| C1  | Medium     | `install-plugin` symlinks `bin/distro` → a user-writable binary; other users would exec it with their privileges                                       | **Fixed** — binary is copied, not linked                 |
 | C2  | Medium     | `id`/`sysctl` spawned via `PATH` — hijack → code exec as user                                                                                          | Open — use libc calls; prefer `/usr/local/bin/container` |
 | C3  | Medium     | `CONTAINER_USER`/`UID`/`GID`/`HOME` interpolated unvalidated into root-run shell code (`create-user.sh` sudoers path traversal, passwd-line injection) | Open — validate in script and `host_user()`              |
 | C4  | Medium     | `-d`/`-s`/`-t`/`--unregister` values passed unvalidated → flag smuggling into inner `container` CLI (`cm -t=-f` → `machine stop -f`)                   | Open — `validate_name` before passthru                   |
@@ -187,8 +187,8 @@ Each open gap adds attack surface; flagging the traps up front.
 
 1. This document + README security section — **done**
 2. `--no-ssh` flag (T2's off-switch; small) — **open**
-3. C1–C5, C7, C9, C12 — **open**, each lands as its own commit and
-   flips its status in the findings table
+3. C1–C5, C7, C9, C12 — each lands as its own commit and flips its
+   status in the findings table (**done:** C1; open: C2–C5, C7, C9, C12)
 4. Non-loopback `--publish` warning — **open**
 5. `cargo audit`/`cargo deny` in CI; fuzz the `FromStr` parsers
    (`MountSpec`, `PublishSpec`, `PortMapping`) — **open**

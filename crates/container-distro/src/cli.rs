@@ -167,6 +167,10 @@ pub enum Command {
         /// Plugin directory (default: <container prefix>/libexec/container-plugins)
         #[arg(long)]
         plugin_dir: Option<PathBuf>,
+        /// Binary to install (default: the running executable). Use when
+        /// updating via an already-installed copy.
+        #[arg(long, value_name = "PATH")]
+        from: Option<PathBuf>,
     },
 
     /// Remove the `container distro` plugin registration

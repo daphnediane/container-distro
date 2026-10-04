@@ -151,7 +151,9 @@ fn run(cli: Cli) -> Result<()> {
         Command::Import { name, file, opts } => {
             println!("{}", ops::import(&name, &file, &opts)?);
         }
-        Command::InstallPlugin { plugin_dir } => plugin::install(plugin_dir)?,
+        Command::InstallPlugin { plugin_dir, from } => {
+            plugin::install(plugin_dir, from.as_deref())?;
+        }
         Command::UninstallPlugin { plugin_dir } => plugin::uninstall(plugin_dir)?,
     }
     Ok(())
