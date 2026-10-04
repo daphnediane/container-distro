@@ -438,7 +438,7 @@ fn create_container(spec: &DistroSpec) -> Result<()> {
 }
 
 /// Boot a distro and (idempotently) provision the user account.
-fn boot(name: &str) -> Result<()> {
+fn boot(name: &str, _lock: &DistroLock) -> Result<()> {
     refresh_assets()?;
     run_container_quiet(&["start", name])?;
     let init = format!("{INIT_DIR}/init");
@@ -447,11 +447,16 @@ fn boot(name: &str) -> Result<()> {
 }
 
 fn ensure_running(name: &str) -> Result<ContainerInfo> {
+    let lock = DistroLock::acquire(name)?;
+    // Recovery runs before `find` so it can rebuild a distro whose
+    // container was deleted by an interrupted `set`.
+    container::warn_unverified_version();
+    recover_interrupted(name, &lock)?;
     let info = find(name)?;
     if info.is_running() {
         return Ok(info);
     }
-    boot(name)?;
+    boot(name, &lock)?;
     find(name)
 }
 
@@ -468,13 +473,15 @@ fn no_default(
 
 fn create_from_spec(spec: &DistroSpec, no_boot: bool, set_default: bool) -> Result<String> {
     check_sources(spec)?;
+    let lock = DistroLock::acquire(&spec.name)?;
     let existing = distros()?;
     if existing.iter().any(|c| c.id() == spec.name) {
         bail!("distro `{}` already exists", spec.name);
     }
+    bail_if_staged(&spec.name)?;
     create_container(spec)?;
     if !no_boot {
-        boot(&spec.name)?;
+        boot(&spec.name, &lock)?;
     }
     // On request, or (like `container machine create`) when nothing is the
     // default. Otherwise leave it alone: under `cm`'s unified namespace a
@@ -539,6 +546,15 @@ pub fn summaries(running_only: bool) -> Result<Vec<DistroSummary>> {
         .filter(|c| !running_only || c.is_running())
         .map(|c| summarize(c, default.as_deref(), app_root.as_deref()))
         .collect();
+    if !running_only {
+        // Filesystems staged by `set`s whose distro is gone get
+        // pseudo-rows so they can be `set`/`rm`'d from the listing.
+        let orphans: Vec<DistroSummary> = staged_summaries()
+            .into_iter()
+            .filter(|s| !rows.iter().any(|r| r.id == s.id))
+            .collect();
+        rows.extend(orphans);
+    }
     rows.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(rows)
 }
@@ -556,8 +572,11 @@ pub fn inspect(names: &[String]) -> Result<()> {
 
 pub fn start(name: &str) -> Result<()> {
     ensure_started()?;
+    let lock = DistroLock::acquire(name)?;
+    container::warn_unverified_version();
+    recover_interrupted(name, &lock)?;
     find(name)?;
-    boot(name)?;
+    boot(name, &lock)?;
     Ok(())
 }
 
@@ -571,10 +590,32 @@ pub fn stop(names: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// Remove anything `set` staged for `name`; true when something was.
+fn cleanup_preserved(name: &str, _lock: &DistroLock) -> bool {
+    let mut removed = false;
+    for p in [preserved_rootfs(name), preserved_journal(name)]
+        .into_iter()
+        .flatten()
+    {
+        removed |= fs::remove_file(p).is_ok();
+    }
+    removed
+}
+
 pub fn delete(force: bool, names: &[String]) -> Result<()> {
     ensure_started()?;
     for n in names {
-        let info = find(n)?;
+        let lock = DistroLock::acquire(n)?;
+        let info = match find(n) {
+            Ok(info) => info,
+            // The container is gone but an interrupted `set` may still
+            // have its filesystem staged.
+            Err(_) if cleanup_preserved(n, &lock) => {
+                eprintln!("removed filesystem staged by an interrupted `set` for `{n}`");
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
         if info.is_running() {
             if !force {
                 bail!("distro `{n}` is running (stop it first or use --force)");
@@ -583,6 +624,7 @@ pub fn delete(force: bool, names: &[String]) -> Result<()> {
         }
         run_container_quiet(&["delete", n])?;
         remove_snapshot_images(n, None);
+        cleanup_preserved(n, &lock);
         if default_name().as_deref() == Some(n.as_str()) {
             write_default(None)?;
         }
@@ -700,6 +742,22 @@ fn remove_snapshot_images(name: &str, keep: Option<&str>) {
     }
 }
 
+/// Refuse to create `name` while an interrupted `set` has its
+/// filesystem staged — the user must choose to recover (`set`) or
+/// discard (`rm`) it first.
+fn bail_if_staged(name: &str) -> Result<()> {
+    if let Ok(staged) = preserved_rootfs(name)
+        && staged.exists()
+    {
+        bail!(
+            "an interrupted `set` left `{0}`'s filesystem staged — \
+             `container distro set {0}` recovers it, `container distro rm {0}` discards it",
+            name
+        );
+    }
+    Ok(())
+}
+
 /// The container's data directory under `container`'s appRoot.
 fn container_dir(id: &str) -> Result<PathBuf> {
     container::app_root()
@@ -707,19 +765,84 @@ fn container_dir(id: &str) -> Result<PathBuf> {
         .context("`container system status` did not report an appRoot")
 }
 
+/// Files staged by an in-flight `set`, inside our own state directory —
+/// the daemon owns `containers/`, so orphaned filesystems live where we
+/// can scan for them: `preserved/<name>.ext4` plus a
+/// `preserved/<name>.json` journal holding the distro's spec.
+fn preserved_dir() -> Result<PathBuf> {
+    Ok(state_dir()?.join("preserved"))
+}
+
+fn preserved_rootfs(name: &str) -> Result<PathBuf> {
+    Ok(preserved_dir()?.join(format!("{name}.ext4")))
+}
+
+fn preserved_journal(name: &str) -> Result<PathBuf> {
+    Ok(preserved_dir()?.join(format!("{name}.json")))
+}
+
+/// Proof the per-distro `flock` is held. Only obtainable via
+/// [`DistroLock::acquire`], so functions that must run under the lock
+/// take `&DistroLock` — the compiler enforces it. The lock releases
+/// when the wrapped descriptor closes (drop or process death), so an
+/// interrupted operation can never leave a stale lock.
+struct DistroLock(#[allow(dead_code)] fs::File);
+
+impl DistroLock {
+    /// An advisory `flock` on a per-distro lockfile, serializing `set`,
+    /// boot, and delete so concurrent invocations can't interleave a
+    /// recreate.
+    fn acquire(name: &str) -> Result<Self> {
+        let dir = state_dir()?.join("locks");
+        fs::create_dir_all(&dir)?;
+        let f = fs::File::create(dir.join(format!("{name}.lock")))?;
+        f.lock()?;
+        Ok(Self(f))
+    }
+}
+
+/// Whether another process holds `name`'s lock — a `set` recreate in
+/// flight. Probe-only: never creates a lockfile.
+fn distro_busy(name: &str) -> bool {
+    let Ok(path) = state_dir().map(|d| d.join("locks").join(format!("{name}.lock"))) else {
+        return false;
+    };
+    let Ok(f) = fs::File::options().read(true).write(true).open(path) else {
+        return false;
+    };
+    matches!(f.try_lock(), Err(fs::TryLockError::WouldBlock))
+}
+
 /// Move a container's `rootfs.ext4` out of its data directory so
-/// `container delete` doesn't take it with it. The file only exists once
-/// the container has booted — `None` for a never-started distro, whose
-/// filesystem is still the pristine image (and which `container export`
-/// cannot snapshot for the same reason).
-fn preserve_rootfs(id: &str) -> Result<Option<PathBuf>> {
-    let dir = container_dir(id)?;
-    let rootfs = dir.join("rootfs.ext4");
+/// `container delete` doesn't take it with it, and write a journal of
+/// `spec` next to it. The file only exists once the container has booted
+/// — `None` for a never-started distro, whose filesystem is still the
+/// pristine image (and which `container export` cannot snapshot for the
+/// same reason).
+///
+/// The journal is written before the move so a staged filesystem is
+/// never left without the spec needed to recreate its distro.
+fn preserve_rootfs(id: &str, spec: &DistroSpec, _lock: &DistroLock) -> Result<Option<PathBuf>> {
+    let rootfs = container_dir(id)?.join("rootfs.ext4");
     if !rootfs.exists() {
         return Ok(None);
     }
-    let staged = dir.with_file_name(format!("{id}.preserve.ext4"));
-    fs::rename(&rootfs, &staged)
+    let dir = preserved_dir()?;
+    fs::create_dir_all(&dir)?;
+    // Journal before the filesystem so a staged ext4 is never left
+    // without the spec needed to recreate its distro.
+    fs::write(dir.join(format!("{id}.json")), serde_json::to_vec(spec)?)?;
+    let staged = dir.join(format!("{id}.ext4"));
+    if staged.exists() {
+        bail!(
+            "an earlier interrupted `set` left {} — remove it (or `container distro rm {id}`) before running `set` again",
+            staged.display()
+        );
+    }
+    // Copy (`fs::copy` uses clonefile on APFS) rather than move: the
+    // original stays in place until `container delete`, so an
+    // interruption before then leaves a bootable container plus a spare.
+    fs::copy(&rootfs, &staged)
         .with_context(|| format!("failed to preserve {}", rootfs.display()))?;
     Ok(Some(staged))
 }
@@ -745,8 +868,9 @@ fn set_rootfs_override(dir: &Path, rootfs: &Path) -> Result<()> {
 }
 
 /// Move a preserved rootfs back into a freshly created container and mark
-/// it as the container's root filesystem.
-fn restore_rootfs(id: &str, staged: Option<&Path>) -> Result<()> {
+/// it as the container's root filesystem. Removes the `set` journal once
+/// the filesystem is safely back in place.
+fn restore_rootfs(id: &str, staged: Option<&Path>, _lock: &DistroLock) -> Result<()> {
     let Some(staged) = staged else { return Ok(()) };
     let dir = container_dir(id)?;
     let rootfs = dir.join("rootfs.ext4");
@@ -757,13 +881,107 @@ fn restore_rootfs(id: &str, staged: Option<&Path>) -> Result<()> {
             staged.display()
         )
     })?;
-    set_rootfs_override(&dir, &rootfs)
+    set_rootfs_override(&dir, &rootfs)?;
+    let _ = fs::remove_file(preserved_journal(id)?);
+    Ok(())
+}
+
+/// Complete an interrupted `set` for `name`, if one left a filesystem
+/// staged under `preserved/`. The container missing means the recreate
+/// never happened, so the journaled spec rebuilds it; the container
+/// present just needs its rootfs back — unless it already has one, in
+/// which case the staged copy is kept (it may be someone's only data).
+fn recover_interrupted(name: &str, _lock: &DistroLock) -> Result<()> {
+    let staged = preserved_rootfs(name)?;
+    let journal = preserved_journal(name)?;
+    if !staged.exists() {
+        // A journal with no filesystem is a stale marker.
+        let _ = fs::remove_file(&journal);
+        return Ok(());
+    }
+    eprintln!("warning: an interrupted `set` staged `{name}`'s filesystem — restoring it");
+    if !container_dir(name)?.is_dir() {
+        let spec: DistroSpec = serde_json::from_slice(&fs::read(&journal).with_context(|| {
+            format!(
+                "`{name}` was deleted by an interrupted `set` and its journal is unreadable; \
+                 its filesystem is preserved at {}",
+                staged.display()
+            )
+        })?)
+        .context("invalid `set` journal")?;
+        create_container(&spec)
+            .with_context(|| format!("failed to recreate `{name}` from its `set` journal"))?;
+    }
+    let dir = container_dir(name)?;
+    let rootfs = dir.join("rootfs.ext4");
+    if rootfs.exists() {
+        // The container already has a filesystem — the staged copy may
+        // be the only copy of someone's data, so keep it rather than
+        // silently discarding it.
+        eprintln!(
+            "warning: staged filesystem kept at {} (`container distro rm` clears it with the distro)",
+            staged.display()
+        );
+    } else {
+        fs::rename(&staged, &rootfs)
+            .with_context(|| format!("failed to restore {}", staged.display()))?;
+        set_rootfs_override(&dir, &rootfs)?;
+        let _ = fs::remove_file(&journal);
+    }
+    Ok(())
+}
+
+/// Pseudo-summaries for filesystems staged by `set`s whose distro no
+/// longer exists, so `list` can surface them instead of a stderr
+/// warning: "recreating" while another process holds the lock (a `set`
+/// is in flight), "interrupted" once it is orphaned and needs `set` or
+/// `rm` to resolve.
+fn staged_summaries() -> Vec<DistroSummary> {
+    let Ok(dir) = preserved_dir() else {
+        return Vec::new();
+    };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|e| {
+            e.file_name()
+                .to_str()
+                .and_then(|n| n.strip_suffix(".ext4"))
+                .map(String::from)
+        })
+        .map(|id| {
+            let status = if distro_busy(&id) {
+                "recreating"
+            } else {
+                "interrupted"
+            };
+            let image = preserved_journal(&id)
+                .ok()
+                .and_then(|p| fs::read(p).ok())
+                .and_then(|b| serde_json::from_slice::<DistroSpec>(&b).ok())
+                .map(|s| s.image);
+            DistroSummary {
+                id,
+                status: status.into(),
+                image,
+                ..Default::default()
+            }
+        })
+        .collect()
 }
 
 /// `container distro set`: recreate the container with new settings,
 /// keeping its filesystem.
 pub fn set(name: &str, changes: &SpecChanges) -> Result<()> {
     ensure_started()?;
+    // Serialize the whole preserve → recreate → restore sequence, then
+    // finish any previous `set` interrupted after its filesystem was
+    // staged — which may recreate `name` — before anything else.
+    let lock = DistroLock::acquire(name)?;
+    container::warn_unverified_version();
+    recover_interrupted(name, &lock)?;
     if changes.is_empty() {
         bail!("nothing to change (see `container distro set --help`)");
     }
@@ -779,28 +997,27 @@ pub fn set(name: &str, changes: &SpecChanges) -> Result<()> {
     // Carry the materialized rootfs over directly rather than
     // round-tripping it through `container export` and a snapshot image.
     // This reads and writes `container`'s internal storage layout.
-    container::warn_unverified_version();
-    let preserved = preserve_rootfs(info.id())?;
+    let preserved = preserve_rootfs(info.id(), &old, &lock)?;
     run_container_quiet(&["delete", name])?;
     if let Err(e) =
-        create_container(&new).and_then(|()| restore_rootfs(info.id(), preserved.as_deref()))
+        create_container(&new).and_then(|()| restore_rootfs(info.id(), preserved.as_deref(), &lock))
     {
         // Restore the old settings on the preserved rootfs; nothing is lost.
         let _ = run_container_quiet(&["delete", name]);
-        let rollback =
-            create_container(&old).and_then(|()| restore_rootfs(info.id(), preserved.as_deref()));
+        let rollback = create_container(&old)
+            .and_then(|()| restore_rootfs(info.id(), preserved.as_deref(), &lock));
         if let Err(r) = rollback {
             return Err(e.context(format!(
                 "failed to recreate the distro; restoring the previous settings failed too: {r:#}"
             )));
         }
         if was_running {
-            boot(name)?;
+            boot(name, &lock)?;
         }
         return Err(e.context("failed to recreate the distro; previous settings restored"));
     }
     if was_running {
-        boot(name)?;
+        boot(name, &lock)?;
     }
     remove_snapshot_images(name, Some(new.image.as_str()));
     Ok(())
@@ -847,6 +1064,10 @@ pub fn import(name: &str, file: &Path, opts: &CreateOptions) -> Result<String> {
     if distros()?.iter().any(|c| c.id() == name) {
         bail!("distro `{name}` already exists");
     }
+    // Checked here too so a staged distro doesn't orphan the image
+    // `load_rootfs` is about to create; `create_from_spec` re-checks
+    // under the distro lock.
+    bail_if_staged(name)?;
     let stdin_copy;
     let rootfs = if file == Path::new("-") {
         stdin_copy = oci::stdin_to_tempfile()?;

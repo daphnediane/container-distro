@@ -57,17 +57,28 @@ A distro is a regular container: our `assets/init` is the entrypoint
 or read-only paths, `--ssh`, the host account passed through
 `CONTAINER_*` env, and the home directory at the same path. `run` uses
 `container exec` (argv-exact). `set` recreates the container on the same
-filesystem: it moves `containers/<id>/rootfs.ext4` aside, recreates, moves
-it back, and sets `options.rootFsOverride` in `runtime-configuration.json`
-(the machine-apiserver mechanism) so `start` mounts it instead of copying
-the image snapshot — no tar/image round-trip. Only distro-owned containers
-are patched, never machine backing containers. A never-booted distro has no
-`rootfs.ext4`, so it is recreated from its recorded image (this is also
-why `container export` fails on never-booted distros and on machines,
-whose ext4 lives under `plugin-state/`). Code that reads or writes
-`appRoot` internals calls `warn_unverified_version()` — a once-per-process
-warning when the daemon isn't a `VERIFIED_CONTAINER_MINOR` release. Ports
-default to
+filesystem: it clones `containers/<id>/rootfs.ext4` (`fs::copy` → clonefile
+on APFS) to `state_dir()/preserved/<id>.ext4` with a `<id>.json` spec
+journal, recreates, moves it back, and sets `options.rootFsOverride` in
+`runtime-configuration.json` (the machine-apiserver mechanism) so `start`
+mounts it instead of copying the image snapshot — no tar/image round-trip.
+Only distro-owned containers are patched, never machine backing containers.
+A per-distro `flock` (`locks/<id>.lock`) serializes `set`/boot/`delete` —
+a racing second `set` just applies on top of the first. An interrupted
+`set` self-heals: `set`, `run`/`exec`, and `start` call
+`recover_interrupted` before touching the distro (recreate-from-journal
+when the container is gone, move-back when it exists, kept-with-warning
+when the container already has a rootfs); `list` shows orphans as
+`recreating` (lock held) or `interrupted` (lock free) pseudo-rows, `rm`
+deletes staged files even without a container, and `create`/`import`
+refuse while a staged fs exists for the name (`set` recovers, `rm`
+discards).
+A never-booted distro has no `rootfs.ext4`, so it is recreated from its
+recorded image (this is also why `container export` fails on never-booted
+distros and on machines, whose ext4 lives under `plugin-state/`). Code
+that reads or writes `appRoot` internals calls `warn_unverified_version()`
+— a once-per-process warning when the daemon isn't a
+`VERIFIED_CONTAINER_MINOR` release. Ports default to
 `127.0.0.1`. Only an explicit `--set-default` sets the default distro.
 
 `create`/`import` take `--restricted` (alias `--untrusted`): a defaults

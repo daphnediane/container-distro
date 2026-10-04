@@ -18,6 +18,7 @@ use anyhow::{Context, Result, bail};
 use clap::ValueEnum;
 use cm_core::container::ContainerInfo;
 use cm_core::naming::{label_key, label_lookup};
+use serde::{Deserialize, Serialize};
 
 /// Label suffixes (full keys come from [`cm_core::naming::label_key`]).
 ///
@@ -39,7 +40,8 @@ pub const LABEL_ADMIN: &str = "admin";
 pub const INIT_DIR: &str = "/sbin.distro";
 
 /// How the macOS home directory is shared into a distro.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum HomeMount {
     /// Read-write at the same path (the default, like `container machine`).
     #[default]
@@ -73,7 +75,8 @@ impl FromStr for HomeMount {
 }
 
 /// The host account mirrored into the guest.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HostUser {
     pub name: String,
     pub uid: u32,
@@ -104,7 +107,8 @@ impl HostUser {
 }
 
 /// An extra host directory shared into the guest: `SRC:DST[:ro|rw]`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MountSpec {
     pub source: String,
     pub target: String,
@@ -146,7 +150,8 @@ impl fmt::Display for MountSpec {
 ///
 /// Unlike `container`'s default, an omitted host IP means `127.0.0.1` —
 /// WSL forwards to localhost, not to every interface.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PublishSpec {
     pub host_ip: String,
     pub host_port: u16,
@@ -200,7 +205,8 @@ impl fmt::Display for PublishSpec {
 }
 
 /// Everything needed to (re)create a distro container.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DistroSpec {
     pub name: String,
     pub image: String,
@@ -655,6 +661,13 @@ mod tests {
             );
         }
         assert!(!spec().is_restricted());
+    }
+
+    #[test]
+    fn spec_serializes_for_the_set_journal() {
+        let s = spec();
+        let round: DistroSpec = serde_json::from_slice(&serde_json::to_vec(&s).unwrap()).unwrap();
+        assert_eq!(round, s);
     }
 
     #[test]
