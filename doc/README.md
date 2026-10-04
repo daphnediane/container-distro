@@ -8,6 +8,7 @@ they describe options and tradeoffs, not commitments.
 | [security](security.md)                               | Threat model, accepted trust trade-offs (each tagged for re-evaluation), the pre-1.0 finding list, and risks each gap-closing feature adds                                                                 |
 | [lower-level-integration](lower-level-integration.md) | Can `cm` bypass the `container` CLI — the XPC/Swift-library/Containerization/Virtualization.framework layers, Rust↔Swift interop options, and whether a Swift rewrite is worthwhile                        |
 | [remote-wsl-interop](remote-wsl-interop.md)           | What Remote-WSL-style editor extensions (`ms-vscode-remote.remote-wsl`, `codeium.windsurf-remote-wsl`, `open-remote-wsl`) need from `wsl.exe`, and the fake-shim / forked-resolver / sshd paths to interop |
+| [container-internals](container-internals.md)         | Inventory of every `container`/`container machine` internal we rely on — CLI/JSON surfaces, observed behaviors, the `appRoot` on-disk layout, plugin discovery — and what breaks if upstream changes them  |
 
 ## Feature gaps vs WSL
 
