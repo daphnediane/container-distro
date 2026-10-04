@@ -224,6 +224,28 @@ so `git`/`ssh` operations use your host agent with no extra setup.
 - No equivalents for `--update`, `--manage`, `--mount` (VHDs), or
   `wsl.conf`.
 
+## Security model
+
+A machine or distro is **not a sandbox** — treat code running inside as
+roughly equivalent to code run on the host as you:
+
+- `$HOME` is shared read-write at the same path by default. Guest code
+  can write `~/.zshrc`, `~/.ssh/authorized_keys`, `~/Library/LaunchAgents`
+  — host code execution on your next login. `--home-mount ro` or `none`
+  scopes this down; extra `--share` mounts extend it further.
+- `SSH_AUTH_SOCK` is forwarded in: guest code can't steal keys, but can
+  authenticate as you (push to your repos, ssh to your hosts).
+- The provisioned user has passwordless sudo and the guest runs with all
+  capabilities — guest user → guest root is instant (that's also the WSL
+  model; the VM boundary, not capabilities, is what contains the guest).
+- `container distro import` applies all of the above to an arbitrary
+  rootfs tar — importing an image is trusting it with your identity.
+- `--publish`/`--forward` bind `127.0.0.1` unless you say otherwise —
+  keep it that way unless you want LAN-reachable services.
+
+The full analysis, including which trade-offs are deliberate and tagged
+for re-evaluation, is in [doc/security.md](doc/security.md).
+
 ## Notes
 
 - `container machine run` requires a TTY for interactive shells (as does `cm`).
