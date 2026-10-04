@@ -10,7 +10,9 @@
 #   (no args)   boot: set the hostname, hand the SSH agent socket to the
 #               user, exec the image's init system — or idle as PID 1 if
 #               the image has none
-#   -u          first-time user setup (root only; idempotent)
+#   -u          user setup, run on every boot (root only; idempotent —
+#               create-user.sh provisions each user once via a per-user
+#               sentinel, preserving admin edits)
 #   -s          exec the user's shell (interactive, non-login)
 #   -l          exec the user's shell as a login shell
 #   -c CMD...   run CMD through the user's shell (`$SHELL -c "$*"`)

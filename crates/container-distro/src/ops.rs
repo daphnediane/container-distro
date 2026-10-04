@@ -731,50 +731,155 @@ mod tests {
         }
     }
 
-    /// Run create-user.sh in validate-only mode; exits 0 when the env
-    /// passes the sanitization block and never touches the filesystem.
-    fn validate_env(user: &str, uid: &str, gid: &str, home: &str) -> bool {
-        Command::new("sh")
-            .arg(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/assets/create-user.sh"
-            ))
-            .env("CONTAINER_USER", user)
-            .env("CONTAINER_UID", uid)
-            .env("CONTAINER_GID", gid)
-            .env("CONTAINER_HOME", home)
-            .env("DISTRO_VALIDATE_ONLY", "1")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .unwrap()
-            .success()
+    // ---- guest-side script tests: real `container run` invocations ----
+
+    /// libtest captures stdout/stderr and hides it for passing tests, so
+    /// a skip notice must bypass it — write straight to /dev/stderr.
+    fn skip(test: &str, why: &str) {
+        use std::io::Write;
+        if let Ok(mut e) = fs::OpenOptions::new().write(true).open("/dev/stderr") {
+            let _ = writeln!(e, "SKIP {test}: {why}");
+        }
     }
 
+    /// Image for the guest-script tests; `DISTRO_TEST_IMAGE` overrides
+    /// the default. None when the service or image isn't available —
+    /// tests then skip (with a notice) and never pull.
+    fn test_image(test: &str) -> Option<String> {
+        if !container::system_running() {
+            skip(test, "container service not running");
+            return None;
+        }
+        let image = env::var("DISTRO_TEST_IMAGE").unwrap_or_else(|_| "alpine:latest".to_string());
+        let out = container_cmd()
+            .args(["image", "list", "--quiet"])
+            .stderr(Stdio::null())
+            .output()
+            .ok()?;
+        let suffix = format!("/{image}");
+        if String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(str::trim)
+            .any(|r| r == image || r.ends_with(&suffix))
+        {
+            Some(image)
+        } else {
+            skip(
+                test,
+                &format!("image {image} not present (set DISTRO_TEST_IMAGE)"),
+            );
+            None
+        }
+    }
+
+    /// Run `sh ARGV...` in a throwaway container with the init assets
+    /// mounted read-only at their production `/sbin.distro` path.
+    /// Returns the exit code, or None if the run failed to start.
+    fn sh_in_guest(image: &str, argv: &[&str]) -> Option<i32> {
+        container_cmd()
+            .args([
+                "run",
+                "--rm",
+                "--entrypoint",
+                "/bin/sh",
+                "--volume",
+                &format!(
+                    "{}:{INIT_DIR}:ro",
+                    concat!(env!("CARGO_MANIFEST_DIR"), "/assets")
+                ),
+            ])
+            .arg(image)
+            .args(argv)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .status()
+            .ok()?
+            .code()
+    }
+
+    /// Every unsafe CONTAINER_* value must fail validation before any
+    /// /etc file is touched.
     #[test]
     fn create_user_rejects_unsafe_env() {
-        for bad in ["", "-evil", ".hidden", "bad name", "x:y", "a/b", "u$"] {
-            assert!(!validate_env(bad, "501", "20", "/home/x"), "user {bad}");
-        }
-        for bad in ["", "x", "1.2", "501;rm", " 1"] {
-            assert!(!validate_env("u", bad, "20", "/home/u"), "uid {bad}");
-            assert!(!validate_env("u", "501", bad, "/home/u"), "gid {bad}");
-        }
-        for bad in [
-            "",
-            "relative",
-            "/home/../etc",
-            "/x/..",
-            "../y",
-            "/a b",
-            "/x:y",
-        ] {
-            assert!(!validate_env("u", "501", "20", bad), "home {bad}");
-        }
-        // Legitimate shapes still pass.
-        assert!(validate_env("daphne", "501", "20", "/home/daphne"));
-        assert!(validate_env("a.b-c_d", "0", "0", "/home/a.b-c_d"));
+        let Some(image) = test_image("create_user_rejects_unsafe_env") else {
+            return;
+        };
+        let script = r#"
+            s=/sbin.distro/create-user.sh
+            rc=0
+            for u in '' '-evil' '.hidden' 'bad name' 'x:y' 'a/b' 'u$'; do
+                if CONTAINER_USER=$u CONTAINER_UID=501 CONTAINER_GID=20 \
+                   CONTAINER_HOME=/home/u $s 2>/dev/null; then rc=1; fi
+            done
+            for v in '' x '1.2' '501;rm' ' 1'; do
+                if CONTAINER_USER=u CONTAINER_UID=$v CONTAINER_GID=20 \
+                   CONTAINER_HOME=/home/u $s 2>/dev/null; then rc=1; fi
+                if CONTAINER_USER=u CONTAINER_UID=501 CONTAINER_GID=$v \
+                   CONTAINER_HOME=/home/u $s 2>/dev/null; then rc=1; fi
+            done
+            for h in '' relative '/home/../etc' '/x/..' '../y' '/a b' '/x:y'; do
+                if CONTAINER_USER=u CONTAINER_UID=501 CONTAINER_GID=20 \
+                   CONTAINER_HOME=$h $s 2>/dev/null; then rc=1; fi
+            done
+            exit $rc
+        "#;
+        assert_eq!(sh_in_guest(&image, &["-c", script]), Some(0));
+    }
+
+    /// Re-provisioning must converge: admin edits and deletions survive,
+    /// no duplicate entries appear, and a changed CONTAINER_USER still
+    /// gets provisioned.
+    #[test]
+    fn create_user_is_idempotent() {
+        let Some(image) = test_image("create_user_is_idempotent") else {
+            return;
+        };
+        let script = r#"
+            set -e
+            s=/sbin.distro/create-user.sh
+            mkdir -p /etc/doas.d
+            CONTAINER_USER=daphne CONTAINER_UID=501 CONTAINER_GID=20 \
+                CONTAINER_HOME=/home/daphne $s
+            grep -q '^daphne:x:501:20::/home/daphne:' /etc/passwd
+            grep -q '^daphne ' /etc/sudoers.d/daphne
+            grep -q 'daphne' /etc/doas.d/daphne.conf
+            [ -f /etc/.distro.user.daphne ]
+            # An admin removal survives re-provisioning (sentinel gate).
+            rm /etc/sudoers.d/daphne /etc/doas.d/daphne.conf
+            CONTAINER_USER=daphne CONTAINER_UID=501 CONTAINER_GID=20 \
+                CONTAINER_HOME=/home/daphne $s
+            [ ! -e /etc/sudoers.d/daphne ]
+            [ ! -e /etc/doas.d/daphne.conf ]
+            [ "$(grep -c '^daphne:' /etc/passwd)" = 1 ]
+            # A different CONTAINER_USER is still provisioned.
+            CONTAINER_USER=other CONTAINER_UID=502 CONTAINER_GID=20 \
+                CONTAINER_HOME=/home/other $s
+            grep -q '^other:x:502:20::/home/other:' /etc/passwd
+        "#;
+        assert_eq!(sh_in_guest(&image, &["-c", script]), Some(0));
+    }
+
+    /// `init -u` runs on every boot; create-user.sh idempotency means
+    /// admin edits persist while provisioning still converges.
+    #[test]
+    fn init_u_converges() {
+        let Some(image) = test_image("init_u_converges") else {
+            return;
+        };
+        let script = r#"
+            set -e
+            export CONTAINER_USER=daphne CONTAINER_UID=501 CONTAINER_GID=20 \
+                CONTAINER_HOME=/home/daphne
+            /sbin.distro/init -u
+            [ -f /etc/.distro.initialized ]
+            rm /etc/sudoers.d/daphne
+            /sbin.distro/init -u
+            [ ! -e /etc/sudoers.d/daphne ]
+            CONTAINER_USER=other CONTAINER_UID=502 /sbin.distro/init -u
+            grep -q '^other:' /etc/passwd
+            [ -f /etc/.distro.user.other ]
+        "#;
+        assert_eq!(sh_in_guest(&image, &["-c", script]), Some(0));
     }
 
     #[test]

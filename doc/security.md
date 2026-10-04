@@ -148,7 +148,7 @@ commits that follow this document.
 | C4  | Medium     | `-d`/`-s`/`-t`/`--unregister` values passed unvalidated → flag smuggling into inner `container` CLI (`cm -t=-f` → `machine stop -f`)                   | **Fixed** — `validate_name`/`validate_user` on all passthru args                                               |
 | C5  | Medium     | `distro export -o <dir>` hits upstream [#2325](https://github.com/apple/container/issues/2325) — `export` deletes an existing directory                | **Fixed** — existing dirs rejected in `ops::export`                                                            |
 | C6  | Low        | Distro silently shadows a machine of the same name on `-d` (warning only in `cm -l`)                                                                   | Open — warn at resolution time                                                                                 |
-| C7  | Low        | `init -u` re-provisions on every boot: sudoers re-added, owner can't lock down their distro                                                            | Open — honor `/etc/.distro.initialized`                                                                        |
+| C7  | Low        | `init -u` re-provisions on every boot: sudoers re-added, owner can't lock down their distro                                                            | **Fixed** — per-user `/etc/.distro.user.*` sentinel; admin edits preserved                                     |
 | C8  | Low        | Idle-PID1 loop doesn't reap zombies                                                                                                                    | Open — `CHLD` trap or `wait`-all loop                                                                          |
 | C9  | Low        | Forwarder: unbounded thread per connection, no timeouts                                                                                                | Open — connection cap                                                                                          |
 | C10 | Low        | `--automount` mounts every `/Volumes/*` rw (DMGs, USB, network shares); lowercase/`→`- collisions produce duplicate targets                            | Open — opt-in, document                                                                                        |
@@ -192,7 +192,7 @@ Each open gap adds attack surface; flagging the traps up front.
 1. This document + README security section — **done**
 2. `--no-ssh` flag (T2's off-switch; small) — **open**
 3. C1–C5, C7, C9, C12 — each lands as its own commit and flips its
-   status in the findings table (**done:** C1–C5; open: C7, C9, C12)
+   status in the findings table (**done:** C1–C5, C7; open: C9, C12)
 4. Non-loopback `--publish` warning — **open**
 5. `cargo audit`/`cargo deny` in CI; fuzz the `FromStr` parsers
    (`MountSpec`, `PublishSpec`, `PortMapping`) — **open**

@@ -7,7 +7,12 @@
 # /etc/skel, with passwordless sudo (and doas, if present).
 #
 # Edits /etc/passwd, /etc/group and /etc/shadow directly so it works on
-# images without useradd/adduser. Safe to run more than once.
+# images without useradd/adduser. Provisions each user once: the
+# /etc/.distro.user.<name> sentinel means later `init -u` runs are
+# no-ops, so admin edits — sudoers removal, shell changes, even
+# deleting the account — are never reverted. Remove the sentinel to
+# force re-provisioning. A changed CONTAINER_USER has its own sentinel
+# and is still provisioned.
 
 set -e
 
@@ -36,8 +41,11 @@ case $CONTAINER_HOME in
     ;;
 esac
 
-# Test hook: validate and stop, never touching /etc (ops.rs tests).
-[ "${DISTRO_VALIDATE_ONLY:-0}" = 1 ] && exit 0
+# The per-user sentinel is the provisioned marker; checks below only
+# guard partial re-runs after a mid-provision failure.
+safe_user=$(echo "$CONTAINER_USER" | tr '.' '_')
+sentinel=/etc/.distro.user.$safe_user
+[ -f "$sentinel" ] && exit 0
 
 # has_field FILE FIELD VALUE
 has_field() {
@@ -71,12 +79,20 @@ if [ ! -d "$CONTAINER_HOME" ]; then
     chown -R "$CONTAINER_UID:$CONTAINER_GID" "$CONTAINER_HOME"
 fi
 
+# Privilege files are only created when absent, so a forced
+# re-provision (sentinel removed) doesn't clobber admin edits either.
 mkdir -p /etc/sudoers.d
-sudoers=/etc/sudoers.d/$(echo "$CONTAINER_USER" | tr '.' '_')
-echo "$CONTAINER_USER ALL=(ALL) NOPASSWD:ALL" >"$sudoers"
-chmod 440 "$sudoers"
+sudoers=/etc/sudoers.d/$safe_user
+if [ ! -e "$sudoers" ]; then
+    echo "$CONTAINER_USER ALL=(ALL) NOPASSWD:ALL" >"$sudoers"
+    chmod 440 "$sudoers"
+fi
 
 if [ -d /etc/doas.d ] || command -v doas >/dev/null 2>&1; then
     mkdir -p /etc/doas.d
-    echo "permit nopass $CONTAINER_USER" >/etc/doas.d/container-distro.conf
+    doas=/etc/doas.d/$safe_user.conf
+    [ -e "$doas" ] || echo "permit nopass $CONTAINER_USER" >"$doas"
 fi
+
+# Written last: a failed provision retries on the next boot.
+echo "$CONTAINER_USER:$CONTAINER_UID:$CONTAINER_GID" >"$sentinel"
