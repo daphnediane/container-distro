@@ -102,7 +102,12 @@ distros.
 `container machine` mounts macOS `$HOME` via virtiofs at the **same
 path**; nothing outside `$HOME` is shared (container 1.5.0;
 apple/container#1805, #2278). Distros add arbitrary `-v SRC:DST[:ro]`
-mounts and `--automount` (`/Volumes/<X>` → `/mnt/<x>`).
+mounts and `--automount` (`/Volumes/<X>` → `/mnt/<x>`, skipping
+hidden/`com.apple.*`/unreadable volumes — e.g. TM local snapshots and
+TCC-protected backup destinations, which VZ refuses to share).
+Automounts are resolved once at `create`, not live: later-attached
+volumes need `set --add-volume`, and an ejected volume fails `start`
+(`path does not exist`) until dropped with `set --rm-volume`.
 
 ## Verify
 

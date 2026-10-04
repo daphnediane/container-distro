@@ -79,7 +79,11 @@ pub struct CreateOptions {
     #[arg(short = 'v', long = "volume", value_name = "SRC:DST[:ro]")]
     pub volumes: Vec<MountSpec>,
 
-    /// Share every /Volumes/<name> at /mnt/<name> (like WSL's /mnt/<drive>)
+    /// Share every /Volumes/<name> at /mnt/<name> (like WSL's
+    /// /mnt/<drive>); hidden, Apple-private (com.apple.*), and
+    /// unreadable volumes are skipped. The list is resolved once here —
+    /// volumes attached later need `set --add-volume`, and an ejected
+    /// volume will fail `start` until removed with `set --rm-volume`
     #[arg(long)]
     pub automount: bool,
 
@@ -370,6 +374,21 @@ fn build_spec(name: String, image: String, opts: &CreateOptions) -> Result<Distr
         let mut taken: std::collections::HashSet<String> =
             mounts.iter().map(|x| x.target.clone()).collect();
         for m in automounts(&entries) {
+            // VZ rejects shares the virtiofs helper can't enumerate
+            // (TCC/SIP-protected volumes like Time Machine destinations)
+            // with "directory sharing device configuration is invalid";
+            // probe readability so one bad volume can't sink the boot.
+            // `.next()` is needed — readdir errors surface lazily.
+            if fs::read_dir(&m.source)
+                .and_then(|mut d| d.next().transpose())
+                .is_err()
+            {
+                eprintln!(
+                    "container-distro: skipping automount {}: not readable on the host",
+                    m.source
+                );
+                continue;
+            }
             if !taken.insert(m.target.clone()) {
                 eprintln!(
                     "container-distro: skipping automount {}: {} is already a mount target",

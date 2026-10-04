@@ -118,5 +118,15 @@ user correctly from a plain `container create`. Distros are tracked by
 label, not by `machine list`; `cm` merges both. Mounts are virtiofs, so
 they keep the host volume's case sensitivity and uid mapping.
 
+Caveat: `--automount` snapshots `/Volumes` at create time — the mounts
+are baked into the distro spec, not resolved live. Volumes attached
+after create never appear (`set --add-volume` adds one explicitly), an
+ejected volume makes `start` fail (`path does not exist`) until
+`set --rm-volume` drops it, and Apple-private/unreadable volumes
+(`com.apple.TimeMachine.localsnapshots`, TCC-protected Time Machine
+destinations) are skipped because VZ refuses to share them. WSL's
+drvfs handles hot-plug natively; matching that would need a guest-side
+mounter or a `start`-time re-resolve.
+
 Still worth supporting #1805/#2278 upstream so plain machines get it
 too; then distros remain useful for ports, `set`, and export/import.

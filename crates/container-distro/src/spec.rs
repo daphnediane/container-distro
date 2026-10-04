@@ -519,15 +519,24 @@ impl SpecChanges {
 /// Map `/Volumes` entries to `/mnt/<name>` mounts (WSL's `/mnt/<drive>`).
 ///
 /// `entries` are `(name, is_symlink)` pairs; symlinks (the boot volume's
-/// `Macintosh HD -> /`) are skipped. Names keep their case — the
-/// filesystem may be case-sensitive — with spaces turned into `-`.
+/// `Macintosh HD -> /`) are skipped, as are hidden names
+/// (`.timemachine`) and `com.apple.*` — Apple-private mounts like the
+/// Time Machine local-snapshots hierarchy, which Virtualization.framework
+/// refuses to share (VZErrorDomain 2 / EPERM). Names keep their case —
+/// the filesystem may be case-sensitive — with spaces turned into `-`.
 /// When two volumes map to the same target (`My Photos` and
 /// `My-Photos`), the alphabetically first wins and the rest are skipped
 /// with a warning.
+///
+/// This is a pure name mapping; callers should also drop volumes whose
+/// roots can't be enumerated on the host (e.g. TCC-protected Time
+/// Machine destinations) — VZ refuses to share them.
 pub fn automounts(entries: &[(String, bool)]) -> Vec<MountSpec> {
     let mut names: Vec<&str> = entries
         .iter()
-        .filter(|(name, is_link)| !is_link && !name.starts_with('.'))
+        .filter(|(name, is_link)| {
+            !is_link && !name.starts_with('.') && !name.starts_with("com.apple.")
+        })
         .map(|(name, _)| name.as_str())
         .collect();
     names.sort_unstable();
@@ -808,6 +817,8 @@ mod tests {
             ("CaseSens".to_string(), false),
             ("My Photos".to_string(), false),
             (".timemachine".to_string(), false),
+            ("com.apple.TimeMachine.localsnapshots".to_string(), false),
+            ("com.apple.os.update-ABCD".to_string(), false),
         ];
         let m = automounts(&entries);
         assert_eq!(

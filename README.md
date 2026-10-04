@@ -102,14 +102,14 @@ machine:
 
 On top of that:
 
-| Feature                | How                                                                                               |
-| ---------------------- | ------------------------------------------------------------------------------------------------- |
-| Mounts outside `$HOME` | `-v /Volumes/Code:/mnt/code[:ro]`; `--automount` maps every `/Volumes/<X>` to `/mnt/<x>`          |
-| Published ports        | `-p 3000`, `-p 8080:80`, `-p 0.0.0.0:8080:80/udp` (host IP defaults to `127.0.0.1`)               |
-| Change settings later  | `container distro set NAME --cpus 4 --add-volume … --publish …` (recreates, keeps the filesystem) |
-| Export / import        | `container distro export NAME -o f.tar`, `container distro import NAME f.tar[.gz]`                |
-| Exact argv             | `run` uses `container exec`, so arguments are never re-split                                      |
-| Restricted mode        | `--restricted` (`--untrusted`): no mounts, no network, no agent, no sudo — see below              |
+| Feature                | How                                                                                                                                                                                                                                                     |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Mounts outside `$HOME` | `-v /Volumes/Code:/mnt/code[:ro]`; `--automount` maps each `/Volumes/<X>` to `/mnt/<x>` (skips hidden, `com.apple.*`, and unreadable volumes; resolved once at create — later-attached volumes need `set --add-volume`, ejected ones `set --rm-volume`) |
+| Published ports        | `-p 3000`, `-p 8080:80`, `-p 0.0.0.0:8080:80/udp` (host IP defaults to `127.0.0.1`)                                                                                                                                                                     |
+| Change settings later  | `container distro set NAME --cpus 4 --add-volume … --publish …` (recreates, keeps the filesystem)                                                                                                                                                       |
+| Export / import        | `container distro export NAME -o f.tar`, `container distro import NAME f.tar[.gz]`                                                                                                                                                                      |
+| Exact argv             | `run` uses `container exec`, so arguments are never re-split                                                                                                                                                                                            |
+| Restricted mode        | `--restricted` (`--untrusted`): no mounts, no network, no agent, no sudo — see below                                                                                                                                                                    |
 
 `cm` sees distros and machines as one set of WSL distributions:
 `cm -d NAME` resolves a distro first, then a machine. A default distro
@@ -139,7 +139,7 @@ no SSH-agent forwarding (`--no-ssh`), and no sudo/doas grant
 It is a **defaults preset, not a sandbox**: explicit flags still apply
 (`--restricted -v /dir:/dir` shares one directory back), `container
 distro set` can reopen any hole, and you can always `run --root` or
-`exec` as `0:0` — the guest is still *your* session. Inside the guest
+`exec` as `0:0` — the guest is still _your_ session. Inside the guest
 the account is still provisioned as you (name/uid/gid), and the container
 keeps `--cap-add ALL`; what changes is that nothing of yours is
 reachable and no privilege-granting code is even mounted. See
