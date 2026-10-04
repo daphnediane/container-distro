@@ -219,6 +219,8 @@ so `git`/`ssh` operations use your host agent with no extra setup.
 - `cm --export`/`--import` are not implemented: machine export is
   blocked upstream (see [doc/gaps/export-import.md](doc/gaps/export-import.md)).
   Distros support it via `container distro export`/`import`.
+- No GUI app support (WSLg's X11/Wayland) — see
+  [doc/gaps/gui-apps.md](doc/gaps/gui-apps.md) for what it would take.
 - No equivalents for `--update`, `--manage`, `--mount` (VHDs), or
   `wsl.conf`.
 

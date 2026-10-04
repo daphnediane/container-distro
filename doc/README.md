@@ -24,6 +24,7 @@ that would fix it:
 | [Subprocess overhead / JSON scraping](gaps/subprocess-overhead.md)  | L2 if it ever hurts                      |
 | [Service startup / `--shutdown` semantics](gaps/service-startup.md) | L0 — "stop what we started"              |
 | [`machine run` exec stdio loss](gaps/exec-stdio.md)                 | L0 `-i` + quoting done; race upstream    |
+| [GUI apps (X11/Wayland, WSLg)](gaps/gui-apps.md)                    | L0 — host X server + env plumbing        |
 
 Upstream references:
 
