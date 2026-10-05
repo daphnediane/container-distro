@@ -171,6 +171,14 @@ fn run(cli: Cli) -> Result<()> {
         Command::Import { name, file, opts } => {
             println!("{}", ops::import(&name, &file, &opts)?);
         }
+        Command::Migrate {
+            name,
+            target_name,
+            keep,
+            opts,
+        } => {
+            println!("{}", ops::migrate(&name, target_name, keep, &opts)?);
+        }
         Command::InstallPlugin { plugin_dir, from } => {
             plugin::install(plugin_dir, from.as_deref())?;
         }

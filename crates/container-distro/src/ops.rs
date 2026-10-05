@@ -16,8 +16,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use cm_core::container::{
-    self, ContainerInfo, Machine, container_cmd, default_machine_name, ensure_started,
-    validate_name,
+    self, ContainerInfo, Machine, MachineDetail, container_cmd, default_machine_name,
+    ensure_started, validate_name,
 };
 use cm_core::naming::{label_lookup, state_dir};
 use cm_core::oci;
@@ -359,8 +359,10 @@ pub fn resolve(name: Option<String>) -> Result<String> {
     )
 }
 
-fn build_spec(name: String, image: String, opts: &CreateOptions) -> Result<DistroSpec> {
-    validate_name(&name)?;
+/// The mounts requested by create options: explicit `-v`s plus
+/// `--automount` resolutions (readable volumes only, no target
+/// collisions).
+fn resolve_mounts(opts: &CreateOptions) -> Result<Vec<MountSpec>> {
     let mut mounts = opts.volumes.clone();
     if opts.automount {
         let entries: Vec<(String, bool)> = fs::read_dir("/Volumes")
@@ -399,6 +401,12 @@ fn build_spec(name: String, image: String, opts: &CreateOptions) -> Result<Distr
             mounts.push(m);
         }
     }
+    Ok(mounts)
+}
+
+fn build_spec(name: String, image: String, opts: &CreateOptions) -> Result<DistroSpec> {
+    validate_name(&name)?;
+    let mounts = resolve_mounts(opts)?;
     let (def_cpus, def_mem) = default_resources();
     // --restricted is a defaults preset; explicit flags still apply.
     let r = opts.restricted;
@@ -761,7 +769,7 @@ fn remove_snapshot_images(name: &str, keep: Option<&str>) {
     }
 }
 
-/// Refuse to create `name` while an interrupted `set` has its
+/// Refuse to create `name` while an interrupted `set`/`migrate` has its
 /// filesystem staged — the user must choose to recover (`set`) or
 /// discard (`rm`) it first.
 fn bail_if_staged(name: &str) -> Result<()> {
@@ -769,7 +777,7 @@ fn bail_if_staged(name: &str) -> Result<()> {
         && staged.exists()
     {
         bail!(
-            "an interrupted `set` left `{0}`'s filesystem staged — \
+            "an interrupted `set`/`migrate` left `{0}`'s filesystem staged — \
              `container distro set {0}` recovers it, `container distro rm {0}` discards it",
             name
         );
@@ -832,38 +840,42 @@ fn distro_busy(name: &str) -> bool {
     matches!(f.try_lock(), Err(fs::TryLockError::WouldBlock))
 }
 
+/// Journal `spec` and clone `src` (a container's or machine's ext4
+/// rootfs) into `preserved/`, for a later [`restore_rootfs`] to move
+/// into a fresh container.
+///
+/// The journal is written before the filesystem so a staged filesystem
+/// is never left without the spec needed to recreate its distro.
+fn stage_rootfs(id: &str, spec: &DistroSpec, src: &Path, _lock: &DistroLock) -> Result<PathBuf> {
+    let dir = preserved_dir()?;
+    fs::create_dir_all(&dir)?;
+    fs::write(dir.join(format!("{id}.json")), serde_json::to_vec(spec)?)?;
+    let staged = dir.join(format!("{id}.ext4"));
+    if staged.exists() {
+        bail!(
+            "an earlier interrupted operation left {} — remove it (or `container distro rm {id}`) before retrying",
+            staged.display()
+        );
+    }
+    // Copy (`fs::copy` uses clonefile on APFS) rather than move: the
+    // original stays in place, so an interruption leaves a bootable
+    // source plus a spare.
+    fs::copy(src, &staged).with_context(|| format!("failed to preserve {}", src.display()))?;
+    Ok(staged)
+}
+
 /// Move a container's `rootfs.ext4` out of its data directory so
 /// `container delete` doesn't take it with it, and write a journal of
 /// `spec` next to it. The file only exists once the container has booted
 /// — `None` for a never-started distro, whose filesystem is still the
 /// pristine image (and which `container export` cannot snapshot for the
 /// same reason).
-///
-/// The journal is written before the move so a staged filesystem is
-/// never left without the spec needed to recreate its distro.
-fn preserve_rootfs(id: &str, spec: &DistroSpec, _lock: &DistroLock) -> Result<Option<PathBuf>> {
+fn preserve_rootfs(id: &str, spec: &DistroSpec, lock: &DistroLock) -> Result<Option<PathBuf>> {
     let rootfs = container_dir(id)?.join("rootfs.ext4");
     if !rootfs.exists() {
         return Ok(None);
     }
-    let dir = preserved_dir()?;
-    fs::create_dir_all(&dir)?;
-    // Journal before the filesystem so a staged ext4 is never left
-    // without the spec needed to recreate its distro.
-    fs::write(dir.join(format!("{id}.json")), serde_json::to_vec(spec)?)?;
-    let staged = dir.join(format!("{id}.ext4"));
-    if staged.exists() {
-        bail!(
-            "an earlier interrupted `set` left {} — remove it (or `container distro rm {id}`) before running `set` again",
-            staged.display()
-        );
-    }
-    // Copy (`fs::copy` uses clonefile on APFS) rather than move: the
-    // original stays in place until `container delete`, so an
-    // interruption before then leaves a bootable container plus a spare.
-    fs::copy(&rootfs, &staged)
-        .with_context(|| format!("failed to preserve {}", rootfs.display()))?;
-    Ok(Some(staged))
+    stage_rootfs(id, spec, &rootfs, lock).map(Some)
 }
 
 /// Mark `rootfs` as the container's root filesystem via `rootFsOverride`
@@ -918,7 +930,9 @@ fn recover_interrupted(name: &str, _lock: &DistroLock) -> Result<()> {
         let _ = fs::remove_file(&journal);
         return Ok(());
     }
-    eprintln!("warning: an interrupted `set` staged `{name}`'s filesystem — restoring it");
+    eprintln!(
+        "warning: an interrupted `set`/`migrate` staged `{name}`'s filesystem — restoring it"
+    );
     if !container_dir(name)?.is_dir() {
         let spec: DistroSpec = serde_json::from_slice(&fs::read(&journal).with_context(|| {
             format!(
@@ -1098,6 +1112,225 @@ pub fn import(name: &str, file: &Path, opts: &CreateOptions) -> Result<String> {
     oci::load_rootfs(rootfs, &reference)?;
     let spec = build_spec(name.to_string(), reference, opts)?;
     create_from_spec(&spec, opts.no_boot, opts.set_default)
+}
+
+/// Migrate a `container machine` into a distro, carrying its root
+/// filesystem across with it. Unless `keep`, the machine is removed
+/// once the distro exists. `target` renames the result. Returns the
+/// distro's name.
+///
+/// (The reverse — distro → machine — is planned as a separate
+/// subcommand.)
+pub fn migrate(
+    machine: &str,
+    target: Option<String>,
+    keep: bool,
+    opts: &CreateOptions,
+) -> Result<String> {
+    ensure_started()?;
+    if !container::list_machines()?.iter().any(|m| m.id == machine) {
+        bail!("no machine named `{machine}`");
+    }
+    let target = target.unwrap_or_else(|| machine.to_string());
+    migrate_to_distro(machine, &target, keep, opts)
+}
+
+/// A distro spec reproducing a machine: its image, resources, home
+/// mount, and provisioned account, with `opts` overrides on top
+/// (`--restricted` remains a defaults preset, like at `create`).
+fn spec_from_machine(name: &str, m: &MachineDetail, opts: &CreateOptions) -> Result<DistroSpec> {
+    let r = opts.restricted;
+    let admin = if opts.sudo {
+        true
+    } else if opts.no_sudo {
+        false
+    } else {
+        !r
+    };
+    let user = match &m.user_setup {
+        Some(u) => HostUser {
+            name: u.username.clone(),
+            uid: u.uid,
+            gid: u.gid,
+        },
+        None => host_user()?,
+    };
+    let home_mount = match opts.home_mount {
+        Some(h) => h,
+        None if r => HomeMount::None,
+        None => m.home_mount.as_deref().unwrap_or("rw").parse()?,
+    };
+    let image = m
+        .image
+        .as_ref()
+        .map(|i| i.reference.clone())
+        .with_context(|| "machine has no image reference".to_string())?;
+    Ok(DistroSpec {
+        name: name.to_string(),
+        image,
+        cpus: opts.cpus.or(m.cpus),
+        memory: opts
+            .memory
+            .clone()
+            .or_else(|| m.memory.map(|b| format!("{}M", b / (1024 * 1024)))),
+        home_mount,
+        mounts: resolve_mounts(opts)?,
+        publish: opts.publish.clone(),
+        network: opts
+            .network
+            .clone()
+            .or_else(|| r.then(|| "none".to_string())),
+        ssh: if opts.ssh {
+            true
+        } else if opts.no_ssh {
+            false
+        } else {
+            !r
+        },
+        admin,
+        admin_grant: admin,
+        user,
+    })
+}
+
+/// The machine plugin's per-machine state directory.
+fn machine_state_dir(name: &str) -> Result<PathBuf> {
+    Ok(container::app_root()
+        .context("`container system status` did not report an appRoot")?
+        .join("plugin-state/machine-apiserver/machines")
+        .join(name))
+}
+
+/// The `source` of a `rootfs.json`-shaped mount record.
+fn rootfs_source(json: &str) -> Option<PathBuf> {
+    serde_json::from_str::<serde_json::Value>(json)
+        .ok()?
+        .get("source")?
+        .as_str()
+        .map(PathBuf::from)
+}
+
+/// A machine's ext4 rootfs: what its backing container mounts when
+/// there is one (a machine gets a backing container only once booted),
+/// else the path the machine plugin state records. `None` means no
+/// materialized rootfs — unusual, and treated like a never-booted
+/// distro's missing rootfs: the target starts from the image.
+fn machine_rootfs(m: &MachineDetail) -> Result<Option<PathBuf>> {
+    let app =
+        container::app_root().context("`container system status` did not report an appRoot")?;
+    if let Some(cid) = &m.container_id
+        && let Some(src) = fs::read_to_string(
+            app.join("containers")
+                .join(cid)
+                .join("runtime-configuration.json"),
+        )
+        .ok()
+        .and_then(|s| {
+            serde_json::from_str::<serde_json::Value>(&s)
+                .ok()
+                .and_then(|v| {
+                    v.pointer("/options/rootFsOverride/source")
+                        .and_then(|s| s.as_str())
+                        .map(PathBuf::from)
+                })
+        })
+        && src.is_file()
+    {
+        return Ok(Some(src));
+    }
+    let dir = machine_state_dir(&m.id)?;
+    if let Some(src) = fs::read_to_string(dir.join("rootfs.json"))
+        .ok()
+        .and_then(|s| rootfs_source(&s))
+        && src.is_file()
+    {
+        return Ok(Some(src));
+    }
+    let ext4 = dir.join("rootfs.ext4");
+    Ok(ext4.is_file().then_some(ext4))
+}
+
+/// Boot a machine (`machine run` is the boot primitive; there is no
+/// `machine start`).
+fn boot_machine(name: &str) -> Result<()> {
+    run_container_quiet(&["machine", "run", "-i", "-n", name, "--", "true"])
+        .with_context(|| format!("failed to boot machine `{name}`"))
+}
+
+/// Machine → distro: clone the machine's rootfs into a new distro
+/// container through the same `preserved/` staging `set` uses, so an
+/// interruption is finished by the usual recovery path.
+fn migrate_to_distro(
+    machine: &str,
+    name: &str,
+    keep: bool,
+    opts: &CreateOptions,
+) -> Result<String> {
+    validate_name(name)?;
+    // Fail fast, before the machine is stopped or its disk cloned.
+    bail_if_staged(name)?;
+    if distros()?.iter().any(|c| c.id() == name) {
+        bail!("distro `{name}` already exists");
+    }
+    let detail = container::inspect_machine(machine)?;
+    let spec = spec_from_machine(name, &detail, opts)?;
+    check_sources(&spec)?;
+    let was_running = detail.is_running();
+    if was_running {
+        run_container_quiet(&["machine", "stop", machine])?;
+    }
+    let lock = DistroLock::acquire(name)?;
+    container::warn_unverified_version();
+    let staged = match machine_rootfs(&detail)? {
+        Some(src) => Some(stage_rootfs(name, &spec, &src, &lock)?),
+        None => {
+            eprintln!(
+                "container-distro: machine `{machine}` has no rootfs to carry — the distro starts from its image"
+            );
+            None
+        }
+    };
+    if let Err(e) =
+        create_container(&spec).and_then(|()| restore_rootfs(name, staged.as_deref(), &lock))
+    {
+        let _ = run_container_quiet(&["delete", name]);
+        cleanup_preserved(name, &lock);
+        if was_running {
+            let _ = boot_machine(machine);
+        }
+        return Err(e);
+    }
+    if !opts.no_boot
+        && let Err(e) = boot(name, &lock)
+    {
+        return Err(e.context(format!(
+            "distro `{name}` holds the migrated filesystem but failed to boot; machine `{machine}` left stopped"
+        )));
+    }
+    if !keep {
+        if let Err(e) = run_container_quiet(&["machine", "rm", machine]) {
+            eprintln!("container-distro: migrated, but removing machine `{machine}` failed: {e:#}");
+        }
+    } else {
+        if name == machine {
+            eprintln!(
+                "container-distro: `{name}` is now both a machine and a distro; `cm` resolves it to the distro"
+            );
+        }
+        if was_running {
+            let _ = boot_machine(machine);
+        }
+    }
+    if opts.set_default
+        || no_default(
+            default_name().as_deref(),
+            &distros()?,
+            &container::list_machines().unwrap_or_default(),
+        )
+    {
+        write_default(Some(name))?;
+    }
+    Ok(name.to_string())
 }
 
 #[cfg(test)]
@@ -1386,5 +1619,77 @@ mod tests {
         assert!(no_default(Some("gone"), &d, &[]));
         assert!(!no_default(Some("gone"), &d, &[machine("m", true)]));
         assert!(!no_default(None, &[], &[machine("m", true)]));
+    }
+
+    // ---- migrate ----
+
+    fn detail_json() -> MachineDetail {
+        serde_json::from_str(
+            r#"{"id":"m","status":"stopped","cpus":4,"memory":4294967296,
+                "homeMount":"ro","containerId":"m-1a2b3c",
+                "userSetup":{"uid":501,"gid":20,"username":"dp"},
+                "image":{"reference":"docker.io/library/alpine:latest"},
+                "platform":{"os":"linux","architecture":"arm64"}}"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn machine_detail_parses_resources() {
+        let d = detail_json();
+        assert_eq!(d.cpus, Some(4));
+        assert_eq!(d.memory, Some(4294967296));
+    }
+
+    #[test]
+    fn spec_from_machine_carries_settings() {
+        let spec = spec_from_machine("d1", &detail_json(), &CreateOptions::default()).unwrap();
+        assert_eq!(spec.name, "d1");
+        assert_eq!(spec.image, "docker.io/library/alpine:latest");
+        assert_eq!(spec.cpus, Some(4));
+        assert_eq!(spec.memory.as_deref(), Some("4096M"));
+        assert_eq!(spec.home_mount, HomeMount::Ro);
+        assert_eq!(
+            spec.user,
+            HostUser {
+                name: "dp".into(),
+                uid: 501,
+                gid: 20
+            }
+        );
+        assert!(spec.ssh && spec.admin && spec.admin_grant);
+        assert!(!spec.is_restricted());
+    }
+
+    #[test]
+    fn spec_from_machine_honors_overrides() {
+        let opts = CreateOptions {
+            cpus: Some(2),
+            memory: Some("1G".into()),
+            home_mount: Some(HomeMount::None),
+            restricted: true,
+            ..CreateOptions::default()
+        };
+        let spec = spec_from_machine("d1", &detail_json(), &opts).unwrap();
+        assert_eq!(spec.cpus, Some(2));
+        assert_eq!(spec.memory.as_deref(), Some("1G"));
+        assert_eq!(spec.home_mount, HomeMount::None);
+        // --restricted still defaults network/ssh/admin.
+        assert_eq!(spec.network.as_deref(), Some("none"));
+        assert!(!spec.ssh && !spec.admin);
+    }
+
+    #[test]
+    fn rootfs_source_parses_mount_record() {
+        let json = r#"{"options":[],"destination":"/","type":{"block":{"format":"ext4"}},
+            "source":"/x/plugin-state/machine-apiserver/machines/m/rootfs.ext4"}"#;
+        assert_eq!(
+            rootfs_source(json),
+            Some(PathBuf::from(
+                "/x/plugin-state/machine-apiserver/machines/m/rootfs.ext4"
+            ))
+        );
+        assert_eq!(rootfs_source("not json"), None);
+        assert_eq!(rootfs_source("{}"), None);
     }
 }

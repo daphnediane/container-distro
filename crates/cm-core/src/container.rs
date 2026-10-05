@@ -56,6 +56,11 @@ pub struct MachineDetail {
     pub platform: Option<Platform>,
     #[serde(default)]
     pub image: Option<ImageInfo>,
+    #[serde(default)]
+    pub cpus: Option<u64>,
+    /// Bytes.
+    #[serde(default)]
+    pub memory: Option<u64>,
 }
 
 impl MachineDetail {

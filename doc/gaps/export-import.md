@@ -86,6 +86,12 @@ warranted, with the repro above.
   source rather than hard-coding it.
 - **Upstream fix.** Once export honors the rootfs mount source, plain
   `container export` is the whole implementation.
+- **Shipped for migration, not export.** `container distro migrate`
+  clones the machine's `rootfs.ext4` straight into a distro (the
+  `rootfs.json`/`rootFsOverride` source path, clonefile — same
+  mechanism as `distro set`), sidestepping the export bug for the
+  machine → distro case. Export-to-tar still needs the reader or the
+  upstream fix.
 
 ## Import: imported machines don't boot
 

@@ -39,7 +39,7 @@ Risk tiers used below:
 | `machine inspect [id]`                                | `inspect_machine*` (`cm -e`, `-l -v -v`)                         |
 | `machine run -i [-n -u -w -e …] [-- cmd]`             | interactive shells, `--` commands, `-e` fallback, boot probe     |
 | `machine create --name --cpus --memory --home-mount`  | `cm --install`                                                   |
-| `machine set-default` / `machine stop` / `machine rm` | `cm -s` / `-t` / `--unregister`                                  |
+| `machine set-default` / `machine stop` / `machine rm` | `cm -s` / `-t` / `--unregister`, `distro migrate`                |
 | `create` (many flags — see spec.rs `create_args`)     | distro create/set/import                                         |
 | `start` / `stop` / `delete`                           | distro boot/stop/rm/`set`                                        |
 | `exec -i [-t] --user --env --workdir ID cmd…`         | `cm -e` on machines, all distro `run`, `init -u` provisioning    |
@@ -89,7 +89,13 @@ missing ones fall back to defaults.
   pre-joined string (C12).
 - `machine run` **boots a stopped machine** — we use
   `machine run -- true` as the boot primitive before `exec` or IP
-  lookup.
+  lookup. The first `machine run` after `machine create` can fail with
+  "Operation not supported by device" (observed 1.5.0, possibly related
+  to #2024); a retry succeeds — worth retrying once in boot paths.
+- **A machine's backing container only exists after first boot** —
+  `machine create` writes the plugin-state dir (including a
+  materialized `rootfs.ext4`) but `machine inspect` reports no
+  `containerId` until the machine has run.
 - With no `-n`, `machine run`/`inspect` target the **default machine**.
 - **`exec -w` silently creates missing directories** in the guest —
   `machine_workdir` therefore only ever returns paths guaranteed to
@@ -172,9 +178,15 @@ with `warn_unverified_version()`.
 - **Machine rootfses live elsewhere**: a machine's backing container
   points its rootfs mount at
   `plugin-state/machine-apiserver/machines/<name>/rootfs.ext4` — the
-  reason `container export` can't snapshot machines. We never write to
-  machine backing containers; the path matters only as prior art for
-  `rootFsOverride` (and if a host-side ext4 export workaround lands).
+  reason `container export` can't snapshot machines. The machine's
+  plugin-state dir also holds `rootfs.json` (the same mount record,
+  `source` → the ext4 path) and `config.json` (the create config).
+  `distro migrate` reads these to find the filesystem it clones into
+  the new distro — it prefers the backing container's
+  `rootFsOverride.source` when the machine has been booted (a
+  never-booted machine has no backing container at all), then falls
+  back to `rootfs.json`'s `source`, then the conventional path. We
+  never write to machine plugin state or machine backing containers.
 - `rootfs.ext4` is **sparse** — allocated blocks (`st_blocks * 512`)
   are what `machine list` reports as DISK and what `distro list` reports
   (`container_disk_usage`).
@@ -243,7 +255,9 @@ process on stderr when `server.version` isn't a verified release.
 3. `runtime-configuration.json` still exists and `options.rootFsOverride`
    still drives which block file is mounted (diff a machine's file —
    its override still points into `plugin-state/`).
-4. `machine inspect` still reports `containerId` + `userSetup`.
+4. `machine inspect` still reports `containerId` + `userSetup`, and the
+   machine plugin-state layout (`machines/<name>/rootfs.json`'s
+   `source`, `rootfs.ext4`) that `distro migrate` reads.
 5. `container exec -w` still auto-creates missing dirs (else
    `machine_workdir` needs a re-think).
 6. `machine run` argv handling — if #1954 is fixed, the

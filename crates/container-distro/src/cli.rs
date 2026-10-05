@@ -178,6 +178,23 @@ pub enum Command {
         opts: CreateOptions,
     },
 
+    /// Migrate a `container machine` into a distro, carrying its root
+    /// filesystem across; the machine is removed unless `--keep`
+    Migrate {
+        /// Machine to migrate
+        name: String,
+        /// Name for the distro (default: the same name)
+        #[arg(short = 'n', long)]
+        target_name: Option<String>,
+        /// Keep the machine instead of removing it
+        #[arg(long)]
+        keep: bool,
+        /// Options for the new distro — extra mounts, published ports,
+        /// and resource/home-mount overrides to the machine's settings
+        #[command(flatten)]
+        opts: CreateOptions,
+    },
+
     /// Register as a `container` CLI plugin so `container distro` works
     InstallPlugin {
         /// Plugin directory (default: <container prefix>/libexec/container-plugins)
