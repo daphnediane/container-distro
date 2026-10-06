@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use container_distro::ops::CreateOptions;
-use container_distro::spec::{HomeMount, MountSpec, PublishSpec};
+use container_distro::spec::{Automount, HomeMount, MountSpec, PublishSpec};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -140,6 +140,15 @@ pub enum Command {
         /// inside the guest)
         #[arg(long)]
         no_sudo: bool,
+        /// Auto-manage /Volumes mounts at /mnt/<name>, rescanning now and
+        /// at each start; `--automount ro` mounts read-only
+        #[arg(long, value_enum, num_args = 0..=1, require_equals = true,
+              default_missing_value = "rw", value_name = "rw|ro|none",
+              conflicts_with = "no_automount")]
+        automount: Option<Automount>,
+        /// Stop auto-managing /Volumes mounts (removes the automounts)
+        #[arg(long)]
+        no_automount: bool,
         /// Add (or replace, by DST) a mount: SRC:DST[:ro]
         #[arg(long = "add-volume", value_name = "SRC:DST[:ro]")]
         add_volumes: Vec<MountSpec>,

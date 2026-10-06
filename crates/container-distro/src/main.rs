@@ -18,7 +18,7 @@ use clap::{CommandFactory, Parser};
 use cm_core::table::{columns, human_bytes, local_datetime};
 use container_distro::ops::{self, DistroSummary, RunOpts};
 use container_distro::plugin;
-use container_distro::spec::SpecChanges;
+use container_distro::spec::{Automount, SpecChanges};
 
 use cli::{Cli, Command, Format};
 
@@ -175,6 +175,8 @@ fn run(cli: Cli) -> Result<()> {
             no_ssh,
             sudo,
             no_sudo,
+            automount,
+            no_automount,
             add_volumes,
             rm_volumes,
             publish,
@@ -200,6 +202,7 @@ fn run(cli: Cli) -> Result<()> {
                 } else {
                     None
                 },
+                automount: automount.or(no_automount.then_some(Automount::None)),
                 add_mounts: add_volumes,
                 remove_mounts: rm_volumes,
                 add_publish: publish,

@@ -12,9 +12,10 @@ source of truth. "Rung" references are the integration levels in
 - [x] **Non-loopback `--publish` warning** — warns on create/set, and a
       boot-time report lists each published listener
       ([security.md](security.md#risks-introduced-by-gap-closing-work))
-- [ ] **Automount refresh** — `--automount` resolves once at `create`;
-      an operator command to re-scan `/Volumes` (`set --automount`?)
-      would close the "attach volume → `set --add-volume`" chore
+- [x] **Automount refresh** — automounts carry a `rw|ro|none` mode
+      label and are reconciled on `set`
+      (`--automount[=MODE]`/`--no-automount`) and whenever a stopped
+      distro starts
 
 ## Machines (WSL parity, mostly upstream-blocked)
 

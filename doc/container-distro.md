@@ -39,25 +39,28 @@ once-per-process warning appears on unverified `container` releases.
 Create a distro from an image and boot it. Name defaults to a
 derivation from the image.
 
-| Option                 | Description                                                                                  |
-| ---------------------- | -------------------------------------------------------------------------------------------- |
-| `-n, --name`           | Distro name (lowercase DNS-style)                                                            |
-| `-v, --volume`         | `SRC:DST[:ro]` share a host directory (repeatable)                                           |
-| `--automount`          | Share every `/Volumes/<X>` at `/mnt/<x>` (skips hidden/`com.apple.*`/unreadable volumes)     |
-| `-p, --publish`        | `[HOST_IP:]HOST[:GUEST][/tcp                                                                 | udp]` (repeatable; HOST_IP defaults to `127.0.0.1`) |
-| `--cpus`               | Virtual CPUs (default: half the host's)                                                      |
-| `--memory`             | e.g. `8G` (default: half the host's)                                                         |
-| `--home-mount`         | `rw` (default), `ro`, `none`                                                                 |
-| `--network`            | Container network name; `none` for no network                                                |
-| `--ssh` / `--no-ssh`   | Forward the host SSH agent socket (default: on)                                              |
-| `--sudo` / `--no-sudo` | Provision passwordless sudo/doas (default: on)                                               |
-| `--restricted`         | Defaults preset: `--home-mount none --network none --no-ssh --no-sudo` (alias `--untrusted`) |
-| `--no-boot`            | Create without booting                                                                       |
-| `--set-default`        | Make this the default distro (automatic when nothing is)                                     |
+| Option                 | Description                                                                                                                |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `-n, --name`           | Distro name (lowercase DNS-style)                                                                                          |
+| `-v, --volume`         | `SRC:DST[:ro]` share a host directory (repeatable)                                                                         |
+| `--automount[=MODE]`   | Share every `/Volumes/<X>` at `/mnt/<x>`; `MODE` is `rw` (default) or `ro` (skips hidden/`com.apple.*`/unreadable volumes) |
+| `-p, --publish`        | `[HOST_IP:]HOST[:GUEST][/tcp                                                                                               | udp]` (repeatable; HOST_IP defaults to `127.0.0.1`) |
+| `--cpus`               | Virtual CPUs (default: half the host's)                                                                                    |
+| `--memory`             | e.g. `8G` (default: half the host's)                                                                                       |
+| `--home-mount`         | `rw` (default), `ro`, `none`                                                                                               |
+| `--network`            | Container network name; `none` for no network                                                                              |
+| `--ssh` / `--no-ssh`   | Forward the host SSH agent socket (default: on)                                                                            |
+| `--sudo` / `--no-sudo` | Provision passwordless sudo/doas (default: on)                                                                             |
+| `--restricted`         | Defaults preset: `--home-mount none --network none --no-ssh --no-sudo` (alias `--untrusted`)                               |
+| `--no-boot`            | Create without booting                                                                                                     |
+| `--set-default`        | Make this the default distro (automatic when nothing is)                                                                   |
 
-`--automount` resolves once at create: volumes attached later need
-`set --add-volume`, and an ejected volume makes `start` fail
-(`path does not exist`) until dropped with `set --rm-volume`.
+`--automount` is live, not create-once: the `/Volumes` scan reruns on
+`set` and whenever a stopped distro starts, so attaching a volume adds
+it and ejecting one drops it — no `set --add-volume`/`--rm-volume`
+chore. Only the canonical `/Volumes/<X>` → `/mnt/<x>` pairs are
+managed; your own mounts (including differently-targeted `/Volumes`
+mounts) are never reconciled away.
 
 `--restricted` is a **defaults preset, not a sandbox**: explicit flags
 still apply, `set` can reopen anything, and `run --root`/`exec` as `0:0`
@@ -98,7 +101,9 @@ Dump the distros' `container` configuration as JSON.
 
 ### `start NAME` / `stop NAME...`
 
-Boot a stopped distro / stop running ones.
+Boot a stopped distro / stop running ones. For an `automount` distro,
+`start` (and the boot a `run` triggers) first reconciles `/Volumes`
+mounts with what's actually attached.
 
 ### `delete` (alias `rm`) `-f|--force NAME...`
 
@@ -120,6 +125,7 @@ round-trip. A per-distro lock serializes `set` against boot/delete.
 | `--network`          | Network name; `none` disables, `default` restores                                                              |
 | `--ssh`/`--no-ssh`   | SSH-agent forwarding                                                                                           |
 | `--sudo`/`--no-sudo` | Sudo/doas provisioning — `--no-sudo` stops *future* grants; sudoers/doas files already inside the guest remain |
+| `--automount[=rw     | ro                                                                                                             | none]`/`--no-automount` | Auto-manage `/Volumes` mounts at `/mnt/<name>`; enabling reconciles now and at each start, `none`/`--no-automount` removes them |
 | `--add-volume`       | `SRC:DST[:ro]` add or replace a mount by guest path                                                            |
 | `--rm-volume`        | `DST` remove the mount at that guest path                                                                      |
 | `--publish`          | Add a published port (replaces one on the same host port)                                                      |

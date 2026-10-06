@@ -42,6 +42,10 @@ pub const INIT_DIR: &str = "/sbin.distro";
 /// images `import` loads (alongside the `distro` label) so cleanup
 /// removes them by ownership, not by name prefix.
 pub const LABEL_IMPORTED_FROM: &str = "imported-from";
+/// Whether the distro auto-manages `/Volumes` mounts, and how:
+/// `rw`/`ro`/`none`. Not recoverable from `container inspect` — mounts
+/// and volumes look alike — so it persists as a label.
+pub const LABEL_AUTOMOUNT: &str = "automount";
 
 /// How the macOS home directory is shared into a distro.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
@@ -74,6 +78,52 @@ impl FromStr for HomeMount {
             "ro" => Ok(HomeMount::Ro),
             "none" => Ok(HomeMount::None),
             _ => bail!("invalid home mount `{s}` (expected rw, ro, or none)"),
+        }
+    }
+}
+
+/// How a distro auto-manages `/Volumes` mounts — the same value space
+/// as [`HomeMount`]. `Ro` mounts volumes read-only.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Automount {
+    /// Not managed; `/Volumes` mounts are ordinary user mounts.
+    #[default]
+    None,
+    /// Reconcile `/Volumes/<X>` → `/mnt/<x>` read-write.
+    Rw,
+    /// Reconcile `/Volumes/<X>` → `/mnt/<x>` read-only.
+    Ro,
+}
+
+impl Automount {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Automount::Rw => "rw",
+            Automount::Ro => "ro",
+            Automount::None => "none",
+        }
+    }
+
+    /// Whether `/Volumes` mounts are auto-managed (anything but `none`).
+    pub fn enabled(self) -> bool {
+        self != Automount::None
+    }
+
+    /// Whether automounts under this mode are read-only.
+    pub fn read_only(self) -> bool {
+        self == Automount::Ro
+    }
+}
+
+impl FromStr for Automount {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self> {
+        match s {
+            "rw" => Ok(Automount::Rw),
+            "ro" => Ok(Automount::Ro),
+            "none" => Ok(Automount::None),
+            _ => bail!("invalid automount mode `{s}` (expected rw, ro, or none)"),
         }
     }
 }
@@ -230,6 +280,11 @@ pub struct DistroSpec {
     pub memory: Option<String>,
     pub home_mount: HomeMount,
     pub mounts: Vec<MountSpec>,
+    /// Keep the canonical `/Volumes/<X>` → `/mnt/<x>` mounts in sync
+    /// with what's attached: reconciled on `set` and re-evaluated when
+    /// a stopped distro starts. `rw`/`ro` selects the mount mode.
+    #[serde(default)]
+    pub automount: Automount,
     pub publish: Vec<PublishSpec>,
     /// Network to attach (`None` = `container`'s default; `"none"` =
     /// no interfaces beyond loopback).
@@ -303,6 +358,10 @@ impl DistroSpec {
                 }
             ),
         );
+        push(
+            "--label",
+            format!("{}={}", label_key(LABEL_AUTOMOUNT), self.automount.as_str()),
+        );
         push("--entrypoint", format!("{INIT_DIR}/init"));
         push("--volume", format!("{assets_dir}:{INIT_DIR}:ro"));
         match self.home_mount {
@@ -369,6 +428,15 @@ impl DistroSpec {
         let admin_label = label_lookup(&cfg.labels, LABEL_ADMIN);
         let admin = admin_label.is_none_or(|s| s != "false");
         let admin_grant = admin_label.is_some_and(|s| s == "true");
+        // "true" is the pre-tri-state label form — treat it as `rw`.
+        let automount =
+            label_lookup(&cfg.labels, LABEL_AUTOMOUNT).map_or(Ok(Automount::None), |s| {
+                if s == "true" {
+                    Ok(Automount::Rw)
+                } else {
+                    s.parse()
+                }
+            })?;
         let mounts = cfg
             .mounts
             .iter()
@@ -415,6 +483,7 @@ impl DistroSpec {
                 .map(|b| format!("{}M", b / (1024 * 1024))),
             home_mount,
             mounts,
+            automount,
             publish,
             network,
             ssh: cfg.ssh,
@@ -453,12 +522,31 @@ impl DistroSpec {
     }
 }
 
+/// The canonical automount target for a `/Volumes` entry name:
+/// `/mnt/<name>` with spaces turned into `-` (WSL's `/mnt/<drive>`).
+fn automount_target(name: &str) -> String {
+    format!("/mnt/{}", name.replace(' ', "-"))
+}
+
+/// Whether `m` is a canonical automount: a `/Volumes/<X>` shared at
+/// [`automount_target`] — the shape [`automounts`] emits, in either
+/// mode. Only this shape is reconciled by `set --automount`; user
+/// mounts at other targets are left alone.
+pub fn is_automount(m: &MountSpec) -> bool {
+    m.source
+        .strip_prefix("/Volumes/")
+        .is_some_and(|n| !n.is_empty() && !n.contains('/') && m.target == automount_target(n))
+}
+
 /// Changes requested by `container distro set`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SpecChanges {
     pub cpus: Option<u64>,
     pub memory: Option<String>,
     pub home_mount: Option<HomeMount>,
+    /// Set the `/Volumes` automount mode (reconciled in `ops`, which
+    /// can scan the filesystem). `none` drops the automounts.
+    pub automount: Option<Automount>,
     /// Replace the network attachment (`none` disables, `default`
     /// restores the usual one).
     pub network: Option<String>,
@@ -491,6 +579,12 @@ impl SpecChanges {
         }
         if let Some(h) = self.home_mount {
             s.home_mount = h;
+        }
+        if let Some(v) = self.automount {
+            s.automount = v;
+            if !v.enabled() {
+                s.mounts.retain(|m| !is_automount(m));
+            }
         }
         if let Some(n) = &self.network {
             s.network = Some(n.clone());
@@ -546,7 +640,9 @@ impl SpecChanges {
 /// This is a pure name mapping; callers should also drop volumes whose
 /// roots can't be enumerated on the host (e.g. TCC-protected Time
 /// Machine destinations) — VZ refuses to share them.
-pub fn automounts(entries: &[(String, bool)]) -> Vec<MountSpec> {
+///
+/// `read_only` gives every mount `ro` (`automount ro`).
+pub fn automounts(entries: &[(String, bool)], read_only: bool) -> Vec<MountSpec> {
     let mut names: Vec<&str> = entries
         .iter()
         .filter(|(name, is_link)| {
@@ -558,7 +654,7 @@ pub fn automounts(entries: &[(String, bool)]) -> Vec<MountSpec> {
     let mut seen = std::collections::HashSet::new();
     let mut v = Vec::new();
     for name in names {
-        let target = format!("/mnt/{}", name.replace(' ', "-"));
+        let target = automount_target(name);
         if !seen.insert(target.clone()) {
             eprintln!("container-distro: skipping /Volumes/{name}: {target} already automounted");
             continue;
@@ -566,7 +662,7 @@ pub fn automounts(entries: &[(String, bool)]) -> Vec<MountSpec> {
         v.push(MountSpec {
             source: format!("/Volumes/{name}"),
             target,
-            read_only: false,
+            read_only,
         });
     }
     v.sort_by(|a, b| a.target.cmp(&b.target));
@@ -593,6 +689,7 @@ mod tests {
             memory: Some("4G".into()),
             home_mount: HomeMount::Ro,
             mounts: vec!["/Volumes/X:/mnt/x".parse().unwrap()],
+            automount: Automount::None,
             publish: vec!["8080:80".parse().unwrap()],
             network: None,
             ssh: true,
@@ -851,7 +948,7 @@ mod tests {
             ("com.apple.TimeMachine.localsnapshots".to_string(), false),
             ("com.apple.os.update-ABCD".to_string(), false),
         ];
-        let m = automounts(&entries);
+        let m = automounts(&entries, false);
         assert_eq!(
             m.iter().map(ToString::to_string).collect::<Vec<_>>(),
             [
@@ -859,6 +956,29 @@ mod tests {
                 "/Volumes/My Photos:/mnt/My-Photos"
             ]
         );
+        assert!(automounts(&entries, true).iter().all(|m| m.read_only));
+    }
+
+    #[test]
+    fn is_automount_matches_canonical_shape() {
+        for yes in [
+            "/Volumes/X:/mnt/X",
+            "/Volumes/My Photos:/mnt/My-Photos",
+            // `automount ro` emits ro mounts — still canonical
+            "/Volumes/X:/mnt/X:ro",
+        ] {
+            assert!(is_automount(&yes.parse().unwrap()), "{yes}");
+        }
+        for no in [
+            // different target or source — a user's mount
+            "/Volumes/X:/mnt/other",
+            "/Volumes/X:/data",
+            "/opt/x:/mnt/x",
+            // nested source isn't a top-level volume
+            "/Volumes/X/sub:/mnt/sub",
+        ] {
+            assert!(!is_automount(&no.parse().unwrap()), "{no}");
+        }
     }
 
     /// Colliding targets keep the alphabetically first volume and drop
@@ -870,7 +990,7 @@ mod tests {
             ("My Photos".to_string(), false),
             ("My  Photos".to_string(), false),
         ];
-        let m = automounts(&entries);
+        let m = automounts(&entries, false);
         // "My  Photos" → "My--Photos" is distinct; the other two collide
         // on /mnt/My-Photos and "My Photos" sorts before "My-Photos".
         assert_eq!(

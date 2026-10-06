@@ -24,8 +24,8 @@ use cm_core::oci;
 use serde::{Deserialize, Serialize};
 
 use crate::spec::{
-    DistroSpec, HomeMount, HostUser, INIT_DIR, LABEL_DISTRO, LABEL_HOME_MOUNT, LABEL_IMPORTED_FROM,
-    MountSpec, PublishSpec, SpecChanges, automounts,
+    Automount, DistroSpec, HomeMount, HostUser, INIT_DIR, LABEL_DISTRO, LABEL_HOME_MOUNT,
+    LABEL_IMPORTED_FROM, MountSpec, PublishSpec, SpecChanges, automounts,
 };
 
 /// One distro, as reported by [`summaries`] (and `list --format json`).
@@ -80,12 +80,13 @@ pub struct CreateOptions {
     pub volumes: Vec<MountSpec>,
 
     /// Share every /Volumes/<name> at /mnt/<name> (like WSL's
-    /// /mnt/<drive>); hidden, Apple-private (com.apple.*), and
-    /// unreadable volumes are skipped. The list is resolved once here —
-    /// volumes attached later need `set --add-volume`, and an ejected
-    /// volume will fail `start` until removed with `set --rm-volume`
-    #[arg(long)]
-    pub automount: bool,
+    /// /mnt/<drive>); `--automount ro` mounts read-only. Hidden,
+    /// Apple-private (com.apple.*), and unreadable volumes are skipped.
+    /// Re-resolved on `set` and when a stopped distro starts, so
+    /// attaching or ejecting a volume needs no manual fix-up
+    #[arg(long, value_enum, num_args = 0..=1, require_equals = true,
+          default_missing_value = "rw", value_name = "rw|ro|none")]
+    pub automount: Option<Automount>,
 
     /// Publish a port: [HOST_IP:]HOST_PORT[:GUEST_PORT][/PROTO]; HOST_IP
     /// defaults to 127.0.0.1 (repeatable)
@@ -359,47 +360,71 @@ pub fn resolve(name: Option<String>) -> Result<String> {
     )
 }
 
+/// The mounts `--automount <mode>` would add right now: every readable
+/// `/Volumes` entry at its canonical `/mnt` target, skipping targets
+/// already in `taken` (e.g. user mounts).
+fn scan_automounts(
+    mode: Automount,
+    taken: &std::collections::HashSet<String>,
+) -> Result<Vec<MountSpec>> {
+    let entries: Vec<(String, bool)> = fs::read_dir("/Volumes")
+        .context("failed to read /Volumes")?
+        .filter_map(|e| e.ok())
+        .map(|e| {
+            let is_link = e.file_type().is_ok_and(|t| t.is_symlink());
+            (e.file_name().to_string_lossy().into_owned(), is_link)
+        })
+        .collect();
+    let mut taken = taken.clone();
+    let mut mounts = Vec::new();
+    for m in automounts(&entries, mode.read_only()) {
+        // VZ rejects shares the virtiofs helper can't enumerate
+        // (TCC/SIP-protected volumes like Time Machine destinations)
+        // with "directory sharing device configuration is invalid";
+        // probe readability so one bad volume can't sink the boot.
+        // `.next()` is needed — readdir errors surface lazily.
+        if fs::read_dir(&m.source)
+            .and_then(|mut d| d.next().transpose())
+            .is_err()
+        {
+            eprintln!(
+                "container-distro: skipping automount {}: not readable on the host",
+                m.source
+            );
+            continue;
+        }
+        if !taken.insert(m.target.clone()) {
+            eprintln!(
+                "container-distro: skipping automount {}: {} is already a mount target",
+                m.source, m.target
+            );
+            continue;
+        }
+        mounts.push(m);
+    }
+    Ok(mounts)
+}
+
+/// Sync `spec`'s automounts with the currently attached `/Volumes`:
+/// canonical automounts are dropped and re-resolved; everything else —
+/// including a user's `ro` or differently-targeted `/Volumes` mount —
+/// is kept. Used by `set` and by start-time refresh.
+fn reconcile_automounts(spec: &mut DistroSpec) -> Result<()> {
+    spec.mounts.retain(|m| !crate::spec::is_automount(m));
+    let taken = spec.mounts.iter().map(|m| m.target.clone()).collect();
+    spec.mounts.extend(scan_automounts(spec.automount, &taken)?);
+    Ok(())
+}
+
 /// The mounts requested by create options: explicit `-v`s plus
 /// `--automount` resolutions (readable volumes only, no target
 /// collisions).
 fn resolve_mounts(opts: &CreateOptions) -> Result<Vec<MountSpec>> {
     let mut mounts = opts.volumes.clone();
-    if opts.automount {
-        let entries: Vec<(String, bool)> = fs::read_dir("/Volumes")
-            .context("failed to read /Volumes")?
-            .filter_map(|e| e.ok())
-            .map(|e| {
-                let is_link = e.file_type().is_ok_and(|t| t.is_symlink());
-                (e.file_name().to_string_lossy().into_owned(), is_link)
-            })
-            .collect();
-        let mut taken: std::collections::HashSet<String> =
-            mounts.iter().map(|x| x.target.clone()).collect();
-        for m in automounts(&entries) {
-            // VZ rejects shares the virtiofs helper can't enumerate
-            // (TCC/SIP-protected volumes like Time Machine destinations)
-            // with "directory sharing device configuration is invalid";
-            // probe readability so one bad volume can't sink the boot.
-            // `.next()` is needed — readdir errors surface lazily.
-            if fs::read_dir(&m.source)
-                .and_then(|mut d| d.next().transpose())
-                .is_err()
-            {
-                eprintln!(
-                    "container-distro: skipping automount {}: not readable on the host",
-                    m.source
-                );
-                continue;
-            }
-            if !taken.insert(m.target.clone()) {
-                eprintln!(
-                    "container-distro: skipping automount {}: {} is already a mount target",
-                    m.source, m.target
-                );
-                continue;
-            }
-            mounts.push(m);
-        }
+    let automount = opts.automount.unwrap_or_default();
+    if automount.enabled() {
+        let taken = mounts.iter().map(|x| x.target.clone()).collect();
+        mounts.extend(scan_automounts(automount, &taken)?);
     }
     Ok(mounts)
 }
@@ -426,6 +451,7 @@ fn build_spec(name: String, image: String, opts: &CreateOptions) -> Result<Distr
             .home_mount
             .unwrap_or(if r { HomeMount::None } else { HomeMount::Rw }),
         mounts,
+        automount: opts.automount.unwrap_or_default(),
         publish: opts.publish.clone(),
         network: opts
             .network
@@ -516,6 +542,7 @@ fn ensure_running(name: &str) -> Result<ContainerInfo> {
     if info.is_running() {
         return Ok(info);
     }
+    refresh_automounts(&info, &lock)?;
     boot(name, &lock)?;
     find(name)
 }
@@ -635,7 +662,10 @@ pub fn start(name: &str) -> Result<()> {
     let lock = DistroLock::acquire(name)?;
     container::warn_unverified_version();
     recover_interrupted(name, &lock)?;
-    find(name)?;
+    let info = find(name)?;
+    if !info.is_running() {
+        refresh_automounts(&info, &lock)?;
+    }
     boot(name, &lock)?;
     Ok(())
 }
@@ -1042,6 +1072,48 @@ fn staged_summaries() -> Vec<DistroSummary> {
         .collect()
 }
 
+/// Recreate `name`'s container with `new` settings, keeping its
+/// filesystem: the ext4 rootfs is cloned aside, the container deleted
+/// and recreated, then the filesystem moved back via `rootFsOverride`.
+/// A running distro is stopped first and rebooted. On failure the old
+/// settings are restored onto the preserved filesystem. Shared by `set`
+/// and the start-time automount refresh.
+fn recreate_locked(
+    name: &str,
+    old: &DistroSpec,
+    new: &DistroSpec,
+    was_running: bool,
+    lock: &DistroLock,
+) -> Result<()> {
+    if was_running {
+        run_container_quiet(&["stop", name])?;
+    }
+    let preserved = preserve_rootfs(name, old, lock)?;
+    run_container_quiet(&["delete", name])?;
+    if let Err(e) =
+        create_container(new).and_then(|()| restore_rootfs(name, preserved.as_deref(), lock))
+    {
+        // Restore the old settings on the preserved rootfs; nothing is lost.
+        let _ = run_container_quiet(&["delete", name]);
+        let rollback =
+            create_container(old).and_then(|()| restore_rootfs(name, preserved.as_deref(), lock));
+        if let Err(r) = rollback {
+            return Err(e.context(format!(
+                "failed to recreate the distro; restoring the previous settings failed too: {r:#}"
+            )));
+        }
+        if was_running {
+            boot(name, lock)?;
+        }
+        return Err(e.context("failed to recreate the distro; previous settings restored"));
+    }
+    if was_running {
+        boot(name, lock)?;
+    }
+    remove_snapshot_images(name, Some(new.image.as_str()));
+    Ok(())
+}
+
 /// `container distro set`: recreate the container with new settings,
 /// keeping its filesystem.
 pub fn set(name: &str, changes: &SpecChanges) -> Result<()> {
@@ -1057,41 +1129,39 @@ pub fn set(name: &str, changes: &SpecChanges) -> Result<()> {
     }
     let info = find(name)?;
     let old = DistroSpec::from_container(&info, &host_home()?)?;
-    let new = changes.apply(&old)?;
+    let mut new = changes.apply(&old)?;
     warn_public_publish(&changes.add_publish);
+    // An enabled automount is always reconciled, not just when
+    // `--automount` was passed — the recreate happens anyway.
+    if new.automount.enabled() {
+        reconcile_automounts(&mut new)?;
+    }
     check_sources(&new)?;
-    let was_running = info.is_running();
-    if was_running {
-        run_container_quiet(&["stop", name])?;
-    }
+    recreate_locked(name, &old, &new, info.is_running(), &lock)
+}
 
-    // Carry the materialized rootfs over directly rather than
-    // round-tripping it through `container export` and a snapshot image.
-    // This reads and writes `container`'s internal storage layout.
-    let preserved = preserve_rootfs(info.id(), &old, &lock)?;
-    run_container_quiet(&["delete", name])?;
-    if let Err(e) =
-        create_container(&new).and_then(|()| restore_rootfs(info.id(), preserved.as_deref(), &lock))
-    {
-        // Restore the old settings on the preserved rootfs; nothing is lost.
-        let _ = run_container_quiet(&["delete", name]);
-        let rollback = create_container(&old)
-            .and_then(|()| restore_rootfs(info.id(), preserved.as_deref(), &lock));
-        if let Err(r) = rollback {
-            return Err(e.context(format!(
-                "failed to recreate the distro; restoring the previous settings failed too: {r:#}"
-            )));
-        }
-        if was_running {
-            boot(name, &lock)?;
-        }
-        return Err(e.context("failed to recreate the distro; previous settings restored"));
+/// Re-resolve `info`'s automounts against the currently attached
+/// `/Volumes`, recreating the distro when they changed — an attached or
+/// ejected volume shouldn't need a manual `set` first. Only runs for
+/// stopped distros that opted in; no-op for anything else.
+fn refresh_automounts(info: &ContainerInfo, lock: &DistroLock) -> Result<()> {
+    let Ok(home) = host_home() else { return Ok(()) };
+    let Ok(spec) = DistroSpec::from_container(info, &home) else {
+        return Ok(());
+    };
+    if !spec.automount.enabled() {
+        return Ok(());
     }
-    if was_running {
-        boot(name, &lock)?;
+    let mut new = spec.clone();
+    reconcile_automounts(&mut new)?;
+    if new.mounts == spec.mounts {
+        return Ok(());
     }
-    remove_snapshot_images(name, Some(new.image.as_str()));
-    Ok(())
+    eprintln!(
+        "container-distro: refreshing `{}`'s automounts for the attached /Volumes",
+        spec.name
+    );
+    recreate_locked(&spec.name, &spec, &new, false, lock)
 }
 
 pub fn set_default(name: Option<&str>) -> Result<()> {
@@ -1226,6 +1296,7 @@ fn spec_from_machine(name: &str, m: &MachineDetail, opts: &CreateOptions) -> Res
             .or_else(|| m.memory.map(|b| format!("{}M", b / (1024 * 1024)))),
         home_mount,
         mounts: resolve_mounts(opts)?,
+        automount: opts.automount.unwrap_or_default(),
         publish: opts.publish.clone(),
         network: opts
             .network
