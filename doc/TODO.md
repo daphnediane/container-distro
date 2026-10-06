@@ -9,13 +9,6 @@ source of truth. "Rung" references are the integration levels in
 
 - [ ] **Distro → machine migration** — the reverse of `migrate`; planned
       as a separate subcommand (see `ops.rs::migrate` notes)
-- [x] **Non-loopback `--publish` warning** — warns on create/set, and a
-      boot-time report lists each published listener
-      ([security.md](security.md#risks-introduced-by-gap-closing-work))
-- [x] **Automount refresh** — automounts carry a `rw|ro|none` mode
-      label and are reconciled on `set`
-      (`--automount[=MODE]`/`--no-automount`) and whenever a stopped
-      distro starts
 
 ## Machines (WSL parity, mostly upstream-blocked)
 
@@ -66,16 +59,7 @@ From [security.md's checklist](security.md#pre-10-checklist):
 - [ ] `cargo audit` / `cargo deny` in CI; fuzz the `FromStr` parsers
       (`MountSpec`, `PublishSpec`, `PortMapping`)
 - [ ] Decide init-assets location vs. guest-writable shared home (T6)
-- [x] C8 — PID 1 zombie reaping in `assets/init` (low)
-- [x] C11 — `uninstall-plugin` TOCTOU / prefix cleanup (low)
-
 ## Docs & tooling
 
-- [x] Man pages — `cm --install-man`, `container-distro install-man`
-      (generated from the clap definitions, so they can't drift)
-- [x] Shell completions — `cm --install-completions`,
-      `container-distro install-completions` (bash/zsh/fish via
-      `clap_complete`, generated from the clap definitions like the
-      man pages)
 - [ ] Packages — no brew/nix/pkg installers; `cargo install` +
       `install-plugin` is the only path ([install](install.md))
