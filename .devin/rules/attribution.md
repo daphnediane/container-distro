@@ -43,3 +43,19 @@ Co-Authored-By: Devin (SWE-2) <158243242+devin-ai-integration[bot]@users.noreply
 - Always place the trailer after a blank line following the main commit message content
 - This should be the final trailer in the commit message file
 - No additional content should follow the trailer
+
+## GitHub Issues
+
+Any issue filed on this project by an AI agent must end with an
+attribution line identifying the agent and model, placed after the body
+content and separated by a horizontal rule:
+
+```
+---
+
+_Generated with [<agent name>](<agent URL>) (<model name>)._
+```
+
+Use the same agent/model identification as the commit trailer. This
+applies only to issues created on this repository — never file issues on
+upstream or third-party projects unless the user explicitly asks.
