@@ -2,16 +2,16 @@
 
 `container-distro` creates **distros**: long-lived, machine-like
 containers. A distro is a regular `container` container configured the
-way `container machine` configures a machine — your account provisioned
-inside, home shared at the same path, the image's init as PID 1 — plus
+way `container machine` configures a machine -- your account provisioned
+inside, home shared at the same path, the image's init as PID 1 -- plus
 what machines lack: mounts outside `$HOME`, published ports,
 export/import, and `set` for changing settings after creation.
 
 It runs two ways:
 
-- **`container distro <cmd>`** — once registered as a `container` CLI
+- **`container distro <cmd>`** -- once registered as a `container` CLI
   plugin (`install-plugin`)
-- **`container-distro <cmd>`** — standalone; identical interface. `cm`
+- **`container-distro <cmd>`** -- standalone; identical interface. `cm`
   links the same library, so `cm` distro features never need the plugin.
 
 ## What a distro is
@@ -19,8 +19,8 @@ It runs two ways:
 - your macOS account is provisioned inside (same name/uid/gid,
   passwordless sudo/doas), with `SSH_AUTH_SOCK` forwarded
 - `$HOME` is shared at the same path (`--home-mount rw|ro|none`)
-- the image's own init runs as PID 1 — or an idle PID 1 for images
-  without one — via our `assets/init` entrypoint (mounted read-only at
+- the image's own init runs as PID 1 -- or an idle PID 1 for images
+  without one -- via our `assets/init` entrypoint (mounted read-only at
   `/sbin.distro`)
 - `--cap-add ALL`, no masked or read-only paths, `--ssh`
 - a regular container otherwise: inspectable, works with `container ls`,
@@ -28,7 +28,7 @@ It runs two ways:
 
 Distros are tracked with `io.github.daphnediane.container-distro.*`
 labels and per-user state under `~/Library/Application
-Support/container-distro/` — see [naming.md](naming.md). The `container`
+Support/container-distro/` -- see [naming.md]. The `container`
 daemon is exercised through its CLI plus a few `appRoot` internals; a
 once-per-process warning appears on unverified `container` releases.
 
@@ -36,15 +36,15 @@ once-per-process warning appears on unverified `container` releases.
 
 ### `create [-n NAME] [OPTIONS] IMAGE`
 
-Create a distro from an image and boot it. Name defaults to a
-derivation from the image.
+Create a distro from an image and boot it. Name defaults to a derivation
+from the image.
 
 | Option                 | Description                                                                                                                |
 | ---------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | `-n, --name`           | Distro name (lowercase DNS-style)                                                                                          |
 | `-v, --volume`         | `SRC:DST[:ro]` share a host directory (repeatable)                                                                         |
 | `--automount[=MODE]`   | Share every `/Volumes/<X>` at `/mnt/<x>`; `MODE` is `rw` (default) or `ro` (skips hidden/`com.apple.*`/unreadable volumes) |
-| `-p, --publish`        | `[HOST_IP:]HOST[:GUEST][/tcp                                                                                               | udp]` (repeatable; HOST_IP defaults to `127.0.0.1`) |
+| `-p, --publish`        | `[HOST_IP:]HOST[:GUEST][/tcp\|udp]` (repeatable; HOST_IP defaults to `127.0.0.1`)                                          |
 | `--cpus`               | Virtual CPUs (default: half the host's)                                                                                    |
 | `--memory`             | e.g. `8G` (default: half the host's)                                                                                       |
 | `--home-mount`         | `rw` (default), `ro`, `none`                                                                                               |
@@ -57,19 +57,19 @@ derivation from the image.
 
 `--automount` is live, not create-once: the `/Volumes` scan reruns on
 `set` and whenever a stopped distro starts, so attaching a volume adds
-it and ejecting one drops it — no `set --add-volume`/`--rm-volume`
-chore. Only the canonical `/Volumes/<X>` → `/mnt/<x>` pairs are
-managed; your own mounts (including differently-targeted `/Volumes`
-mounts) are never reconciled away.
+it and ejecting one drops it -- no `set --add-volume`/`--rm-volume`
+chore. Only the canonical `/Volumes/<X>` → `/mnt/<x>` pairs are managed;
+your own mounts (including differently-targeted `/Volumes` mounts) are
+never reconciled away.
 
 `--restricted` is a **defaults preset, not a sandbox**: explicit flags
 still apply, `set` can reopen anything, and `run --root`/`exec` as `0:0`
-always work. See [security.md](security.md).
+always work. See security.md.
 
 ### `run [-n NAME] [OPTIONS] [-- CMD...]`
 
 Run a command or interactive shell in a distro, booting it if needed.
-Uses `container exec`, so argv is exact — nothing is re-split.
+Uses `container exec`, so argv is exact -- nothing is re-split.
 
 | Option          | Description                                                                       |
 | --------------- | --------------------------------------------------------------------------------- |
@@ -114,22 +114,22 @@ staged `set` state when the container itself is already gone.
 
 Change settings after creation. Recreates the container while keeping
 its filesystem: the ext4 rootfs is cloned to a staging area and the
-recreated container boots from it via `rootFsOverride` — no image
+recreated container boots from it via `rootFsOverride` -- no image
 round-trip. A per-distro lock serializes `set` against boot/delete.
 
-| Option               | Description                                                                                                    |
-| -------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `--cpus`             | Virtual CPUs                                                                                                   |
-| `--memory`           | e.g. `8G`                                                                                                      |
-| `--home-mount`       | `rw`/`ro`/`none`                                                                                               |
-| `--network`          | Network name; `none` disables, `default` restores                                                              |
-| `--ssh`/`--no-ssh`   | SSH-agent forwarding                                                                                           |
-| `--sudo`/`--no-sudo` | Sudo/doas provisioning — `--no-sudo` stops *future* grants; sudoers/doas files already inside the guest remain |
-| `--automount[=rw     | ro                                                                                                             | none]`/`--no-automount` | Auto-manage `/Volumes` mounts at `/mnt/<name>`; enabling reconciles now and at each start, `none`/`--no-automount` removes them |
-| `--add-volume`       | `SRC:DST[:ro]` add or replace a mount by guest path                                                            |
-| `--rm-volume`        | `DST` remove the mount at that guest path                                                                      |
-| `--publish`          | Add a published port (replaces one on the same host port)                                                      |
-| `--unpublish`        | `HOST_PORT` stop publishing that host port                                                                     |
+| Option                                        | Description                                                                                                                     |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `--cpus`                                      | Virtual CPUs                                                                                                                    |
+| `--memory`                                    | e.g. `8G`                                                                                                                       |
+| `--home-mount`                                | `rw`/`ro`/`none`                                                                                                                |
+| `--network`                                   | Network name; `none` disables, `default` restores                                                                               |
+| `--ssh`/`--no-ssh`                            | SSH-agent forwarding                                                                                                            |
+| `--sudo`/`--no-sudo`                          | Sudo/doas provisioning -- `--no-sudo` stops *future* grants; sudoers/doas files already inside the guest remain                 |
+| `--automount[=rw\|ro\|none]`/`--no-automount` | Auto-manage `/Volumes` mounts at `/mnt/<name>`; enabling reconciles now and at each start, `none`/`--no-automount` removes them |
+| `--add-volume`                                | `SRC:DST[:ro]` add or replace a mount by guest path                                                                             |
+| `--rm-volume`                                 | `DST` remove the mount at that guest path                                                                                       |
+| `--publish`                                   | Add a published port (replaces one on the same host port)                                                                       |
+| `--unpublish`                                 | `HOST_PORT` stop publishing that host port                                                                                      |
 
 A **never-booted** distro has no `rootfs.ext4` yet, so `set` recreates
 it from its recorded image instead.
@@ -144,19 +144,19 @@ resolved.
 
 ### `set-default [NAME] | --clear`
 
-Set the default distro — or unset it with `--clear`. The default distro
+Set the default distro -- or unset it with `--clear`. The default distro
 overrides the default machine in `cm`.
 
 ### `export NAME [-o FILE]`
 
-Write the distro's root filesystem as a tar (stdout by default).
-Fails on never-booted distros — there is no `rootfs.ext4` yet.
+Write the distro's root filesystem as a tar (stdout by default). Fails
+on never-booted distros -- there is no `rootfs.ext4` yet.
 
 ### `import NAME FILE [OPTIONS]`
 
 Create a distro from a rootfs `tar`/`tar.gz` (`-` = stdin); accepts all
 `create` options including `--restricted`. Importing an image is
-trusting it with your identity — see [security.md](security.md).
+trusting it with your identity -- see security.md.
 
 ### `migrate MACHINE [-n NAME] [--keep] [OPTIONS]`
 
@@ -164,8 +164,8 @@ Turn a `container machine` into a distro without an export/import
 round-trip: the machine's `rootfs.ext4` is staged through the same
 machinery as `set`, then recreated as a distro carrying the machine's
 cpus/memory/home-mount/user. The machine is removed unless `--keep`;
-accepts `create` options as overrides. Distro → machine is
-[planned](TODO.md#distros-container-distro) but not implemented.
+accepts `create` options as overrides. Distro → machine is [planned] but
+not implemented.
 
 ### `install-plugin [--plugin-dir DIR] [--from BIN]`
 
@@ -185,30 +185,28 @@ custom root.
 
 Write `container-distro(1)` plus one page per subcommand
 (`container-distro-create(1)`, …), generated from the CLI definition.
-Default location: `share/man/man1` of the binary's install prefix —
-`$CARGO_HOME/share/man/man1` after `cargo install`. See
-[install.md](install.md#man-pages).
+Default location: `share/man/man1` of the binary's install prefix --
+`$CARGO_HOME/share/man/man1` after `cargo install`. See [install.md].
 
 ### `uninstall-man [--dir DIR]`
 
 Remove the pages `install-man` wrote. Only files that still look like
-our generated pages are removed — a foreign or edited page of the same
+our generated pages are removed -- a foreign or edited page of the same
 name is left in place with a warning.
 
 ### `install-completions [--dir DIR]`
 
-Write bash, zsh, and fish completions for `container-distro`,
-generated from the CLI definition. The share root defaults to the
-binary's install prefix (`$CARGO_HOME/share` after `cargo install`);
-files land in `bash-completion/completions/`, `zsh/site-functions/`,
-and `fish/vendor_completions.d/`. See
-[install.md](install.md#shell-completions).
+Write bash, zsh, and fish completions for `container-distro`, generated
+from the CLI definition. The share root defaults to the binary's install
+prefix (`$CARGO_HOME/share` after `cargo install`); files land in
+`bash-completion/completions/`, `zsh/site-functions/`, and
+`fish/vendor_completions.d/`. See [install.md][install.md-2].
 
 ### `uninstall-completions [--dir DIR]`
 
 Remove the scripts `install-completions` wrote. Only files that still
-look like generated completions are removed — a foreign or edited
-file of the same name is left in place with a warning.
+look like generated completions are removed -- a foreign or edited file
+of the same name is left in place with a warning.
 
 ### `uninstall-plugin [--plugin-dir DIR]`
 
@@ -217,11 +215,16 @@ Remove the plugin registration (only if it was installed by
 
 ## Mount and publish spec syntax
 
-- **Mount**: `SRC:DST[:ro]` — absolute host path, absolute guest path,
+- **Mount**: `SRC:DST[:ro]` -- absolute host path, absolute guest path,
   optional `ro`.
-- **Publish**: `[HOST_IP:]HOST_PORT[:GUEST_PORT][/tcp|udp]` — `3000`,
+- **Publish**: `[HOST_IP:]HOST_PORT[:GUEST_PORT][/tcp|udp]` -- `3000`,
   `8080:80`, `0.0.0.0:8080:80/udp`. HOST_IP defaults to `127.0.0.1`;
   guest port defaults to the host port; protocol to `tcp`.
 
-Keep publishes on loopback unless you want LAN-reachable services — a
+Keep publishes on loopback unless you want LAN-reachable services -- a
 `0.0.0.0` bind changes exposure for *other* machines too.
+
+[install.md]: install.md#man-pages
+[install.md-2]: install.md#shell-completions
+[naming.md]: naming.md
+[planned]: TODO.md#distros-container-distro

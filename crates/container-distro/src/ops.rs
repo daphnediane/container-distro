@@ -1241,7 +1241,8 @@ pub fn import(name: &str, file: &Path, opts: &CreateOptions) -> Result<String> {
 /// distro's name.
 ///
 /// (The reverse — distro → machine — is planned as a separate
-/// subcommand.)
+/// subcommand; tracked in
+/// [#1](https://github.com/daphnediane/container-distro/issues/1).)
 pub fn migrate(
     machine: &str,
     target: Option<String>,

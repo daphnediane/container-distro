@@ -2,14 +2,14 @@
 
 The project is **`container-distro`**.
 
-This document lists every place a persistent name is used, so that
-any future rename is deliberate and complete, and it describes how
-existing installs would migrate.
+This document lists every place a persistent name is used, so that any
+future rename is deliberate and complete, and it describes how existing
+installs would migrate.
 
 ## Single source of truth
 
 Persistent, externally visible names come from
-[`crates/cm-core/src/naming.rs`](../crates/cm-core/src/naming.rs):
+[`crates/cm-core/src/naming.rs`]:
 
 | Constant                | Current value                            | Used for                                         |
 | ----------------------- | ---------------------------------------- | ------------------------------------------------ |
@@ -30,7 +30,7 @@ project domain, `io.github.<user>.<project>` is the usual choice.
 | Home-mount label         | `<LABEL_PREFIX>.home-mount=rw\|ro\|none`                                                                                                                                       | `LABEL_PREFIX`                                    |
 | Admin label              | `<LABEL_PREFIX>.admin=true\|false\|never` (sudo/doas grant policy)                                                                                                             | `LABEL_PREFIX`                                    |
 | User label               | `<LABEL_PREFIX>.user=<name>:<uid>:<gid>`                                                                                                                                       | `LABEL_PREFIX`                                    |
-| Automount label          | `<LABEL_PREFIX>.automount=rw\|ro\|none` — how the distro auto-manages `/Volumes` mounts                                                                                        | `LABEL_PREFIX`                                    |
+| Automount label          | `<LABEL_PREFIX>.automount=rw\|ro\|none` -- how the distro auto-manages `/Volumes` mounts                                                                                       | `LABEL_PREFIX`                                    |
 | State directory          | `~/Library/Application Support/<APP_NAME>/` (`sbin.distro*/` init assets, `default-distro`, `preserved/` staged rootfs+journal, `locks/` flock files)                          | `APP_NAME`                                        |
 | Plugin metadata          | `<prefix>/libexec/container-plugins/distro/config.toml` (`author`, `abstract`)                                                                                                 | `APP_NAME`                                        |
 | Plugin / subcommand name | `container distro`, `bin/distro`                                                                                                                                               | `plugin::PLUGIN_NAME`                             |
@@ -57,7 +57,7 @@ larger decision than renaming the project.
    `naming::label_lookup`, which tries the current prefix, then each
    legacy prefix. Existing distros keep working unchanged. Labels are
    immutable on a container, so they move to the new prefix whenever a
-   distro is recreated — `container distro set` already recreates. A
+   distro is recreated -- `container distro set` already recreates. A
    bulk `container distro migrate` command could force this if needed.
 3. **State directory: move on first use.** `naming::state_dir` renames
    the first existing legacy directory into place when the new one
@@ -74,3 +74,5 @@ larger decision than renaming the project.
 
 Before there are real users, the cheaper path is fine: change the
 constants and recreate any test distros.
+
+[`crates/cm-core/src/naming.rs`]: ../crates/cm-core/src/naming.rs

@@ -1,36 +1,36 @@
 # Security model and analysis
 
-Written pre-1.0 (2026-10-03) as a checkpoint: what `cm`/`container-distro`
-trusts, which trade-offs are deliberate, and what to re-evaluate before
-calling anything stable. Section 2 lists each accepted trade-off with its
-rationale so a future decision can be made on purpose rather than by
-inertia.
+Written pre-1.0 (2026-10-03) as a checkpoint: what
+`cm`/`container-distro` trusts, which trade-offs are deliberate, and
+what to re-evaluate before calling anything stable. Section 2 lists each
+accepted trade-off with its rationale so a future decision can be made
+on purpose rather than by inertia.
 
 ## Threat model
 
 `cm` and `container-distro` are local, single-host developer tools.
 Everything runs as the invoking user; there is no remote surface, no
 setuid, and no daemon of ours (`container`'s services are upstream's).
-Guests are lightweight VMs via Apple Containerization, so the VM boundary
-does real work — but virtiofs shares, published ports, and the forwarded
-SSH agent are deliberate holes punched through it.
+Guests are lightweight VMs via Apple Containerization, so the VM
+boundary does real work -- but virtiofs shares, published ports, and the
+forwarded SSH agent are deliberate holes punched through it.
 
 The frame to keep in mind: **a machine or distro is not a sandbox for
-untrusted code — it is a second login session for the same user.** Code
-running in a guest should be treated as roughly equivalent to code run on
-the host as that user.
+untrusted code -- it is a second login session for the same user.** Code
+running in a guest should be treated as roughly equivalent to code run
+on the host as that user.
 
 ## Accepted trade-offs
 
 Each of these is a deliberate choice. The rationale is recorded so the
-decision can be revisited — flip any of them if it stops matching how the
-tool is actually used.
+decision can be revisited -- flip any of them if it stops matching how
+the tool is actually used.
 
 ### T1. Guest code can execute code on the host (rw `$HOME` share)
 
 `container machine` and distros share `/Users/<name>` read-write at the
 same path. Guest code can write `~/.zshrc`, `~/.ssh/authorized_keys`,
-`~/.gitconfig` (`core.hooksPath`), `~/Library/LaunchAgents` — host code
+`~/.gitconfig` (`core.hooksPath`), `~/Library/LaunchAgents` -- host code
 execution on next login/shell, plus direct access to everything in home.
 
 - **Accepted because:** it is `container machine`'s own model and what
@@ -48,11 +48,11 @@ execution on next login/shell, plus direct access to everything in home.
 
 `create_args` passes `container`'s `--ssh` unconditionally; machines get
 it from the machine plugin. Guest code cannot extract private keys, but
-can authenticate *as you* — `git push` to your repos, ssh to your hosts —
-for as long as the guest runs.
+can authenticate *as you* -- `git push` to your repos, ssh to your
+hosts -- for as long as the guest runs.
 
-- **Accepted because:** it matches `container machine` and is the feature
-  that makes `git`/`ssh` "just work" in-guest, a core WSL-ism.
+- **Accepted because:** it matches `container machine` and is the
+  feature that makes `git`/`ssh` "just work" in-guest, a core WSL-ism.
 - **Mitigations that exist:** `--no-ssh` at create or `set --no-ssh`;
   `--restricted` turns it off along with everything else.
 - **Re-evaluate if:** T1 is re-evaluated, or agent confirmation /
@@ -61,22 +61,21 @@ for as long as the guest runs.
 
 ### T3. Passwordless sudo + `cap-add ALL` + no masked/read-only paths
 
-Distros are created with `--cap-add ALL --masked-path NONE
---read-only-path NONE` and the provisioned user gets
-`NOPASSWD:ALL` sudo/doas. Guest user → instant guest root → rw access to
-every shared host path.
+Distros are created with `--cap-add ALL --masked-path NONE --read-only-path NONE`
+and the provisioned user gets `NOPASSWD:ALL` sudo/doas. Guest user →
+instant guest root → rw access to every shared host path.
 
 - **Accepted because:** mirrors `container machine`'s own configuration
   (the VM boundary, not capabilities, is what contains the guest); WSL
   users are full administrators in their distro. Kernel caps inside a VM
   are far less dangerous than in a shared-kernel container.
 - **Mitigations that exist:** `--no-sudo`/`--restricted` skips the
-  privilege grant — restricted distros mount an init-assets dir that
+  privilege grant -- restricted distros mount an init-assets dir that
   doesn't contain `grant-admin.sh`, so no provisioning code in the guest
   creates sudoers at all. Caps stay: init systems need them and the VM
-  contains them — see [Restricted distros](#restricted-distros) for why
-  that's still not a sandbox.
-- **Re-evaluate if:** T1 changes — caps matter more once mounts are the
+  contains them -- see [Restricted distros] for why that's still not a
+  sandbox.
+- **Re-evaluate if:** T1 changes -- caps matter more once mounts are the
   only host surface, not less.
 
 ### T4. `import` fully provisions an untrusted rootfs
@@ -86,11 +85,11 @@ image, then applies full provisioning: your uid/gid, passwordless sudo,
 rw home (default), ssh agent, all caps. Importing a hostile rootfs hands
 it your identity and home directory.
 
-- **Accepted because:** WSL `--import` has the same shape and the user is
-  expected to know what they're importing.
-- **Mitigations that exist:** `import --restricted` wraps the rootfs with
-  no mounts, no network, no agent, and no privilege grant — the intended
-  path for rootfses you didn't build.
+- **Accepted because:** WSL `--import` has the same shape and the user
+  is expected to know what they're importing.
+- **Mitigations that exist:** `import --restricted` wraps the rootfs
+  with no mounts, no network, no agent, and no privilege grant -- the
+  intended path for rootfses you didn't build.
 - **Re-evaluate if:** we add a curated/"online list" import path
   (remote-WSL interop doc mentions `--list --online`), at which point a
   safer default (`--home-mount none` for import specifically) is worth
@@ -105,20 +104,22 @@ hijacked `PATH` or `CONTAINER_CLI` runs an arbitrary binary as the user.
   and `CONTAINER_CLI` is a documented feature for testing.
 - **Mitigations that exist:** the installed location
   (`/usr/local/bin/container`) is preferred over PATH when present, and
-  `id`/`sysctl` are no longer spawned — `getpwuid_r`, `getuid`/`getgid`,
-  and `sysctlbyname` do the lookups in-process (C2). If we later need
-  richer system introspection (CPU/memory/processes, e.g. watching guest
-  listeners for auto port-forwarding), the `sysinfo` crate is the
-  documented switch point — see `default_resources` in ops.rs.
+  `id`/`sysctl` are no longer spawned -- `getpwuid_r`,
+  `getuid`/`getgid`, and `sysctlbyname` do the lookups in-process (C2).
+  If we later need richer system introspection (CPU/memory/processes,
+  e.g. watching guest listeners for auto port-forwarding), the `sysinfo`
+  crate is the documented switch point -- see `default_resources` in
+  ops.rs.
 - **Re-evaluate if:** `cm` is ever run in privileged contexts (it should
-  not be — no setuid, and `sudo cm` writes state under root's home;
+  not be -- no setuid, and `sudo cm` writes state under root's home;
   consider refusing euid 0 except for `install-plugin`).
 
 ### T6. State directory lives inside the shared `$HOME`
 
-`~/Library/Application Support/container-distro/` holds `sbin.distro/init`
-and `create-user.sh` — executed as PID 1 and as root in every distro —
-plus `default-distro`. With `home-mount=rw` all of it is guest-writable.
+`~/Library/Application Support/container-distro/` holds
+`sbin.distro/init` and `create-user.sh` -- executed as PID 1 and as root
+in every distro -- plus `default-distro`. With `home-mount=rw` all of it
+is guest-writable.
 
 - **Accepted because:** there is no standard per-user location outside
   `$HOME` on macOS; anything user-writable is inside the share anyway,
@@ -134,8 +135,8 @@ plus `default-distro`. With `home-mount=rw` all of it is guest-writable.
 
 Distro membership is `io.github.daphnediane.container-distro.distro`
 labels on `container` objects; `--unregister`/`rm` delete without asking
-(WSL semantics). A user can label any container and `cm` will manage it —
-self-affecting only, since only the user can create containers.
+(WSL semantics). A user can label any container and `cm` will manage
+it -- self-affecting only, since only the user can create containers.
 
 - **Accepted because:** matches WSL's `--unregister` semantics and the
   label model is what makes distros discoverable at all.
@@ -146,10 +147,10 @@ self-affecting only, since only the user can create containers.
 
 `create --restricted` (alias `--untrusted`, also on `import` and
 `cm --install`) flips the create-time defaults: `--home-mount none`,
-`--network none` (loopback only — no interface, DNS, or outbound),
+`--network none` (loopback only -- no interface, DNS, or outbound),
 `--no-ssh`, and `--no-sudo` (the assets dir mounted at `/sbin.distro`
 lacks `grant-admin.sh`, so no privilege-granting code exists in the
-guest). It exists for semi-trusted images — generated code, random
+guest). It exists for semi-trusted images -- generated code, random
 images, imported rootfses (T4).
 
 **It is not a panacea, and not a sandbox.** What it does not do:
@@ -158,17 +159,17 @@ images, imported rootfses (T4).
   `--home-mount`/`--network`/`--ssh`/`--sudo` reopen holes on the same
   command line, and `container distro set` reopens them later.
 - It's your session either way: `container distro run --root` or
-  `container exec -u 0:0` still yields guest root — restricted only
+  `container exec -u 0:0` still yields guest root -- restricted only
   stops the provisioned *user* from being granted sudo.
 - `--cap-add ALL` and unmasked `/proc`/`/sys` stay: init systems need
-  them and caps are contained by the VM — but "no sudo" is a
+  them and caps are contained by the VM -- but "no sudo" is a
   convenience boundary inside the guest, not a wall.
 - Your identity still goes in: name/uid/gid are provisioned and readable
   in `/etc/passwd`, process lists, and `CONTAINER_*` env.
 - `--no-sudo` (including via `set`) prevents future grants; it cannot
   remove sudoers/doas files already written into a rootfs.
 - No network also means no published ports and no in-guest package
-  installs — `--restricted` distros are bring-your-own-bits.
+  installs -- `--restricted` distros are bring-your-own-bits.
 
 What remains trusted: the VM boundary (the real containment), the
 `container` daemon, and the host account running the commands.
@@ -178,68 +179,77 @@ What remains trusted: the VM boundary (the real containment), the
 Numbered C1–C12 from the 2026-10-03 review. Status reflects the fix
 commits that follow this document.
 
-| #   | Severity   | Issue                                                                                                                                                  | Status                                                                                                                                     |
-| --- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| C1  | Medium     | `install-plugin` symlinks `bin/distro` → a user-writable binary; other users would exec it with their privileges                                       | **Fixed** — binary is copied, not linked                                                                                                   |
-| C2  | Medium     | `id`/`sysctl` spawned via `PATH` — hijack → code exec as user                                                                                          | **Fixed** — libc `getpwuid_r`/`getuid`/`getgid`/`sysctlbyname`; `container` prefers `/usr/local/bin/container`                             |
-| C3  | Medium     | `CONTAINER_USER`/`UID`/`GID`/`HOME` interpolated unvalidated into root-run shell code (`create-user.sh` sudoers path traversal, passwd-line injection) | **Fixed** — charset checks in `create-user.sh` and `host_user()`                                                                           |
-| C4  | Medium     | `-d`/`-s`/`-t`/`--unregister` values passed unvalidated → flag smuggling into inner `container` CLI (`cm -t=-f` → `machine stop -f`)                   | **Fixed** — `validate_name`/`validate_user` on all passthru args                                                                           |
-| C5  | Medium     | `distro export -o <dir>` hits upstream [#2325](https://github.com/apple/container/issues/2325) — `export` deletes an existing directory                | **Fixed** — existing dirs rejected in `ops::export`                                                                                        |
-| C6  | Low        | Distro silently shadows a machine of the same name on `-d` (warning only in `cm -l`)                                                                   | **Fixed** — resolution-time warning when a distro shadows a machine                                                                        |
-| C7  | Low        | `init -u` re-provisions on every boot: sudoers re-added, owner can't lock down their distro                                                            | **Fixed** — per-user `/etc/.distro.user.*` sentinel; admin edits preserved                                                                 |
-| C8  | Low        | Idle-PID1 loop doesn't reap zombies                                                                                                                    | **Fixed** — bare `wait` reaps orphans reparented to PID 1                                                                                  |
-| C9  | Low        | Forwarder: unbounded thread per connection, no timeouts                                                                                                | **Fixed** — 64-conn semaphore cap; backlog queues excess (no idle timeout by design)                                                       |
-| C10 | Low        | `--automount` mounts every `/Volumes/*` rw (DMGs, USB, network shares); lowercase/`→`- collisions produce duplicate targets                            | **Partial** — case preserved, target collisions deduped + warned, `--automount ro` available; rw-all-`/Volumes` remains an accepted opt-in |
-| C11 | Info       | `uninstall` check-then-delete TOCTOU; snapshot images cleaned by name prefix not label                                                                 | **Fixed** — uninstall removes only files it installed; imported images carry a `distro` label cleanup matches                              |
-| C12 | Info (bug) | `resolve_shell` probe breaks under `machine run` re-eval → always falls back to `/bin/sh`                                                              | **Fixed** — probe passed as one pre-joined string                                                                                          |
+| #   | Severity   | Issue                                                                                                                                                  | Status                                                                                                                                      |
+| --- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| C1  | Medium     | `install-plugin` symlinks `bin/distro` → a user-writable binary; other users would exec it with their privileges                                       | **Fixed** -- binary is copied, not linked                                                                                                   |
+| C2  | Medium     | `id`/`sysctl` spawned via `PATH` -- hijack → code exec as user                                                                                         | **Fixed** -- libc `getpwuid_r`/`getuid`/`getgid`/`sysctlbyname`; `container` prefers `/usr/local/bin/container`                             |
+| C3  | Medium     | `CONTAINER_USER`/`UID`/`GID`/`HOME` interpolated unvalidated into root-run shell code (`create-user.sh` sudoers path traversal, passwd-line injection) | **Fixed** -- charset checks in `create-user.sh` and `host_user()`                                                                           |
+| C4  | Medium     | `-d`/`-s`/`-t`/`--unregister` values passed unvalidated → flag smuggling into inner `container` CLI (`cm -t=-f` → `machine stop -f`)                   | **Fixed** -- `validate_name`/`validate_user` on all passthru args                                                                           |
+| C5  | Medium     | `distro export -o <dir>` hits upstream [apple/container#2325] -- `export` deletes an existing directory                                                | **Fixed** -- existing dirs rejected in `ops::export`                                                                                        |
+| C6  | Low        | Distro silently shadows a machine of the same name on `-d` (warning only in `cm -l`)                                                                   | **Fixed** -- resolution-time warning when a distro shadows a machine                                                                        |
+| C7  | Low        | `init -u` re-provisions on every boot: sudoers re-added, owner can't lock down their distro                                                            | **Fixed** -- per-user `/etc/.distro.user.*` sentinel; admin edits preserved                                                                 |
+| C8  | Low        | Idle-PID1 loop doesn't reap zombies                                                                                                                    | **Fixed** -- bare `wait` reaps orphans reparented to PID 1                                                                                  |
+| C9  | Low        | Forwarder: unbounded thread per connection, no timeouts                                                                                                | **Fixed** -- 64-conn semaphore cap; backlog queues excess (no idle timeout by design)                                                       |
+| C10 | Low        | `--automount` mounts every `/Volumes/*` rw (DMGs, USB, network shares); lowercase/`→`- collisions produce duplicate targets                            | **Partial** -- case preserved, target collisions deduped + warned, `--automount ro` available; rw-all-`/Volumes` remains an accepted opt-in |
+| C11 | Info       | `uninstall` check-then-delete TOCTOU; snapshot images cleaned by name prefix not label                                                                 | **Fixed** -- uninstall removes only files it installed; imported images carry a `distro` label cleanup matches                              |
+| C12 | Info (bug) | `resolve_shell` probe breaks under `machine run` re-eval → always falls back to `/bin/sh`                                                              | **Fixed** -- probe passed as one pre-joined string                                                                                          |
 
 ## Risks introduced by gap-closing work
 
 Each open gap adds attack surface; flagging the traps up front.
 
-- **GUI apps ([gui-apps](gaps/gui-apps.md)).** The riskiest planned
-  feature. `xhost +<guest-ip>` (the doc's "easy path") authorizes any
-  VM-net client to drive the whole X session — input injection and
-  screen capture. Do not ship it, even documented. The cookie path has a
+- **GUI apps ([gui-apps]).** The riskiest planned feature.
+  `xhost +<guest-ip>` (the doc's "easy path") authorizes any VM-net
+  client to drive the whole X session -- input injection and screen
+  capture. Do not ship it, even documented. The cookie path has a
   subtler problem: `~/.Xauthority` is inside the rw-shared home, so
   **every distro automatically gets host X access** (T1 + T4 combine
-  badly here). And `nolisten_tcp=false` exposes X on TCP — verify the
+  badly here). And `nolisten_tcp=false` exposes X on TCP -- verify the
   bind address (XQuartz historically listens on all interfaces → LAN
   exposure). Prefer: per-guest cookies in an Xauthority file outside the
   shared home, or a unix-socket forward, over TCP.
-- **Remote-WSL interop ([remote-wsl-interop](remote-wsl-interop.md)).**
-  `sshd` in-guest is safe bound to the machine-net IP; it becomes
-  LAN-reachable the moment a user publishes 22 on `0.0.0.0`. The
-  fake-`wsl.exe`-over-ssh path turns the Mac into an ssh-reachable exec
-  endpoint — that *is* remote login; treat and document it as such.
-- **Host config file ([configuration-files](gaps/configuration-files.md)).**
-  A `~/.cmconfig.toml` is guest-writable (T6) → confused deputy: guest
-  writes `mounts`/`env` into your config and the *next host `cm` call*
-  grants it. Either scope dangerous keys to a file the guest can't
-  reach, or treat config as hint-level trust.
+- **Remote-WSL interop ([remote-wsl-interop]).** `sshd` in-guest is safe
+  bound to the machine-net IP; it becomes LAN-reachable the moment a
+  user publishes 22 on `0.0.0.0`. The fake-`wsl.exe`-over-ssh path turns
+  the Mac into an ssh-reachable exec endpoint -- that *is* remote login;
+  treat and document it as such.
+- **Host config file ([configuration-files]).** A `~/.cmconfig.toml` is
+  guest-writable (T6) → confused deputy: guest writes `mounts`/`env`
+  into your config and the *next host `cm` call* grants it. Either scope
+  dangerous keys to a file the guest can't reach, or treat config as
+  hint-level trust.
 - **Publishing beyond loopback.** `create`/`import`/`migrate`/`set` warn
-  when a publish spec binds a non-loopback address, and `start`/first-run
-  reports each published listener (loopback as info, wider as a
-  warning). Accepted as warn-only: `0.0.0.0` is sometimes the point.
+  when a publish spec binds a non-loopback address, and
+  `start`/first-run reports each published listener (loopback as info,
+  wider as a warning). Accepted as warn-only: `0.0.0.0` is sometimes the
+  point.
 - **`container system start` auto-start** runs whatever `container`
-  resolves to (T5) — preferring the installed path mitigates.
+  resolves to (T5) -- preferring the installed path mitigates.
 - **Machine `export`/`import`** (upstream-blocked): when it lands, T4's
   untrusted-rootfs warning applies to machines too.
 
 ## Pre-1.0 checklist
 
-1. This document + README security section — **done**
-2. `--no-ssh` flag (T2's off-switch; small) — **done** (`--ssh`/`--no-ssh`
-   plus `--restricted`; also `--network`, `--sudo`/`--no-sudo`, and the
-   `grant-admin.sh` asset split)
-3. C1–C5, C7, C9, C12 — each lands as its own commit and flips its
+1. This document + README security section -- **done**
+2. `--no-ssh` flag (T2's off-switch; small) -- **done**
+   (`--ssh`/`--no-ssh` plus `--restricted`; also `--network`,
+   `--sudo`/`--no-sudo`, and the `grant-admin.sh` asset split)
+3. C1–C5, C7, C9, C12 -- each lands as its own commit and flips its
    status in the findings table (**done:** C1–C5, C6, C7, C9, C10
    partial, C12)
-4. Non-loopback `--publish` warning — **done** (warn at create/set; a
+4. Non-loopback `--publish` warning -- **done** (warn at create/set; a
    listening report at boot surfaces every published port)
 5. `cargo audit`/`cargo deny` in CI; fuzz the `FromStr` parsers
-   (`MountSpec`, `PublishSpec`, `PortMapping`) — **open**
-6. Decide init-assets location vs. shared home (T6) — **open**
-7. C8 (PID 1 zombie reaping), C11 (uninstall TOCTOU / prefix cleanup) —
+   (`MountSpec`, `PublishSpec`, `PortMapping`) -- **open** ([#12])
+6. Decide init-assets location vs. shared home (T6) -- **open** ([#13])
+7. C8 (PID 1 zombie reaping), C11 (uninstall TOCTOU / prefix cleanup) --
    **done**; C10's rw-all-`/Volumes` surface stays an accepted opt-in
    trade-off
+
+[#12]: https://github.com/daphnediane/container-distro/issues/12
+[#13]: https://github.com/daphnediane/container-distro/issues/13
+[apple/container#2325]: https://github.com/apple/container/issues/2325
+[configuration-files]: gaps/configuration-files.md
+[gui-apps]: gaps/gui-apps.md
+[remote-wsl-interop]: remote-wsl-interop.md
+[Restricted distros]: #restricted-distros

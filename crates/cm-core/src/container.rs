@@ -337,7 +337,8 @@ pub fn container_version() -> Option<String> {
 /// `container` `major.minor` versions whose internal storage layout we
 /// have verified: `containers/<id>/rootfs.ext4`,
 /// `containers/<id>/runtime-configuration.json` and its
-/// `options.rootFsOverride`.
+/// `options.rootFsOverride`. Extended as new `container` minors are
+/// verified — a release-checklist step (doc/release.md).
 pub const VERIFIED_CONTAINER_MINOR: &[&str] = &["1.5"];
 
 /// Warn (once per process) when the `container` daemon is not a version

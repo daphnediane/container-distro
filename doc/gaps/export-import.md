@@ -1,20 +1,21 @@
 # Gap: `--export` / `--import`
 
-**Status:** punted for machines — the obvious L0 recipe doesn't work
-(`container` 1.5.0, build d265d66). Prototype parked on branch
-`wip/export-import`. **Works for distros:** `container distro
-export`/`import` (regular containers export fine, and imported images
-boot).
-**Fix level:** upstream fix for export; host-side ext4 reader (L0, no
-guest tools) as a workaround; import blocked on an unexplained boot
-failure
+- **Status:** punted for machines -- the obvious L0 recipe doesn't work
+  (`container` 1.5.0, build d265d66). Prototype parked on branch
+  `wip/export-import`. **Works for distros:** `container distro
+  export`/`import` (regular containers export fine, and imported images
+  boot).
+- **Fix level:** upstream fix for export; host-side ext4 reader (L0, no
+  guest tools) as a workaround; import blocked on an unexplained boot
+  failure
+- **Tracking:** [#2]
 
 ## What WSL does
 
-- `wsl --export <Distro> <FileName>` — writes the distro's root
+- `wsl --export <Distro> <FileName>` -- writes the distro's root
   filesystem as a tar.
-- `wsl --import <Distro> <InstallLocation> <FileName>` — registers a new
-  distro whose rootfs comes from a tar (e.g. a previous export).
+- `wsl --import <Distro> <InstallLocation> <FileName>` -- registers a
+  new distro whose rootfs comes from a tar (e.g. a previous export).
 
 ## What we have today
 
@@ -36,7 +37,7 @@ file." UserInfo={NSFilePath=.../com.apple.container/containers/alpine-730439/roo
 **Cause.** `export` assumes the root disk lives at
 `<app-root>/containers/<cid>/rootfs.ext4`, which is true for regular
 containers. A machine's backing container mounts its rootfs from the
-machine plugin's state instead — the container's `rootfs.json`:
+machine plugin's state instead -- the container's `rootfs.json`:
 
 ```json
 {"source": ".../plugin-state/machine-apiserver/machines/alpine/rootfs.ext4",
@@ -49,46 +50,45 @@ unaffected.
 
 The mechanism (verified 2026-10-04): a container's data dir holds only
 `runtime-configuration.json` until first start; then the daemon copies
-the image's materialized rootfs (`snapshots/<image-digest>/snapshot`,
-an ext4 file) to `containers/<id>/rootfs.ext4`. Machines instead carry
+the image's materialized rootfs (`snapshots/<image-digest>/snapshot`, an
+ext4 file) to `containers/<id>/rootfs.ext4`. Machines instead carry
 `options.rootFsOverride` in `runtime-configuration.json` pointing at
-their plugin-state ext4 — no copy. Two consequences: `export` also fails
-on *never-booted* regular containers (no `rootfs.ext4` yet), and the
-same override lets `container distro set` carry a booted rootfs across a
-recreate. We only patch `runtime-configuration.json` on containers
-`container distro` itself created — never a machine's backing
-container — and point the override at the conventional
+their plugin-state ext4 -- no copy. Two consequences: `export` also
+fails on *never-booted* regular containers (no `rootfs.ext4` yet), and
+the same override lets `container distro set` carry a booted rootfs
+across a recreate. We only patch `runtime-configuration.json` on
+containers `container distro` itself created -- never a machine's
+backing container -- and point the override at the conventional
 `containers/<id>/rootfs.ext4` path, so `export` still works afterwards
 and `delete` removes the disk with the container.
 
 **Upstream:** no existing issue found (searched 2026-10-03: "export",
-"machine export", "rootfs.ext4", "snapshot disk"). The related
-issues are about other things: [#1400](https://github.com/apple/container/issues/1400)
-(export of running containers, closed), [#1265](https://github.com/apple/container/issues/1265)
-(export should write a tar, closed), and [#2325](https://github.com/apple/container/issues/2325)
-(`export -o` deletes an existing directory, open). A new issue is
-warranted, with the repro above.
+"machine export", "rootfs.ext4", "snapshot disk"). The related issues
+are about other things: [apple/container#1400] (export of running
+containers, closed), [apple/container#1265] (export should write a tar,
+closed), and [apple/container#2325] (`export -o` deletes an existing
+directory, open). A new issue is warranted, with the repro above.
 
 ### Workarounds considered
 
 - **Guest-side tar stream (prototyped, rejected).** Run
   `machine run --root -- sh -c '<bind-mount / and tar it>'` and capture
-  stdout. It works (byte-identical over 3 runs, no first-write loss), but
-  it depends on `sh`, `mount`, and `tar` being installed in the distro.
-  That's the wrong dependency for an export tool.
+  stdout. It works (byte-identical over 3 runs, no first-write loss),
+  but it depends on `sh`, `mount`, and `tar` being installed in the
+  distro. That's the wrong dependency for an export tool.
 - **Host-side ext4 read (preferred if we revisit).** Take an APFS clone
   of the machine's `rootfs.ext4` (`cp -c`, instant). The clone is
   crash-consistent if the machine is running and exact if it's stopped.
   Walk it with a pure-Rust read-only ext4 reader (`ext4-view`) and write
-  the tar with the `tar` crate. No guest involvement. To verify: does the
-  reader expose device major/minor and xattrs? Also, the machine plugin's
-  state path is internal, so read it from `container inspect`'s rootfs
-  source rather than hard-coding it.
+  the tar with the `tar` crate. No guest involvement. To verify: does
+  the reader expose device major/minor and xattrs? Also, the machine
+  plugin's state path is internal, so read it from `container inspect`'s
+  rootfs source rather than hard-coding it.
 - **Upstream fix.** Once export honors the rootfs mount source, plain
   `container export` is the whole implementation.
 - **Shipped for migration, not export.** `container distro migrate`
   clones the machine's `rootfs.ext4` straight into a distro (the
-  `rootfs.json`/`rootFsOverride` source path, clonefile — same
+  `rootfs.json`/`rootFsOverride` source path, clonefile -- same
   mechanism as `distro set`), sidestepping the export bug for the
   machine → distro case. Export-to-tar still needs the reader or the
   upstream fix.
@@ -111,13 +111,13 @@ failing `can't run '/sbin/openrc'`, then rebooting. The source machine
 (stock `alpine:latest`) has the same inittab and no openrc but boots
 fine, so the difference lies elsewhere: image config, layer handling, or
 init environment. Root cause not determined. It may be related to
-[#2024](https://github.com/apple/container/issues/2024) (machine create
-succeeds for images that then fail to boot, with a misleading error).
+[apple/container#2024] (machine create succeeds for images that then
+fail to boot, with a misleading error).
 
 ## Caveats (still apply)
 
 - Machine names are lowercase DNS-style (`[a-z0-9-]`); `wsl --import`
-  accepts arbitrary distro names — `cm` must validate.
+  accepts arbitrary distro names -- `cm` must validate.
 - WSL `--import` takes an install location. Machines keep their state
   inside `container`'s app root, so `cm` would accept the argument for
   compatibility and ignore it.
@@ -130,3 +130,9 @@ failure by diffing the inspect output and config of a stock-image
 machine against an imported one. A `container distro` backend (regular
 containers) sidesteps the export bug entirely, so export/import may be
 best delivered there first.
+
+[#2]: https://github.com/daphnediane/container-distro/issues/2
+[apple/container#1265]: https://github.com/apple/container/issues/1265
+[apple/container#1400]: https://github.com/apple/container/issues/1400
+[apple/container#2024]: https://github.com/apple/container/issues/2024
+[apple/container#2325]: https://github.com/apple/container/issues/2325

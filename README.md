@@ -1,17 +1,15 @@
 # container-distro (`cm`)
 
-A [WSL](https://github.com/microsoft/WSL)-compatible command line for
-Apple's [`container`](https://github.com/apple/container), in two parts:
+A [WSL]-compatible command line for Apple's [`container`], in two parts:
 
-- **`cm`** — `wsl.exe`-style commands over
-  [container machines](https://github.com/apple/container/blob/main/docs/container-machine.md)
-  _and_ distros.
-- **`container distro`** — a `container` plugin (and library) that
+- **`cm`** -- `wsl.exe`-style commands over [container machines] _and_
+  distros.
+- **`container distro`** -- a `container` plugin (and library) that
   creates **distros**: machine-like containers (your account provisioned
   inside, home shared at the same path, the image's init as PID 1) plus
-  what machines lack — host directories outside `$HOME`, published
+  what machines lack -- host directories outside `$HOME`, published
   ports, export/import, and changing settings after creation. See
-  [Distros](#distros).
+  [Distros].
 
 With no arguments, `cm` opens a login shell in the default machine (or
 the default distro, if one is set):
@@ -34,7 +32,7 @@ cm --install-alias wsl
 sudo container-distro install-plugin   # -> /usr/local/libexec/container-plugins/distro
 ```
 
-Full build/install/uninstall details: [doc/install.md](doc/install.md).
+Full build/install/uninstall details: doc/install.md.
 
 ## Usage
 
@@ -42,8 +40,7 @@ Full build/install/uninstall details: [doc/install.md](doc/install.md).
 cm [OPTIONS] [-- <COMMAND LINE>]
 ```
 
-Full reference: [doc/cm.md](doc/cm.md) · man pages: `man cm`,
-`man container-distro`.
+Full reference: doc/cm.md · man pages: `man cm`, `man container-distro`.
 
 ### Run commands and shells
 
@@ -72,8 +69,8 @@ Full reference: [doc/cm.md](doc/cm.md) · man pages: `man cm`,
 | `--forward <p[:g]>` | (experimental) Forward localhost port `p` to port `g` of the machine or distro                      |
 | `--version`         | Show `cm` and `container` versions                                                                  |
 
-If `container` services aren't running, `cm` runs `container system start`
-first.
+If `container` services aren't running, `cm` runs
+`container system start` first.
 
 ## Examples
 
@@ -95,7 +92,7 @@ cm --install ubuntu:24.04 --name work --share /Volumes/Code:/mnt/code --publish 
 
 ## Distros
 
-Full subcommand reference: [doc/container-distro.md](doc/container-distro.md).
+Full subcommand reference: doc/container-distro.md.
 
 `container machine` can't share anything outside `$HOME` or publish
 ports, and its settings are fixed at creation. A **distro** is a regular
@@ -105,29 +102,29 @@ machine:
 - the host account is provisioned inside (same name/uid/gid,
   passwordless sudo), with `SSH_AUTH_SOCK` forwarded
 - `$HOME` is shared at the same path (`--home-mount rw|ro|none`)
-- the image's own init (`/sbin/init`) runs as PID 1 — or an idle PID 1
+- the image's own init (`/sbin/init`) runs as PID 1 -- or an idle PID 1
   for images without one
 - all capabilities, no masked paths
 
 On top of that:
 
-| Feature                | How                                                                                                                                                                                                                                                     |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Mounts outside `$HOME` | `-v /Volumes/Code:/mnt/code[:ro]`; `--automount` maps each `/Volumes/<X>` to `/mnt/<x>` (skips hidden, `com.apple.*`, and unreadable volumes; resolved once at create — later-attached volumes need `set --add-volume`, ejected ones `set --rm-volume`) |
-| Published ports        | `-p 3000`, `-p 8080:80`, `-p 0.0.0.0:8080:80/udp` (host IP defaults to `127.0.0.1`)                                                                                                                                                                     |
-| Change settings later  | `container distro set NAME --cpus 4 --add-volume … --publish …` (recreates, keeps the filesystem)                                                                                                                                                       |
-| Export / import        | `container distro export NAME -o f.tar`, `container distro import NAME f.tar[.gz]`                                                                                                                                                                      |
-| Migrate a machine      | `container distro migrate MACHINE [-n NAME] [--keep]` — clones the machine's rootfs into a distro (cpus/memory/home-mount/user carry over), then removes the machine unless `--keep`                                                                    |
-| Exact argv             | `run` uses `container exec`, so arguments are never re-split                                                                                                                                                                                            |
-| Restricted mode        | `--restricted` (`--untrusted`): no mounts, no network, no agent, no sudo — see below                                                                                                                                                                    |
+| Feature                | How                                                                                                                                                                                                                                                      |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Mounts outside `$HOME` | `-v /Volumes/Code:/mnt/code[:ro]`; `--automount` maps each `/Volumes/<X>` to `/mnt/<x>` (skips hidden, `com.apple.*`, and unreadable volumes; resolved once at create -- later-attached volumes need `set --add-volume`, ejected ones `set --rm-volume`) |
+| Published ports        | `-p 3000`, `-p 8080:80`, `-p 0.0.0.0:8080:80/udp` (host IP defaults to `127.0.0.1`)                                                                                                                                                                      |
+| Change settings later  | `container distro set NAME --cpus 4 --add-volume … --publish …` (recreates, keeps the filesystem)                                                                                                                                                        |
+| Export / import        | `container distro export NAME -o f.tar`, `container distro import NAME f.tar[.gz]`                                                                                                                                                                       |
+| Migrate a machine      | `container distro migrate MACHINE [-n NAME] [--keep]` -- clones the machine's rootfs into a distro (cpus/memory/home-mount/user carry over), then removes the machine unless `--keep`                                                                    |
+| Exact argv             | `run` uses `container exec`, so arguments are never re-split                                                                                                                                                                                             |
+| Restricted mode        | `--restricted` (`--untrusted`): no mounts, no network, no agent, no sudo -- see below                                                                                                                                                                    |
 
 `cm` sees distros and machines as one set of WSL distributions:
 `cm -d NAME` resolves a distro first, then a machine. A default distro
 (`cm -s NAME`) wins over the default machine; setting a machine as
 default clears it. A new distro becomes the default when no machine or
-distro is. When the cwd is under a shared path, sessions start
-at its guest path (`/Volumes/Code/x` → `/mnt/code/x`). `cm` links the
-distro library directly, so the plugin install is optional.
+distro is. When the cwd is under a shared path, sessions start at its
+guest path (`/Volumes/Code/x` → `/mnt/code/x`). `cm` links the distro
+library directly, so the plugin install is optional.
 `CM_BACKEND=machine` makes `cm` ignore distros.
 
 ```bash
@@ -149,22 +146,22 @@ no SSH-agent forwarding (`--no-ssh`), and no sudo/doas grant
 It is a **defaults preset, not a sandbox**: explicit flags still apply
 (`--restricted -v /dir:/dir` shares one directory back), `container
 distro set` can reopen any hole, and you can always `run --root` or
-`exec` as `0:0` — the guest is still _your_ session. Inside the guest
-the account is still provisioned as you (name/uid/gid), and the container
-keeps `--cap-add ALL`; what changes is that nothing of yours is
-reachable and no privilege-granting code is even mounted. See
-[doc/security.md](doc/security.md).
+`exec` as `0:0` -- the guest is still _your_ session. Inside the guest
+the account is still provisioned as you (name/uid/gid), and the
+container keeps `--cap-add ALL`; what changes is that nothing of yours
+is reachable and no privilege-granting code is even mounted. See
+doc/security.md.
 
 The granular flags work standalone too: `--network NAME` picks a
 container network (`none` isolates), `--ssh`/`--no-ssh` control agent
 forwarding, `--sudo`/`--no-sudo` control privilege provisioning, and the
-same flags on `set` change them after creation — except `--no-sudo`,
+same flags on `set` change them after creation -- except `--no-sudo`,
 which stops future grants but can't remove sudoers/doas files already
 inside the guest.
 
 Distros are tracked with `io.github.daphnediane.container-distro.*`
-labels (see [doc/naming.md](doc/naming.md)). Regular containers get one
-extra vCPU of overhead (`nproc` shows `cpus + 1`).
+labels (see doc/naming.md). Regular containers get one extra vCPU of
+overhead (`nproc` shows `cpus + 1`).
 
 ## Differences from WSL
 
@@ -176,22 +173,21 @@ model differs in a few important ways.
 WSL mounts every Windows drive under `/mnt/<letter>` (e.g. `C:\` →
 `/mnt/c`). Container machines take a different approach: your macOS home
 directory is shared into the guest via virtiofs **at the same absolute
-path** — `/Users/<name>` on the Mac is `/Users/<name>` in the machine.
+path** -- `/Users/<name>` on the Mac is `/Users/<name>` in the machine.
 
-The flip side is that **a machine shares nothing outside `$HOME`** (use a
-[distro](#distros) for that). There is no
-`/mnt/...` equivalent and, as of `container` 1.5.0, `container machine`
-has no option for additional mounts — the only configurable share is the
-home mount (`rw` by default; `ro` or `none` via
-`container machine create --home-mount` or
+The flip side is that **a machine shares nothing outside `$HOME`** (use
+a [distro] for that). There is no `/mnt/...` equivalent and, as of
+`container` 1.5.0, `container machine` has no option for additional
+mounts -- the only configurable share is the home mount (`rw` by
+default; `ro` or `none` via `container machine create --home-mount` or
 `container machine set -n <m> home-mount=<mode>` plus a restart).
 Directories on other volumes (e.g. `/Volumes/...`) or elsewhere outside
 your home directory are unreachable from inside the machine. Pick the
 home mode at creation with `cm --install <image> --home-mount ro`, or
 change it later with `container machine set`.
 
-Also note the guest's `~` is `/home/<name>` — a pure Linux home on the
-machine's persistent disk — distinct from your macOS home at
+Also note the guest's `~` is `/home/<name>` -- a pure Linux home on the
+machine's persistent disk -- distinct from your macOS home at
 `/Users/<name>`.
 
 ### Starting directory
@@ -200,7 +196,7 @@ WSL starts a session in the `/mnt/c/...` mapping of your Windows working
 directory. `container machine run` does the equivalent automatically:
 when the host working directory is under `$HOME`, the guest process
 starts at the same path; anywhere else it starts in the guest's
-`/home/<name>`. `cm` inherits this behavior — no flag needed.
+`/home/<name>`. `cm` inherits this behavior -- no flag needed.
 
 `cm --cd <dir>` maps to `container`'s `-w` and expects a guest path.
 Host paths under `$HOME` work verbatim since the mount is at the same
@@ -210,7 +206,7 @@ path; host paths outside `$HOME` do not exist in the guest.
 
 WSL2 forwards guest ports to Windows localhost. A container machine gets
 its own IP on the `machine` network (shown by `cm -l`); services in the
-guest are reachable at that IP only — nothing is bridged to macOS
+guest are reachable at that IP only -- nothing is bridged to macOS
 localhost automatically. `cm --forward 3000` (or `--forward 8080:80`,
 repeatable, with `-d` to pick the machine) runs a foreground forwarder
 from `127.0.0.1` on the Mac to the machine until you press Ctrl-C.
@@ -224,9 +220,8 @@ runtime's real port publishing (no userspace proxy).
 As with WSL, `cm -e cmd args…` delivers each argument exactly, while
 `cm cmd…` and `cm -- cmd…` run the command line through the guest shell
 (so `cm -- echo '$HOME'` expands in the guest). `container machine run`
-always shell-evaluates its arguments
-([apple/container#1954](https://github.com/apple/container/issues/1954)),
-so `cm -e` bypasses it: it runs the command with `container exec` in the
+always shell-evaluates its arguments ([apple/container#1954]), so
+`cm -e` bypasses it: it runs the command with `container exec` in the
 machine's backing container (as your user, starting in the same
 directory `machine run` would). If that isn't possible, `cm` falls back
 to `machine run` with each argument single-quoted. Shells and `--`
@@ -234,16 +229,16 @@ commands still use `machine run`. Piped stdin is forwarded (`cm` always
 passes `-i`).
 
 Known upstream issue: `container machine run` can drop the guest's very
-first write to stdout/stderr — see
-[doc/gaps/exec-stdio.md](doc/gaps/exec-stdio.md).
+first write to stdout/stderr -- see doc/gaps/exec-stdio.md.
 
 ### Interop and user mapping
 
 WSL can execute Windows binaries from Linux via binfmt interop; there is
 no macOS-binary interop in a container machine. On the other hand, the
 guest account is auto-provisioned to match your macOS username/uid/gid
-(with passwordless sudo) and `SSH_AUTH_SOCK` is forwarded into the guest,
-so `git`/`ssh` operations use your host agent with no extra setup.
+(with passwordless sudo) and `SSH_AUTH_SOCK` is forwarded into the
+guest, so `git`/`ssh` operations use your host agent with no extra
+setup.
 
 ### Management gaps
 
@@ -256,45 +251,48 @@ so `git`/`ssh` operations use your host agent with no extra setup.
   `--shutdown --system` also runs `container system stop` (which stops
   every container, not just machines).
 - `cm --export`/`--import` are not implemented: machine export is
-  blocked upstream (see [doc/gaps/export-import.md](doc/gaps/export-import.md)).
-  Distros support it via `container distro export`/`import`.
-- No GUI app support (WSLg's X11/Wayland) — see
-  [doc/gaps/gui-apps.md](doc/gaps/gui-apps.md) for what it would take.
+  blocked upstream (see doc/gaps/export-import.md). Distros support it
+  via `container distro export`/`import`.
+- No GUI app support (WSLg's X11/Wayland) -- see doc/gaps/gui-apps.md
+  for what it would take.
 - No equivalents for `--update`, `--manage`, `--mount` (VHDs), or
   `wsl.conf`.
 
 ## Security model
 
-A machine or distro is **not a sandbox** — treat code running inside as
+A machine or distro is **not a sandbox** -- treat code running inside as
 roughly equivalent to code run on the host as you:
 
 - `$HOME` is shared read-write at the same path by default. Guest code
-  can write `~/.zshrc`, `~/.ssh/authorized_keys`, `~/Library/LaunchAgents`
-  — host code execution on your next login. `--home-mount ro` or `none`
-  scopes this down; extra `--share` mounts extend it further.
+  can write `~/.zshrc`, `~/.ssh/authorized_keys`,
+  `~/Library/LaunchAgents` -- host code execution on your next login.
+  `--home-mount ro` or `none` scopes this down; extra `--share` mounts
+  extend it further.
 - `SSH_AUTH_SOCK` is forwarded in: guest code can't steal keys, but can
   authenticate as you (push to your repos, ssh to your hosts).
 - The provisioned user has passwordless sudo and the guest runs with all
-  capabilities — guest user → guest root is instant (that's also the WSL
-  model; the VM boundary, not capabilities, is what contains the guest).
+  capabilities -- guest user → guest root is instant (that's also the
+  WSL model; the VM boundary, not capabilities, is what contains the
+  guest).
 - `create --restricted` removes the mount, network, agent, and sudo
-  conveniences for semi-trusted images — a defaults preset, not a
-  sandbox (see [Restricted distros](#restricted-distros)).
+  conveniences for semi-trusted images -- a defaults preset, not a
+  sandbox (see [Restricted distros]).
 - `container distro import` applies all of the above to an arbitrary
-  rootfs tar — importing an image is trusting it with your identity.
-- `--publish`/`--forward` bind `127.0.0.1` unless you say otherwise —
+  rootfs tar -- importing an image is trusting it with your identity.
+- `--publish`/`--forward` bind `127.0.0.1` unless you say otherwise --
   keep it that way unless you want LAN-reachable services.
 
 The full analysis, including which trade-offs are deliberate and tagged
-for re-evaluation, is in [doc/security.md](doc/security.md).
+for re-evaluation, is in doc/security.md.
 
 ## Notes
 
-- `container machine run` requires a TTY for interactive shells (as does `cm`).
+- `container machine run` requires a TTY for interactive shells (as does
+  `cm`).
 - `container` is resolved from `/usr/local/bin/container` (the upstream
   install location), then `PATH`; set `CONTAINER_CLI` to override.
-- Open work and planned features are tracked in [doc/TODO.md](doc/TODO.md);
-  the rest of the docs live in [doc/](doc/README.md).
+- Open work and planned features are tracked in doc/TODO.md; the rest of
+  the docs live in [doc/].
 
 ## License
 
@@ -302,9 +300,8 @@ for re-evaluation, is in [doc/security.md](doc/security.md).
 
 Dependencies are permissively licensed (MIT / Apache-2.0 / BSD /
 Unicode-3.0; policy enforced by `deny.toml`). Their copyright and
-license texts are collected in
-[THIRD-PARTY-NOTICES.yaml](THIRD-PARTY-NOTICES.yaml) — ship that file
-with any prebuilt binaries.
+license texts are collected in THIRD-PARTY-NOTICES.yaml -- ship that
+file with any prebuilt binaries.
 
 ## AI Coding Declaration
 
@@ -317,6 +314,14 @@ Most of the code and documentation here was AI-generated and manually
 reviewed. Take the documentation as a slightly out-of-date roadmap, no
 matter the polish of the AI verbiage. Here be dragons.
 
+[`container`]: https://github.com/apple/container
+[apple/container#1954]: https://github.com/apple/container/issues/1954
 [BSD-2-Clause License]: LICENSE
-[Devin]: https://www.devin.ai/
 [Claude Code]: https://claude.ai/code
+[container machines]: https://github.com/apple/container/blob/main/docs/container-machine.md
+[Devin]: https://www.devin.ai/
+[distro]: #distros
+[Distros]: #distros
+[doc/]: doc/README.md
+[Restricted distros]: #restricted-distros
+[WSL]: https://github.com/microsoft/WSL
