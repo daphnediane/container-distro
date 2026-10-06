@@ -12,6 +12,7 @@ not commitments.
 | [cm usage](cm.md)                       | `cm` command-line reference — the WSL-compatible front end           |
 | [container distro](container-distro.md) | `container distro`/`container-distro` subcommand reference           |
 | [TODO](TODO.md)                         | Central work list — open gaps, planned features, pre-1.0 checklist   |
+| [release](release.md)                   | Release process — versioning, `vX.Y.Z` tags, `release/X.Y` branches  |
 
 ## Design notes
 
