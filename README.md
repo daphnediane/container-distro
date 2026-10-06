@@ -24,19 +24,26 @@ cm                # container machine run
 
 ```bash
 cargo install --path crates/cm
+cargo install --path crates/container-distro   # also provides cm's distro support
+cm --install-man && container-distro install-man   # man pages
+
 # optionally alias to `wsl`:
-ln -s "$(which cm)" ~/.local/bin/wsl   # or any dir on PATH
+ln -sf "$(which cm)" "$(dirname "$(which cm)")/wsl"
 
 # optional: the `container distro` subcommand (cm doesn't need it)
-cargo install --path crates/container-distro
 sudo container-distro install-plugin   # -> /usr/local/libexec/container-plugins/distro
 ```
+
+Full build/install/uninstall details: [doc/install.md](doc/install.md).
 
 ## Usage
 
 ```text
 cm [OPTIONS] [-- <COMMAND LINE>]
 ```
+
+Full reference: [doc/cm.md](doc/cm.md) · man pages: `man cm`,
+`man container-distro`.
 
 ### Run commands and shells
 
@@ -87,6 +94,8 @@ cm --install ubuntu:24.04 --name work --share /Volumes/Code:/mnt/code --publish 
 ```
 
 ## Distros
+
+Full subcommand reference: [doc/container-distro.md](doc/container-distro.md).
 
 `container machine` can't share anything outside `$HOME` or publish
 ports, and its settings are fixed at creation. A **distro** is a regular
@@ -284,6 +293,8 @@ for re-evaluation, is in [doc/security.md](doc/security.md).
 - `container machine run` requires a TTY for interactive shells (as does `cm`).
 - `container` is resolved from `/usr/local/bin/container` (the upstream
   install location), then `PATH`; set `CONTAINER_CLI` to override.
+- Open work and planned features are tracked in [doc/TODO.md](doc/TODO.md);
+  the rest of the docs live in [doc/](doc/README.md).
 
 ## License
 

@@ -10,6 +10,7 @@
 
 pub mod container;
 pub mod forward;
+pub mod man;
 pub mod naming;
 pub mod oci;
 pub mod table;

@@ -1,7 +1,19 @@
 # container-distro docs
 
-Design notes and research documents for `cm`. These are working documents —
-they describe options and tradeoffs, not commitments.
+Guides first, then design notes and research documents for `cm`. The
+design docs are working documents — they describe options and tradeoffs,
+not commitments.
+
+## Guides
+
+| Document                                | Contents                                                             |
+| --------------------------------------- | -------------------------------------------------------------------- |
+| [install](install.md)                   | Building, `cargo install`, plugin registration, man pages, uninstall |
+| [cm usage](cm.md)                       | `cm` command-line reference — the WSL-compatible front end           |
+| [container distro](container-distro.md) | `container distro`/`container-distro` subcommand reference           |
+| [TODO](TODO.md)                         | Central work list — open gaps, planned features, pre-1.0 checklist   |
+
+## Design notes
 
 | Document                                              | Contents                                                                                                                                                                                                   |
 | ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

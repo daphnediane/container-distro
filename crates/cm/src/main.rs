@@ -14,11 +14,12 @@ mod list;
 use std::io::IsTerminal;
 use std::net::{IpAddr, Ipv4Addr};
 use std::os::unix::process::CommandExt;
+use std::path::PathBuf;
 use std::process::{ExitCode, ExitStatus, Stdio};
 
 use anyhow::{Context, Result, bail};
 use backend::Target;
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use cli::{Action, Args, InstallOpts, ShellType};
 use cm_core::container::{self, ArgvMode};
 use cm_core::forward::PortMapping;
@@ -39,6 +40,7 @@ fn main() -> ExitCode {
 fn run(args: Args) -> Result<ExitCode> {
     match args.action()? {
         Action::Version => version(),
+        Action::InstallMan(dir) => install_man(dir),
         Action::Status => passthru(&["system", "status"]),
         Action::Shutdown { system } => shutdown(system),
         Action::List {
@@ -424,4 +426,25 @@ fn forward(name: Option<&str>, mappings: &[PortMapping]) -> Result<ExitCode> {
 fn version() -> Result<ExitCode> {
     println!("cm {}", env!("CARGO_PKG_VERSION"));
     passthru(&["--version"])
+}
+
+/// The `cm(1)` man page, rendered from the clap definition so it can
+/// never drift from `--help`.
+fn man_pages() -> Result<Vec<(String, String)>> {
+    let mut buf: Vec<u8> = Vec::new();
+    clap_mangen::Man::new(cli::Args::command())
+        .render(&mut buf)
+        .context("failed to render the man page")?;
+    Ok(vec![(
+        "cm.1".to_string(),
+        String::from_utf8(buf).context("man page is not UTF-8")?,
+    )])
+}
+
+fn install_man(dir: Option<PathBuf>) -> Result<ExitCode> {
+    let dir = dir.map_or_else(cm_core::man::default_man_dir, Ok)?;
+    for path in cm_core::man::write_pages(&dir, &man_pages()?)? {
+        println!("Installed {}", path.display());
+    }
+    Ok(ExitCode::SUCCESS)
 }

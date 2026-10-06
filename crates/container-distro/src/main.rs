@@ -10,10 +10,11 @@
 mod cli;
 
 use std::os::unix::process::CommandExt;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
-use anyhow::Result;
-use clap::Parser;
+use anyhow::{Context, Result};
+use clap::{CommandFactory, Parser};
 use cm_core::table::{columns, human_bytes, local_datetime};
 use container_distro::ops::{self, DistroSummary, RunOpts};
 use container_distro::plugin;
@@ -36,6 +37,45 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// The man pages: `container-distro(1)` plus one per subcommand,
+/// rendered from the clap definitions so they can't drift from `--help`.
+/// The command is renamed so pages are `container-distro*.1`, not
+/// `container distro*.1`.
+fn man_pages() -> Result<Vec<(String, String)>> {
+    let mut pages = Vec::new();
+    render_man(&Cli::command(), "container-distro", &mut pages)?;
+    Ok(pages)
+}
+
+fn render_man(cmd: &clap::Command, base: &str, pages: &mut Vec<(String, String)>) -> Result<()> {
+    // `Command::name` only takes 'static strings; the leaked names live
+    // as long as the process, which exits right after rendering.
+    let static_name: &'static str = Box::leak(base.to_string().into_boxed_str());
+    let mut buf: Vec<u8> = Vec::new();
+    clap_mangen::Man::new(cmd.clone().name(static_name))
+        .source(concat!("container-distro ", env!("CARGO_PKG_VERSION")))
+        .manual("Container Distro Manual")
+        .render(&mut buf)
+        .with_context(|| format!("failed to render {base}(1)"))?;
+    pages.push((
+        format!("{base}.1"),
+        String::from_utf8(buf).context("man page is not UTF-8")?,
+    ));
+    for sub in cmd.get_subcommands() {
+        render_man(sub, &format!("{base}-{}", sub.get_name()), pages)?;
+    }
+    Ok(())
+}
+
+/// Write the man pages into `dir`, or the binary-relative default.
+fn install_man(dir: Option<PathBuf>) -> Result<()> {
+    let dir = dir.map_or_else(cm_core::man::default_man_dir, Ok)?;
+    for path in cm_core::man::write_pages(&dir, &man_pages()?)? {
+        println!("Installed {}", path.display());
+    }
+    Ok(())
 }
 
 fn print_table(rows: &[DistroSummary]) {
@@ -182,6 +222,7 @@ fn run(cli: Cli) -> Result<()> {
         Command::InstallPlugin { plugin_dir, from } => {
             plugin::install(plugin_dir, from.as_deref())?;
         }
+        Command::InstallMan { dir } => install_man(dir)?,
         Command::UninstallPlugin { plugin_dir } => plugin::uninstall(plugin_dir)?,
     }
     Ok(())

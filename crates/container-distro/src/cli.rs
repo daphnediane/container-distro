@@ -206,6 +206,15 @@ pub enum Command {
         from: Option<PathBuf>,
     },
 
+    /// Install the `container-distro(1)` man pages (one per subcommand)
+    InstallMan {
+        /// Man directory (default: the `share/man/man1` next to the
+        /// binary's `bin` directory — e.g. $CARGO_HOME/share/man/man1
+        /// after `cargo install`)
+        #[arg(long, value_name = "DIR")]
+        dir: Option<PathBuf>,
+    },
+
     /// Remove the `container distro` plugin registration
     UninstallPlugin {
         #[arg(long)]

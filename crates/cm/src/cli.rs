@@ -10,6 +10,8 @@
 //! `--` both consume the remainder of the command line verbatim, and a bare
 //! positional argument is treated as a command to execute.
 
+use std::path::PathBuf;
+
 use anyhow::{Result, bail};
 use clap::{ArgAction, Parser, ValueEnum};
 use cm_core::forward::PortMapping;
@@ -204,6 +206,12 @@ pub struct Args {
     #[arg(long = "forward", value_name = "HOST_PORT[:GUEST_PORT]")]
     pub forward: Vec<PortMapping>,
 
+    /// Install the `cm(1)` man page; writes to DIR, or the `share/man/man1`
+    /// next to the binary's `bin` directory (e.g. $CARGO_HOME/share/man/man1
+    /// after `cargo install`)
+    #[arg(long, value_name = "DIR", num_args = 0..=1, require_equals = true)]
+    pub install_man: Option<Option<PathBuf>>,
+
     /// Print version information
     #[arg(long = "version")]
     pub version: bool,
@@ -247,6 +255,8 @@ pub enum Action {
     },
     /// Print cm and container versions.
     Version,
+    /// Install the generated `cm(1)` man page.
+    InstallMan(Option<PathBuf>),
 }
 
 impl Args {
@@ -254,6 +264,8 @@ impl Args {
     pub fn action(&self) -> Result<Action> {
         let action = if self.version {
             Action::Version
+        } else if let Some(dir) = &self.install_man {
+            Action::InstallMan(dir.clone())
         } else if self.status {
             Action::Status
         } else if let Some(m) = &self.set_default {

@@ -137,3 +137,6 @@ $D rm -f d1
 Test machine: `container machine create --name alpine --set-default alpine:latest`.
 Installing the plugin needs root:
 `sudo container-distro install-plugin` (after `cargo install --path crates/container-distro`).
+Man pages are generated from the clap definitions by `clap_mangen`:
+`cm --install-man` / `container-distro install-man` write to
+`<bin>/../share/man/man1` for the invoking binary (`--dir` overrides).
