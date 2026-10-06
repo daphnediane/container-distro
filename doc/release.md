@@ -23,34 +23,39 @@ publish step (`cargo install --path` is the only install path; see
    (`cargo bundle-licenses -f yaml -o THIRD-PARTY-NOTICES.yaml`), and
    [TODO](TODO.md) plus the user-facing docs reflect what actually
    shipped.
-2. Bump `[workspace.package].version` in `Cargo.toml` to the release
+2. Update `CHANGELOG.md` (see [Changelog](#changelog)): prepend a
+   `## X.Y.Z — YYYY-MM-DD` section drafted from the commit log since
+   the previous tag (`git log --oneline v<prev>..HEAD`) and the
+   `TODO.md` items those commits completed — then delete the completed
+   `[x]` entries so the changelog is their permanent record.
+3. Bump `[workspace.package].version` in `Cargo.toml` to the release
    version, then run `cargo check` so `Cargo.lock` (committed) picks it
    up.
-3. Commit: `chore: release 0.2.0` (message format per
+4. Commit: `chore: release X.Y.Z` (message format per
    `.devin/rules/comment-file.md`).
-4. Tag and branch:
+5. Tag and branch:
 
    ```bash
-   git tag -a v0.2.0 -m "container-distro 0.2.0"
-   git branch release/0.2 v0.2.0
+   git tag -a vX.Y.Z -m "container-distro X.Y.Z"
+   git branch release/X.Y vX.Y.Z
    ```
 
-5. Push everything:
+6. Push everything:
 
    ```bash
-   git push origin main release/0.2 v0.2.0
+   git push origin main release/X.Y vX.Y.Z
    ```
 
-6. Create the GitHub Release on the pushed tag (`gh` is authenticated;
+7. Create the GitHub Release on the pushed tag (`gh` is authenticated;
    `--verify-tag` refuses to mint a lightweight tag if the annotated one
-   didn't push):
+   didn't push). The new `CHANGELOG.md` section doubles as the notes:
 
    ```bash
-   gh release create v0.2.0 --verify-tag --generate-notes
+   gh release create vX.Y.Z --verify-tag --notes-file <(sed -n '/^## X.Y.Z/,/^## /p' CHANGELOG.md | head -n -1)
    ```
 
-   Edit the generated notes in the web UI or pass `--notes-file`
-   instead. For a real prerelease (`v0.3.0-rc.1`) add `--prerelease`.
+   Or `--generate-notes` and edit in the web UI. For a real prerelease
+   (`vX.Y.Z-rc.1`) add `--prerelease`.
    Prebuilt binaries are optional — `gh release upload v0.2.0
    target/release/cm target/release/container-distro` — since install is
    source-only today. If binaries ever ship, attach `THIRD-PARTY-NOTICES.yaml` too — it
@@ -58,22 +63,33 @@ publish step (`cargo install --path` is the only install path; see
    all require reproducing them in distributed copies). `cargo install`
    alone doesn't trigger that — users compile the deps themselves.
 
-7. Sanity-check the tag:
+8. Sanity-check the tag:
 
    ```bash
-   git checkout v0.2.0 && cargo test --workspace
-   cm --version   # should print 0.2.0
+   git checkout vX.Y.Z && cargo test --workspace
+   cm --version   # should print X.Y.Z
    git checkout main
    ```
 
 ## Patch releases (on `release/X.Y`)
 
 1. Cherry-pick (or land directly) the fixes onto `release/X.Y`.
-2. Bump the patch component in `Cargo.toml`, refresh `Cargo.lock`,
-   commit `chore: release X.Y.Z`.
+2. Bump the patch component in `Cargo.toml`, refresh `Cargo.lock`, and
+   prepend the `CHANGELOG.md` section the same way; commit
+   `chore: release X.Y.Z`.
 3. `git tag -a vX.Y.Z -m "container-distro X.Y.Z"` on the release
    branch; push the branch and tag. The branch head is always the latest
    `X.Y.*` tag.
+
+## Changelog
+
+`CHANGELOG.md` (repo root) records user-facing changes per release,
+newest first — `## X.Y.Z — YYYY-MM-DD` sections grouped Added /
+Changed / Fixed. It's drafted at release time from the commit log
+since the previous tag plus the `TODO.md` entries being retired:
+completed `[x]` items are deleted from `TODO.md` in the release
+commit, so the changelog is their permanent record and TODO stays a
+list of work that remains.
 
 ## Notes
 
