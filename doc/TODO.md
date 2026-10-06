@@ -9,8 +9,9 @@ source of truth. "Rung" references are the integration levels in
 
 - [ ] **Distro → machine migration** — the reverse of `migrate`; planned
       as a separate subcommand (see `ops.rs::migrate` notes)
-- [ ] **Non-loopback `--publish` warning** — nothing warns when a publish
-      spec binds `0.0.0.0` ([security.md](security.md#risks-introduced-by-gap-closing-work))
+- [x] **Non-loopback `--publish` warning** — warns on create/set, and a
+      boot-time report lists each published listener
+      ([security.md](security.md#risks-introduced-by-gap-closing-work))
 - [ ] **Automount refresh** — `--automount` resolves once at `create`;
       an operator command to re-scan `/Volumes` (`set --automount`?)
       would close the "attach volume → `set --add-volume`" chore

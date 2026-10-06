@@ -194,6 +194,17 @@ impl FromStr for PublishSpec {
     }
 }
 
+impl PublishSpec {
+    /// Whether the host bind address is loopback (the default). Anything
+    /// else — `0.0.0.0`, a LAN address — is reachable beyond this host,
+    /// the one flag that changes exposure for other machines too.
+    pub fn is_loopback(&self) -> bool {
+        self.host_ip
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|a| a.is_loopback())
+    }
+}
+
 impl fmt::Display for PublishSpec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -608,6 +619,22 @@ mod tests {
         assert_eq!(p.host_ip, "0.0.0.0");
         for bad in ["", "x", "0:1", "1:2/sctp", "a:1:2:3"] {
             assert!(bad.parse::<PublishSpec>().is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn publish_spec_loopback_detection() {
+        for local in ["8080", "127.0.0.1:8080:80", "::1:8080:80"] {
+            assert!(
+                local.parse::<PublishSpec>().unwrap().is_loopback(),
+                "{local}"
+            );
+        }
+        for public in ["0.0.0.0:8080:80", "192.168.1.5:8080:80", ":::8080:80"] {
+            assert!(
+                !public.parse::<PublishSpec>().unwrap().is_loopback(),
+                "{public}"
+            );
         }
     }
 

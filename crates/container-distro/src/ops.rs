@@ -445,7 +445,19 @@ fn build_spec(name: String, image: String, opts: &CreateOptions) -> Result<Distr
     if spec.network.as_deref() == Some("none") && !spec.publish.is_empty() {
         eprintln!("container-distro: published ports have no effect without a network");
     }
+    warn_public_publish(&spec.publish);
     Ok(spec)
+}
+
+/// Warn once per publish spec that binds a non-loopback address — the
+/// flag that changes exposure for *other* machines on the LAN.
+fn warn_public_publish(specs: &[PublishSpec]) {
+    for p in specs.iter().filter(|p| !p.is_loopback()) {
+        eprintln!(
+            "container-distro: warning: publishing on {}:{} — reachable beyond localhost (LAN); use 127.0.0.1 to bind locally",
+            p.host_ip, p.host_port
+        );
+    }
 }
 
 fn check_sources(spec: &DistroSpec) -> Result<()> {
@@ -470,7 +482,28 @@ fn boot(name: &str, _lock: &DistroLock) -> Result<()> {
     run_container_quiet(&["start", name])?;
     let init = format!("{INIT_DIR}/init");
     run_container(&["exec", "--user", "0:0", name, &init, "-u"])
-        .with_context(|| format!("user setup failed in `{name}`"))
+        .with_context(|| format!("user setup failed in `{name}`"))?;
+    report_ports(name);
+    Ok(())
+}
+
+/// Report the ports `name` publishes, now that it is listening —
+/// loopback binds as info, anything wider as a LAN-exposure warning.
+fn report_ports(name: &str) {
+    let Ok(info) = find(name) else { return };
+    let Ok(spec) = DistroSpec::from_container(&info, &host_home().unwrap_or_default()) else {
+        return;
+    };
+    for p in &spec.publish {
+        if p.is_loopback() {
+            println!("`{name}` listening on {}:{}", p.host_ip, p.host_port);
+        } else {
+            eprintln!(
+                "container-distro: warning: `{name}` listening on {}:{} — reachable beyond localhost (LAN)",
+                p.host_ip, p.host_port
+            );
+        }
+    }
 }
 
 fn ensure_running(name: &str) -> Result<ContainerInfo> {
@@ -1021,6 +1054,7 @@ pub fn set(name: &str, changes: &SpecChanges) -> Result<()> {
     let info = find(name)?;
     let old = DistroSpec::from_container(&info, &host_home()?)?;
     let new = changes.apply(&old)?;
+    warn_public_publish(&changes.add_publish);
     check_sources(&new)?;
     let was_running = info.is_running();
     if was_running {
@@ -1165,7 +1199,7 @@ fn spec_from_machine(name: &str, m: &MachineDetail, opts: &CreateOptions) -> Res
         .as_ref()
         .map(|i| i.reference.clone())
         .with_context(|| "machine has no image reference".to_string())?;
-    Ok(DistroSpec {
+    let spec = DistroSpec {
         name: name.to_string(),
         image,
         cpus: opts.cpus.or(m.cpus),
@@ -1190,7 +1224,9 @@ fn spec_from_machine(name: &str, m: &MachineDetail, opts: &CreateOptions) -> Res
         admin,
         admin_grant: admin,
         user,
-    })
+    };
+    warn_public_publish(&spec.publish);
+    Ok(spec)
 }
 
 /// The machine plugin's per-machine state directory.

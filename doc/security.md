@@ -217,9 +217,10 @@ Each open gap adds attack surface; flagging the traps up front.
   writes `mounts`/`env` into your config and the *next host `cm` call*
   grants it. Either scope dangerous keys to a file the guest can't
   reach, or treat config as hint-level trust.
-- **Publishing beyond loopback.** Today nothing warns when a publish
-  spec binds `0.0.0.0` — the one flag that changes exposure for *other*
-  machines on the LAN. Gate it behind an explicit flag or a warning.
+- **Publishing beyond loopback.** `create`/`import`/`migrate`/`set` warn
+  when a publish spec binds a non-loopback address, and `start`/first-run
+  reports each published listener (loopback as info, wider as a
+  warning). Accepted as warn-only: `0.0.0.0` is sometimes the point.
 - **`container system start` auto-start** runs whatever `container`
   resolves to (T5) — preferring the installed path mitigates.
 - **Machine `export`/`import`** (upstream-blocked): when it lands, T4's
@@ -234,7 +235,8 @@ Each open gap adds attack surface; flagging the traps up front.
 3. C1–C5, C7, C9, C12 — each lands as its own commit and flips its
    status in the findings table (**done:** C1–C5, C6, C7, C9, C10
    partial, C12)
-4. Non-loopback `--publish` warning — **open**
+4. Non-loopback `--publish` warning — **done** (warn at create/set; a
+   listening report at boot surfaces every published port)
 5. `cargo audit`/`cargo deny` in CI; fuzz the `FromStr` parsers
    (`MountSpec`, `PublishSpec`, `PortMapping`) — **open**
 6. Decide init-assets location vs. shared home (T6) — **open**
