@@ -70,11 +70,13 @@ boot() {
         fi
     done
     # No init system (a plain application image): idle as PID 1 and exit
-    # cleanly when the container is stopped.
+    # cleanly when the container is stopped. `wait` with no arguments —
+    # not `wait $!` — blocks in waitpid(-1), so grandchildren orphaned
+    # onto PID 1 are reaped here instead of piling up as zombies (C8).
     trap 'exit 0' TERM INT
     while :; do
         sleep 3600 &
-        wait $! || true
+        wait || true
     done
 }
 

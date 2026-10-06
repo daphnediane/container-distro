@@ -64,7 +64,7 @@ From [security.md's checklist](security.md#pre-10-checklist):
 - [ ] `cargo audit` / `cargo deny` in CI; fuzz the `FromStr` parsers
       (`MountSpec`, `PublishSpec`, `PortMapping`)
 - [ ] Decide init-assets location vs. guest-writable shared home (T6)
-- [ ] C8 — PID 1 zombie reaping in `assets/init` (low)
+- [x] C8 — PID 1 zombie reaping in `assets/init` (low)
 - [ ] C11 — `uninstall-plugin` TOCTOU / prefix cleanup (low)
 
 ## Docs & tooling
