@@ -131,13 +131,18 @@ prefer real port publishing (`--publish` at install, or
 `container distro set --publish`/`--unpublish`); see
 [gaps/port-forwarding](gaps/port-forwarding.md).
 
-## Man page
+## Man page and `wsl` alias
 
-`cm --install-man[=DIR]` writes a `cm(1)` page generated from the CLI
-definition itself — run it after each `cargo install` (see
-[install.md](install.md#man-pages)). With `=DIR` it writes there;
-bare, it picks `<bin>/../share/man/man1` for wherever `cm` was
-installed.
+| Option                         | Description                                                                                                                                                        |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--install-man[=DIR]`          | Install `cm(1)` (generated from the CLI definition); bare, targets `share/man/man1` of the binary's install prefix — pass `=DIR` when `cm` isn't under a `bin` dir |
+| `--uninstall-man[=DIR]`        | Remove `cm(1)` again — only files still looking like our generated pages                                                                                           |
+| `--install-alias NAME\|PATH`   | Symlink `NAME`/`PATH` to `cm` (e.g. `wsl`), plus `NAME(1)` → `cm.1` when the man page is installed                                                                 |
+| `--uninstall-alias NAME\|PATH` | Remove an alias — only a symlink that actually resolves to this `cm`, and its man-page link                                                                        |
+
+See [install.md](install.md#man-pages) for where the defaults land.
+`--install-alias` is idempotent: re-running it after
+`cm --install-man` adds just the missing man-page link.
 
 ## Environment
 

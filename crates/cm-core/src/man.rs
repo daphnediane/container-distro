@@ -19,36 +19,31 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-/// The directory `*.1` man pages are written to when none is given.
-///
-/// If the running executable lives in a `bin` directory, the pages go in
-/// the sibling `share/man/man1`: both macOS `man` and Linux man-db add
+/// `<exe>/../share/man/man1` for a binary that lives in a `bin`
+/// directory — both macOS `man` and Linux man-db add
 /// `<dir>/../share/man` to the search path for every `bin` directory on
 /// `PATH`, so pages for `$CARGO_HOME/bin/cm` (or `cargo install --root
 /// <P>`) are found with no manpath configuration.
-///
-/// When the binary isn't in a `bin` directory (a dev build in
-/// `target/`), falls back to `$CARGO_HOME/share/man/man1`, then
-/// `~/.cargo/share/man/man1` — matching where `cargo install` puts
-/// binaries.
+fn man_dir_for(exe: &Path) -> Result<PathBuf> {
+    let exe = exe.canonicalize().unwrap_or_else(|_| exe.to_path_buf());
+    exe.parent()
+        .filter(|p| p.file_name() == Some(OsStr::new("bin")))
+        .and_then(Path::parent)
+        .map(|prefix| prefix.join("share/man/man1"))
+        .with_context(|| {
+            format!(
+                "{} isn't under a `bin` directory — pass an explicit dir",
+                exe.display()
+            )
+        })
+}
+
+/// The directory `*.1` man pages are written to when none is given: the
+/// `share/man/man1` of the prefix the running binary is installed under.
+/// Dev builds (e.g. `target/debug/cm`) don't have one and must pass a
+/// dir explicitly.
 pub fn default_man_dir() -> Result<PathBuf> {
-    if let Ok(exe) = env::current_exe() {
-        // Resolve symlinks so a `wsl` -> `cm` alias still lands in the
-        // real binary's prefix.
-        let exe = exe.canonicalize().unwrap_or(exe);
-        if let Some(prefix) = exe
-            .parent()
-            .filter(|p| p.file_name() == Some(OsStr::new("bin")))
-            .and_then(|p| p.parent())
-        {
-            return Ok(prefix.join("share/man/man1"));
-        }
-    }
-    let cargo_home = env::var_os("CARGO_HOME")
-        .map(PathBuf::from)
-        .or_else(|| env::var_os("HOME").map(|h| Path::new(&h).join(".cargo")))
-        .context("cannot derive a man directory; pass one explicitly")?;
-    Ok(cargo_home.join("share/man/man1"))
+    man_dir_for(&env::current_exe().context("cannot locate the running binary")?)
 }
 
 /// Write `pages` (`cm.1`-style file name → roff source) into `dir`,
@@ -69,16 +64,42 @@ pub fn write_pages(dir: &Path, pages: &[(String, String)]) -> Result<Vec<PathBuf
     Ok(written)
 }
 
-/// Remove previously written `page` file names from `dir`. Missing files
-/// and a missing directory are not errors.
-pub fn remove_pages(dir: &Path, names: &[String]) -> Result<()> {
-    for name in names {
+/// Whether `existing` is one of our generated pages — not a hand-written
+/// or foreign page that happens to share the file name. Checks the `.TH`
+/// title plus the rendered NAME line (the about text, which is stable
+/// across versions), so a page installed by an older release still
+/// matches but anything else is left alone.
+fn is_our_page(existing: &str, rendered: &str, page_name: &str) -> bool {
+    let stem = page_name.strip_suffix(".1").unwrap_or(page_name);
+    let escaped = stem.replace('-', "\\-");
+    let name_line = rendered
+        .lines()
+        .find(|l| l.starts_with(&format!("{escaped} \\-")));
+    existing.contains(&format!(".TH {stem} ")) && name_line.is_some_and(|l| existing.contains(l))
+}
+
+/// Remove previously written `pages` from `dir` — only when the file on
+/// disk still looks like one of our generated pages; foreign or edited
+/// files are left in place with a warning. Missing files and a missing
+/// directory are not errors.
+pub fn remove_pages(dir: &Path, pages: &[(String, String)]) -> Result<()> {
+    for (name, rendered) in pages {
         let path = dir.join(name);
-        match fs::remove_file(&path) {
-            Ok(()) => println!("Removed {}", path.display()),
+        match fs::read_to_string(&path) {
+            Ok(existing) if !is_our_page(&existing, rendered, name) => {
+                eprintln!(
+                    "not removing {}: not one of our generated pages",
+                    path.display()
+                );
+            }
+            Ok(_) => {
+                fs::remove_file(&path)
+                    .with_context(|| format!("failed to remove {}", path.display()))?;
+                println!("Removed {}", path.display());
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => {
-                return Err(e).with_context(|| format!("failed to remove {}", path.display()));
+                return Err(e).with_context(|| format!("failed to read {}", path.display()));
             }
         }
     }
@@ -90,27 +111,49 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_man_dir_is_a_man1() {
-        // Either the exe's `<bin>/../share/man/man1` or the cargo-home
-        // fallback — both end the same way.
+    fn man_dir_follows_the_bin_prefix() {
         assert_eq!(
-            default_man_dir().unwrap().file_name(),
-            Some(OsStr::new("man1"))
+            man_dir_for(Path::new("/usr/local/bin/cm")).unwrap(),
+            Path::new("/usr/local/share/man/man1")
         );
+        assert_eq!(
+            man_dir_for(Path::new("/x/cargo/bin/cm")).unwrap(),
+            Path::new("/x/cargo/share/man/man1")
+        );
+        // A dev build in target/debug has no prefix — the caller must
+        // pass a dir.
+        assert!(man_dir_for(Path::new("/w/target/debug/cm")).is_err());
+        assert!(man_dir_for(Path::new("/w/target/debug/deps/cm-abc")).is_err());
     }
 
     #[test]
     fn write_and_remove_round_trip() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("man1");
-        let pages = vec![("cm.1".to_string(), ".TH CM 1".to_string())];
+        let pages = vec![(
+            "cm.1".to_string(),
+            ".TH cm 1\n.SH NAME\ncm \\- WSL\\-compatible wrapper".to_string(),
+        )];
         let written = write_pages(&dir, &pages).unwrap();
         assert_eq!(written, [dir.join("cm.1")]);
-        assert_eq!(fs::read_to_string(&written[0]).unwrap(), ".TH CM 1");
-        let names: Vec<String> = pages.iter().map(|(n, _)| n.clone()).collect();
-        remove_pages(&dir, &names).unwrap();
+        remove_pages(&dir, &pages).unwrap();
         assert!(!written[0].exists());
         // Removing again is a no-op, not an error.
-        remove_pages(&dir, &names).unwrap();
+        remove_pages(&dir, &pages).unwrap();
+    }
+
+    #[test]
+    fn remove_pages_leaves_foreign_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        // Same file name, different contents — not ours.
+        let foreign = dir.join("cm.1");
+        fs::write(&foreign, ".TH cm 1\n.SH NAME\ncm \\- some other tool").unwrap();
+        let pages = vec![(
+            "cm.1".to_string(),
+            ".TH cm 1\n.SH NAME\ncm \\- WSL\\-compatible wrapper".to_string(),
+        )];
+        remove_pages(&dir, &pages).unwrap();
+        assert!(foreign.exists());
     }
 }

@@ -212,6 +212,22 @@ pub struct Args {
     #[arg(long, value_name = "DIR", num_args = 0..=1, require_equals = true)]
     pub install_man: Option<Option<PathBuf>>,
 
+    /// Remove a `cm(1)` man page installed by --install-man (only files that
+    /// still look like our generated pages are removed)
+    #[arg(long, value_name = "DIR", num_args = 0..=1, require_equals = true)]
+    pub uninstall_man: Option<Option<PathBuf>>,
+
+    /// Create an alias symlink to cm — a NAME lands next to the binary
+    /// (e.g. `wsl`), a PATH like ~/.local/bin/wsl is used as given — plus
+    /// a NAME(1) man-page symlink
+    #[arg(long, value_name = "NAME|PATH")]
+    pub install_alias: Option<String>,
+
+    /// Remove an alias created by --install-alias (only a symlink that
+    /// actually resolves to this cm, and its man-page symlink, are removed)
+    #[arg(long, value_name = "NAME|PATH")]
+    pub uninstall_alias: Option<String>,
+
     /// Print version information
     #[arg(long = "version")]
     pub version: bool,
@@ -257,6 +273,12 @@ pub enum Action {
     Version,
     /// Install the generated `cm(1)` man page.
     InstallMan(Option<PathBuf>),
+    /// Remove a previously installed `cm(1)` man page.
+    UninstallMan(Option<PathBuf>),
+    /// Symlink `NAME`/`PATH` to cm + a `<name>(1)` man page link.
+    InstallAlias(String),
+    /// Remove an alias created by `--install-alias`.
+    UninstallAlias(String),
 }
 
 impl Args {
@@ -266,6 +288,12 @@ impl Args {
             Action::Version
         } else if let Some(dir) = &self.install_man {
             Action::InstallMan(dir.clone())
+        } else if let Some(dir) = &self.uninstall_man {
+            Action::UninstallMan(dir.clone())
+        } else if let Some(alias) = &self.install_alias {
+            Action::InstallAlias(alias.clone())
+        } else if let Some(alias) = &self.uninstall_alias {
+            Action::UninstallAlias(alias.clone())
         } else if self.status {
             Action::Status
         } else if let Some(m) = &self.set_default {

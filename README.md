@@ -27,8 +27,8 @@ cargo install --path crates/cm
 cargo install --path crates/container-distro   # also provides cm's distro support
 cm --install-man && container-distro install-man   # man pages
 
-# optionally alias to `wsl`:
-ln -sf "$(which cm)" "$(dirname "$(which cm)")/wsl"
+# optionally alias `cm` to `wsl` (symlink + man page link):
+cm --install-alias wsl
 
 # optional: the `container distro` subcommand (cm doesn't need it)
 sudo container-distro install-plugin   # -> /usr/local/libexec/container-plugins/distro

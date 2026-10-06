@@ -223,6 +223,10 @@ fn run(cli: Cli) -> Result<()> {
             plugin::install(plugin_dir, from.as_deref())?;
         }
         Command::InstallMan { dir } => install_man(dir)?,
+        Command::UninstallMan { dir } => {
+            let dir = dir.map_or_else(cm_core::man::default_man_dir, Ok)?;
+            cm_core::man::remove_pages(&dir, &man_pages()?)?;
+        }
         Command::UninstallPlugin { plugin_dir } => plugin::uninstall(plugin_dir)?,
     }
     Ok(())

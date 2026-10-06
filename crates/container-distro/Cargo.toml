@@ -22,4 +22,4 @@ cm-core.workspace = true
 libc = "0.2"
 serde.workspace = true
 serde_json.workspace = true
-tempfile = "3"
+tempfile.workspace = true

@@ -179,9 +179,15 @@ custom root.
 
 Write `container-distro(1)` plus one page per subcommand
 (`container-distro-create(1)`, …), generated from the CLI definition.
-Default location: `share/man/man1` next to the binary's `bin` dir —
+Default location: `share/man/man1` of the binary's install prefix —
 `$CARGO_HOME/share/man/man1` after `cargo install`. See
 [install.md](install.md#man-pages).
+
+### `uninstall-man [--dir DIR]`
+
+Remove the pages `install-man` wrote. Only files that still look like
+our generated pages are removed — a foreign or edited page of the same
+name is left in place with a warning.
 
 ### `uninstall-plugin [--plugin-dir DIR]`
 

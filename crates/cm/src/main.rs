@@ -7,6 +7,7 @@
 //! `cm` — a WSL-compatible command-line wrapper for Apple container
 //! machines and `container distro` distros.
 
+mod alias;
 mod backend;
 mod cli;
 mod list;
@@ -41,6 +42,9 @@ fn run(args: Args) -> Result<ExitCode> {
     match args.action()? {
         Action::Version => version(),
         Action::InstallMan(dir) => install_man(dir),
+        Action::UninstallMan(dir) => uninstall_man(dir),
+        Action::InstallAlias(t) => alias::install(&t).map(|()| ExitCode::SUCCESS),
+        Action::UninstallAlias(t) => alias::uninstall(&t).map(|()| ExitCode::SUCCESS),
         Action::Status => passthru(&["system", "status"]),
         Action::Shutdown { system } => shutdown(system),
         Action::List {
@@ -446,5 +450,12 @@ fn install_man(dir: Option<PathBuf>) -> Result<ExitCode> {
     for path in cm_core::man::write_pages(&dir, &man_pages()?)? {
         println!("Installed {}", path.display());
     }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Removes only files that still look like our generated pages.
+fn uninstall_man(dir: Option<PathBuf>) -> Result<ExitCode> {
+    let dir = dir.map_or_else(cm_core::man::default_man_dir, Ok)?;
+    cm_core::man::remove_pages(&dir, &man_pages()?)?;
     Ok(ExitCode::SUCCESS)
 }

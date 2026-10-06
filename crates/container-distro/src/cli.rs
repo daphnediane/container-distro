@@ -215,6 +215,15 @@ pub enum Command {
         dir: Option<PathBuf>,
     },
 
+    /// Remove man pages installed by `install-man` (only files that
+    /// still look like our generated pages are removed)
+    UninstallMan {
+        /// Man directory (default: the same binary-derived location
+        /// `install-man` uses)
+        #[arg(long, value_name = "DIR")]
+        dir: Option<PathBuf>,
+    },
+
     /// Remove the `container distro` plugin registration
     UninstallPlugin {
         #[arg(long)]
