@@ -38,6 +38,10 @@ pub const LABEL_USER: &str = "user";
 pub const LABEL_ADMIN: &str = "admin";
 /// Guest path where the init assets are mounted.
 pub const INIT_DIR: &str = "/sbin.distro";
+/// Image label: the tar path an `import`ed rootfs came from. Set on
+/// images `import` loads (alongside the `distro` label) so cleanup
+/// removes them by ownership, not by name prefix.
+pub const LABEL_IMPORTED_FROM: &str = "imported-from";
 
 /// How the macOS home directory is shared into a distro.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]

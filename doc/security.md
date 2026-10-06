@@ -190,7 +190,7 @@ commits that follow this document.
 | C8  | Low        | Idle-PID1 loop doesn't reap zombies                                                                                                                    | **Fixed** — bare `wait` reaps orphans reparented to PID 1                                                      |
 | C9  | Low        | Forwarder: unbounded thread per connection, no timeouts                                                                                                | **Fixed** — 64-conn semaphore cap; backlog queues excess (no idle timeout by design)                           |
 | C10 | Low        | `--automount` mounts every `/Volumes/*` rw (DMGs, USB, network shares); lowercase/`→`- collisions produce duplicate targets                            | **Partial** — case preserved, target collisions deduped + warned; rw-all-`/Volumes` remains an accepted opt-in |
-| C11 | Info       | `uninstall` check-then-delete TOCTOU; snapshot images cleaned by name prefix not label                                                                 | Open — minor                                                                                                   |
+| C11 | Info       | `uninstall` check-then-delete TOCTOU; snapshot images cleaned by name prefix not label                                                                 | **Fixed** — uninstall removes only files it installed; imported images carry a `distro` label cleanup matches  |
 | C12 | Info (bug) | `resolve_shell` probe breaks under `machine run` re-eval → always falls back to `/bin/sh`                                                              | **Fixed** — probe passed as one pre-joined string                                                              |
 
 ## Risks introduced by gap-closing work
@@ -240,6 +240,6 @@ Each open gap adds attack surface; flagging the traps up front.
 5. `cargo audit`/`cargo deny` in CI; fuzz the `FromStr` parsers
    (`MountSpec`, `PublishSpec`, `PortMapping`) — **open**
 6. Decide init-assets location vs. shared home (T6) — **open**
-7. C8 (PID 1 zombie reaping) — **done**; C11 (uninstall TOCTOU / prefix
-   cleanup) — **open, low**; C10's rw-all-`/Volumes` surface stays an
-   accepted opt-in trade-off
+7. C8 (PID 1 zombie reaping), C11 (uninstall TOCTOU / prefix cleanup) —
+   **done**; C10's rw-all-`/Volumes` surface stays an accepted opt-in
+   trade-off

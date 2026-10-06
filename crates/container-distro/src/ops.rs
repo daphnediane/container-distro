@@ -19,13 +19,13 @@ use cm_core::container::{
     self, ContainerInfo, Machine, MachineDetail, container_cmd, default_machine_name,
     ensure_started, validate_name,
 };
-use cm_core::naming::{label_lookup, state_dir};
+use cm_core::naming::{label_key, label_lookup, state_dir};
 use cm_core::oci;
 use serde::{Deserialize, Serialize};
 
 use crate::spec::{
-    DistroSpec, HomeMount, HostUser, INIT_DIR, LABEL_DISTRO, LABEL_HOME_MOUNT, MountSpec,
-    PublishSpec, SpecChanges, automounts,
+    DistroSpec, HomeMount, HostUser, INIT_DIR, LABEL_DISTRO, LABEL_HOME_MOUNT, LABEL_IMPORTED_FROM,
+    MountSpec, PublishSpec, SpecChanges, automounts,
 };
 
 /// One distro, as reported by [`summaries`] (and `list --format json`).
@@ -778,23 +778,27 @@ fn snapshot_repo(name: &str) -> String {
     format!("local/distro-{name}")
 }
 
-/// Best-effort removal of `set`/`import` snapshot images for `name`,
-/// except `keep`.
+/// Whether the image belongs to distro `name`: the `distro` label
+/// `import` sets (C11 — older unlabeled images are left for
+/// `container image prune`).
+fn is_our_image(image: &container::ImageListEntry, name: &str) -> bool {
+    label_lookup(&image.labels(), LABEL_DISTRO).is_some_and(|v| v == name)
+}
+
+/// Best-effort removal of `name`'s imported images, except `keep`.
 fn remove_snapshot_images(name: &str, keep: Option<&str>) {
-    let prefix = format!("{}:", snapshot_repo(name));
-    let Ok(out) = container_cmd()
-        .args(["image", "list", "--quiet"])
-        .stderr(Stdio::null())
-        .output()
-    else {
+    let Some(images) = container::list_images() else {
         return;
     };
-    for r in String::from_utf8_lossy(&out.stdout).lines() {
-        let r = r.trim();
-        let short = r.strip_prefix("docker.io/").unwrap_or(r);
-        if short.starts_with(&prefix) && Some(short) != keep {
+    for image in &images {
+        let short = image
+            .configuration
+            .name
+            .strip_prefix("docker.io/")
+            .unwrap_or(&image.configuration.name);
+        if is_our_image(image, name) && Some(short) != keep {
             let _ = container_cmd()
-                .args(["image", "delete", r])
+                .args(["image", "delete", &image.configuration.name])
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .status();
@@ -1143,7 +1147,20 @@ pub fn import(name: &str, file: &Path, opts: &CreateOptions) -> Result<String> {
         file
     };
     let reference = format!("{}:imported-{}", snapshot_repo(name), timestamp());
-    oci::load_rootfs(rootfs, &reference)?;
+    // Labels mark the image as ours and record where it came from —
+    // cleanup and debugging don't have to guess from the name.
+    let labels = [
+        (label_key(LABEL_DISTRO), name.to_string()),
+        (
+            label_key(LABEL_IMPORTED_FROM),
+            if file == Path::new("-") {
+                "-".to_string()
+            } else {
+                file.to_string_lossy().into_owned()
+            },
+        ),
+    ];
+    oci::load_rootfs(rootfs, &reference, &labels)?;
     let spec = build_spec(name.to_string(), reference, opts)?;
     create_from_spec(&spec, opts.no_boot, opts.set_default)
 }
@@ -1713,6 +1730,34 @@ mod tests {
         // --restricted still defaults network/ssh/admin.
         assert_eq!(spec.network.as_deref(), Some("none"));
         assert!(!spec.ssh && !spec.admin);
+    }
+
+    #[test]
+    fn our_image_by_label() {
+        let img = |name: &str, labels: &[(&str, &str)]| container::ImageListEntry {
+            configuration: container::ImageListConfig { name: name.into() },
+            variants: vec![container::ImageVariant {
+                config: Some(container::ImageVariantConfig {
+                    config: Some(container::ImageUserConfig {
+                        labels: labels
+                            .iter()
+                            .map(|(k, v)| (k.to_string(), v.to_string()))
+                            .collect(),
+                    }),
+                }),
+            }],
+        };
+        let distro_key = label_key(LABEL_DISTRO);
+
+        // The label decides regardless of the image's name.
+        let labeled = img("whatever/tag:x", &[(distro_key.as_str(), "d1")]);
+        assert!(is_our_image(&labeled, "d1"));
+        let other = img("local/distro-d2:imported-1", &[(distro_key.as_str(), "d2")]);
+        assert!(!is_our_image(&other, "d1"));
+
+        // Unlabeled images are never touched — even under our repo.
+        let unlabeled = img("local/distro-d1:imported-1", &[]);
+        assert!(!is_our_image(&unlabeled, "d1"));
     }
 
     #[test]

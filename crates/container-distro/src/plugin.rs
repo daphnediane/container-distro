@@ -149,6 +149,28 @@ pub fn install(root: Option<PathBuf>, from: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
+/// Remove `path` if present; warn (don't fail) on anything else.
+fn remove_file(path: &Path) {
+    match fs::remove_file(path) {
+        Ok(()) => println!("Removed {}", path.display()),
+        Err(e) if e.kind() == ErrorKind::NotFound => {}
+        Err(e) => eprintln!("container-distro: cannot remove {}: {e}", path.display()),
+    }
+}
+
+/// Remove `dir` only if empty, so uninstall can never delete files it
+/// didn't install. Returns false (with a warning) when files remain.
+fn remove_dir_if_empty(dir: &Path) -> bool {
+    match fs::remove_dir(dir) {
+        Ok(()) => true,
+        Err(e) if e.kind() == ErrorKind::NotFound => true,
+        Err(e) => {
+            eprintln!("container-distro: {} left behind: {e}", dir.display());
+            false
+        }
+    }
+}
+
 pub fn uninstall(root: Option<PathBuf>) -> Result<()> {
     let dir = plugin_dir(root)?;
     let config = dir.join("config.toml");
@@ -161,8 +183,17 @@ pub fn uninstall(root: Option<PathBuf>) -> Result<()> {
         }
         Err(e) => return Err(e.into()),
     }
-    fs::remove_dir_all(&dir).map_err(|e| permission_hint(e, &dir))?;
-    println!("Removed {}", dir.display());
+    // Delete only what install writes — the two files, then the dirs iff
+    // they end up empty. Check-then-`remove_dir_all` could take out
+    // whatever a renamed directory held (C11); this can't.
+    let bin_dir = dir.join("bin");
+    remove_file(&bin_dir.join(PLUGIN_NAME));
+    remove_file(&config);
+    let bin_gone = remove_dir_if_empty(&bin_dir);
+    let gone = remove_dir_if_empty(&dir) && bin_gone;
+    if gone {
+        println!("Removed {}", dir.display());
+    }
     Ok(())
 }
 
@@ -201,5 +232,18 @@ mod tests {
         assert!(bin.is_file());
         uninstall(Some(root.path().to_path_buf())).unwrap();
         assert!(!root.path().join("distro").exists());
+    }
+
+    #[test]
+    fn uninstall_leaves_foreign_files() {
+        let root = tempfile::tempdir().unwrap();
+        install(Some(root.path().to_path_buf()), None).unwrap();
+        let keep = root.path().join("distro/keep.txt");
+        fs::write(&keep, b"not ours").unwrap();
+        // Our files go; the foreign one and its directories stay.
+        uninstall(Some(root.path().to_path_buf())).unwrap();
+        assert!(!root.path().join("distro/config.toml").exists());
+        assert!(!root.path().join("distro/bin/distro").exists());
+        assert!(keep.exists());
     }
 }

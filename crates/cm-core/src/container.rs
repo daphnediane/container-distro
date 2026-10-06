@@ -214,6 +214,73 @@ pub struct NetworkStatus {
     pub ipv4_address: Option<String>,
 }
 
+/// An image as reported by `container image list --format json`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageListEntry {
+    pub configuration: ImageListConfig,
+    #[serde(default)]
+    pub variants: Vec<ImageVariant>,
+}
+
+impl ImageListEntry {
+    /// OCI `config.Labels` merged across variants (single-variant in
+    /// practice; later entries win on collision).
+    pub fn labels(&self) -> std::collections::BTreeMap<String, String> {
+        let mut m = std::collections::BTreeMap::new();
+        for v in &self.variants {
+            if let Some(c) = v.config.as_ref().and_then(|c| c.config.as_ref()) {
+                m.extend(c.labels.iter().map(|(k, v)| (k.clone(), v.clone())));
+            }
+        }
+        m
+    }
+}
+
+/// The per-image fields of an [`ImageListEntry`].
+#[derive(Debug, Clone, Deserialize)]
+pub struct ImageListConfig {
+    /// The image reference, e.g. `local/distro-d1:imported-1728000000`.
+    pub name: String,
+}
+
+/// One platform variant of an [`ImageListEntry`].
+#[derive(Debug, Clone, Deserialize)]
+pub struct ImageVariant {
+    #[serde(default)]
+    pub config: Option<ImageVariantConfig>,
+}
+
+/// A variant's image-config wrapper (`config.config` in the JSON).
+#[derive(Debug, Clone, Deserialize)]
+pub struct ImageVariantConfig {
+    /// The OCI image config object.
+    #[serde(default)]
+    pub config: Option<ImageUserConfig>,
+}
+
+/// The subset of the OCI image `config` object we read. Its `Labels`
+/// key is capitalized in `container`'s Go-serialized JSON.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ImageUserConfig {
+    #[serde(default, rename = "Labels")]
+    pub labels: std::collections::BTreeMap<String, String>,
+}
+
+/// All images as `container image list --format json` reports them —
+/// `None` when the listing can't be fetched or parsed.
+pub fn list_images() -> Option<Vec<ImageListEntry>> {
+    let out = container_cmd()
+        .args(["image", "list", "--format", "json"])
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    serde_json::from_slice(&out.stdout).ok()
+}
+
 /// Where apple/container's installer puts the CLI (per its docs and
 /// released installers). Preferred over a bare PATH lookup so a hijacked
 /// PATH can't substitute a different binary.

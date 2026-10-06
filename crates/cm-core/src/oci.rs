@@ -75,8 +75,15 @@ fn is_gzip(file: &mut File) -> io::Result<bool> {
 }
 
 /// Write an OCI image-layout tar for `rootfs` to `out`, tagged `reference`
-/// for platform `linux/<arch>`.
-pub fn build_layout(rootfs: &Path, out: impl Write, reference: &str, arch: &str) -> Result<()> {
+/// for platform `linux/<arch>`. `labels` land in `config.Labels`, where
+/// `container image list --format json` reports them.
+pub fn build_layout(
+    rootfs: &Path,
+    out: impl Write,
+    reference: &str,
+    arch: &str,
+    labels: &[(String, String)],
+) -> Result<()> {
     let mut layer =
         File::open(rootfs).with_context(|| format!("failed to open {}", rootfs.display()))?;
     let gzip = is_gzip(&mut layer)?;
@@ -91,12 +98,16 @@ pub fn build_layout(rootfs: &Path, out: impl Write, reference: &str, arch: &str)
         layer_digest.clone()
     };
 
+    let label_map: serde_json::Map<String, serde_json::Value> = labels
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone().into()))
+        .collect();
     let config = serde_json::to_vec(&json!({
         "architecture": arch,
         "os": "linux",
-        "config": {},
+        "config": { "Labels": label_map },
         "rootfs": { "type": "layers", "diff_ids": [format!("sha256:{diff_id}")] },
-        "history": [{ "created_by": "cm --import", "comment": "imported rootfs" }],
+        "history": [{ "created_by": "container distro import", "comment": "imported rootfs" }],
     }))?;
     let config_digest = sha256_hex(&config);
 
@@ -154,8 +165,8 @@ pub fn build_layout(rootfs: &Path, out: impl Write, reference: &str, arch: &str)
 }
 
 /// Load `rootfs` (a tar or tar.gz path) into the `container` image store
-/// as `reference`, for `linux/<host arch>`.
-pub fn load_rootfs(rootfs: &Path, reference: &str) -> Result<()> {
+/// as `reference`, for `linux/<host arch>`, carrying `labels`.
+pub fn load_rootfs(rootfs: &Path, reference: &str, labels: &[(String, String)]) -> Result<()> {
     let layout = tempfile::Builder::new()
         .prefix("cm-import-")
         .suffix(".tar")
@@ -166,6 +177,7 @@ pub fn load_rootfs(rootfs: &Path, reference: &str) -> Result<()> {
         io::BufWriter::new(layout.as_file()),
         reference,
         host_arch(),
+        labels,
     )?;
     let status = crate::container::container_cmd()
         .args(["image", "load", "-i"])
@@ -230,7 +242,14 @@ mod tests {
         let src = dir.path().join("rootfs.tar");
         std::fs::write(&src, rootfs).unwrap();
         let mut out = Vec::new();
-        build_layout(&src, &mut out, "local/test:imported", "arm64").unwrap();
+        build_layout(
+            &src,
+            &mut out,
+            "local/test:imported",
+            "arm64",
+            &[("io.example.distro".into(), "d1".into())],
+        )
+        .unwrap();
         let files = read_layout(&out);
 
         let index: serde_json::Value = serde_json::from_slice(&files["index.json"]).unwrap();
@@ -252,6 +271,7 @@ mod tests {
             format!("sha256:{}", sha256_hex(uncompressed))
         );
         assert_eq!(config["architecture"], "arm64");
+        assert_eq!(config["config"]["Labels"]["io.example.distro"], "d1");
     }
 
     #[test]
