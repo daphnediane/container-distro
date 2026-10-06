@@ -16,7 +16,11 @@ publish step (`cargo install --path` is the only install path; see
 
 ## Cutting a minor release (from `main`)
 
-1. Confirm `main` is green: `cargo test --workspace` passes, and
+1. Confirm `main` is green: `cargo test --workspace` passes, the
+   supply-chain gate is clean (`cargo audit` + `cargo deny check` —
+   advisory DB needs network; license policy lives in `deny.toml`),
+   `THIRD-PARTY-NOTICES.yaml` is regenerated if deps changed
+   (`cargo bundle-licenses -f yaml -o THIRD-PARTY-NOTICES.yaml`), and
    [TODO](TODO.md) plus the user-facing docs reflect what actually
    shipped.
 2. Bump `[workspace.package].version` in `Cargo.toml` to the release
@@ -49,7 +53,10 @@ publish step (`cargo install --path` is the only install path; see
    instead. For a real prerelease (`v0.3.0-rc.1`) add `--prerelease`.
    Prebuilt binaries are optional — `gh release upload v0.2.0
    target/release/cm target/release/container-distro` — since install is
-   source-only today.
+   source-only today. If binaries ever ship, attach `THIRD-PARTY-NOTICES.yaml` too — it
+   carries every dep's copyright + license text (MIT/BSD/Apache/Unicode
+   all require reproducing them in distributed copies). `cargo install`
+   alone doesn't trigger that — users compile the deps themselves.
 
 7. Sanity-check the tag:
 

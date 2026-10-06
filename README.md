@@ -298,7 +298,13 @@ for re-evaluation, is in [doc/security.md](doc/security.md).
 
 ## License
 
-[BSD-2-Clause License]
+[BSD-2-Clause License].
+
+Dependencies are permissively licensed (MIT / Apache-2.0 / BSD /
+Unicode-3.0; policy enforced by `deny.toml`). Their copyright and
+license texts are collected in
+[THIRD-PARTY-NOTICES.yaml](THIRD-PARTY-NOTICES.yaml) — ship that file
+with any prebuilt binaries.
 
 ## AI Coding Declaration
 
