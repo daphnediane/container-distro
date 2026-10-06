@@ -8,6 +8,7 @@
 //! `container` CLI, the serde types for its JSON output, and small
 //! utilities (OCI layout writer, port forwarder, table helpers).
 
+pub mod completions;
 pub mod container;
 pub mod forward;
 pub mod man;

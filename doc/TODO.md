@@ -73,7 +73,9 @@ From [security.md's checklist](security.md#pre-10-checklist):
 
 - [x] Man pages — `cm --install-man`, `container-distro install-man`
       (generated from the clap definitions, so they can't drift)
-- [ ] Shell completions — not yet; `clap_complete` would slot in next to
-      `clap_mangen` the same way
+- [x] Shell completions — `cm --install-completions`,
+      `container-distro install-completions` (bash/zsh/fish via
+      `clap_complete`, generated from the clap definitions like the
+      man pages)
 - [ ] Packages — no brew/nix/pkg installers; `cargo install` +
       `install-plugin` is the only path ([install](install.md))

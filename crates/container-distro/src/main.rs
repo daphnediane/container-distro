@@ -78,6 +78,39 @@ fn install_man(dir: Option<PathBuf>) -> Result<()> {
     Ok(())
 }
 
+/// The completion scripts, generated from the clap definition so they
+/// can't drift from `--help`. The command is renamed so scripts
+/// complete `container-distro`, not `container distro`.
+fn completions() -> Vec<(cm_core::completions::Shell, String)> {
+    use clap_complete::shells::{Bash, Fish, Zsh};
+    use cm_core::completions::Shell;
+    let mut cmd = Cli::command().name("container-distro");
+    Shell::ALL
+        .iter()
+        .map(|&s| {
+            let mut buf = Vec::new();
+            match s {
+                Shell::Bash => {
+                    clap_complete::generate(Bash, &mut cmd, "container-distro", &mut buf)
+                }
+                Shell::Zsh => clap_complete::generate(Zsh, &mut cmd, "container-distro", &mut buf),
+                Shell::Fish => {
+                    clap_complete::generate(Fish, &mut cmd, "container-distro", &mut buf)
+                }
+            }
+            (s, String::from_utf8(buf).expect("completion is not UTF-8"))
+        })
+        .collect()
+}
+
+fn install_completions(dir: Option<PathBuf>) -> Result<()> {
+    let dir = dir.map_or_else(cm_core::completions::default_share_dir, Ok)?;
+    for path in cm_core::completions::write_files(&dir, "container-distro", &completions())? {
+        println!("Installed {}", path.display());
+    }
+    Ok(())
+}
+
 fn print_table(rows: &[DistroSummary]) {
     let dash = || "-".to_string();
     let mut table = vec![
@@ -229,6 +262,11 @@ fn run(cli: Cli) -> Result<()> {
         Command::UninstallMan { dir } => {
             let dir = dir.map_or_else(cm_core::man::default_man_dir, Ok)?;
             cm_core::man::remove_pages(&dir, &man_pages()?)?;
+        }
+        Command::InstallCompletions { dir } => install_completions(dir)?,
+        Command::UninstallCompletions { dir } => {
+            let dir = dir.map_or_else(cm_core::completions::default_share_dir, Ok)?;
+            cm_core::completions::remove_files(&dir, "container-distro", &completions())?;
         }
         Command::UninstallPlugin { plugin_dir } => plugin::uninstall(plugin_dir)?,
     }

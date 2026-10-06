@@ -217,6 +217,17 @@ pub struct Args {
     #[arg(long, value_name = "DIR", num_args = 0..=1, require_equals = true)]
     pub uninstall_man: Option<Option<PathBuf>>,
 
+    /// Install the bash/zsh/fish completions for cm; writes under DIR
+    /// (the share root), or the `share` next to the binary's `bin`
+    /// directory (e.g. $CARGO_HOME/share after `cargo install`)
+    #[arg(long, value_name = "DIR", num_args = 0..=1, require_equals = true)]
+    pub install_completions: Option<Option<PathBuf>>,
+
+    /// Remove completions installed by --install-completions (only files
+    /// that still look like generated scripts are removed)
+    #[arg(long, value_name = "DIR", num_args = 0..=1, require_equals = true)]
+    pub uninstall_completions: Option<Option<PathBuf>>,
+
     /// Create an alias symlink to cm — a NAME lands next to the binary
     /// (e.g. `wsl`), a PATH like ~/.local/bin/wsl is used as given — plus
     /// a NAME(1) man-page symlink
@@ -275,6 +286,10 @@ pub enum Action {
     InstallMan(Option<PathBuf>),
     /// Remove a previously installed `cm(1)` man page.
     UninstallMan(Option<PathBuf>),
+    /// Install the generated shell completions.
+    InstallCompletions(Option<PathBuf>),
+    /// Remove previously installed shell completions.
+    UninstallCompletions(Option<PathBuf>),
     /// Symlink `NAME`/`PATH` to cm + a `<name>(1)` man page link.
     InstallAlias(String),
     /// Remove an alias created by `--install-alias`.
@@ -290,6 +305,10 @@ impl Args {
             Action::InstallMan(dir.clone())
         } else if let Some(dir) = &self.uninstall_man {
             Action::UninstallMan(dir.clone())
+        } else if let Some(dir) = &self.install_completions {
+            Action::InstallCompletions(dir.clone())
+        } else if let Some(dir) = &self.uninstall_completions {
+            Action::UninstallCompletions(dir.clone())
         } else if let Some(alias) = &self.install_alias {
             Action::InstallAlias(alias.clone())
         } else if let Some(alias) = &self.uninstall_alias {

@@ -42,9 +42,12 @@ self-installs what it owns.
 cargo install --path crates/cm
 cargo install --path crates/container-distro   # also provides cm's distro support
 
-# man pages (self-generated from the CLI definitions — never stale)
+# man pages + shell completions (self-generated from the CLI
+# definitions — never stale)
 cm --install-man
 container-distro install-man
+cm --install-completions          # bash/zsh/fish
+container-distro install-completions
 
 # optional: a `wsl` alias symlink (bin + man page) so WSL-shaped
 # tooling finds it — a bare name lands next to cm, or pass a path:
@@ -102,6 +105,36 @@ plugin (`container distro install-man`), the binary lives under
 `libexec/container-plugins/` and the pages would land inside the plugin
 tree where `man` won't look.
 
+### Shell completions
+
+`cm --install-completions` / `container-distro install-completions`
+write bash, zsh, and fish scripts — generated at runtime by
+`clap_complete` from the same clap definitions as the man pages — to
+the conventional vendor locations under the share root:
+
+- `share/bash-completion/completions/<bin>`
+- `share/zsh/site-functions/_<bin>`
+- `share/fish/vendor_completions.d/<bin>.fish`
+
+The share root defaults to the binary's install prefix (`<bin-dir>/..`
+→ `share`), so `cargo install --root /usr/local` lands under
+`/usr/local/share` and a Homebrew prefix under its share — prefixes
+whose vendor dirs the shells already scan. For `$CARGO_HOME/share` or
+a dev build you'll want an explicit dir on the shell's search path:
+
+```bash
+cm --install-completions=~/.local/share        # fish + bash-completion
+                                               # pick ~/.local/share up
+container-distro install-completions --dir ~/.local/share
+cm --uninstall-completions                      # remove ours again
+                                                # (foreign/edited files
+                                                # are left alone)
+```
+
+`--uninstall-completions` removes only scripts that still carry the
+generated signature for that binary — a foreign or hand-replaced file
+of the same name is left in place with a warning.
+
 ### `wsl` aliases
 
 `cm --install-alias NAME|PATH` creates a symlink to `cm` — a bare `NAME`
@@ -116,7 +149,8 @@ page a symlink to `cm.1` — anything else is refused.
 ## Upgrade
 
 Same commands again — `cargo install` replaces the binaries, the
-`install-man` commands rewrite the pages (they're rendered from the new
+`install-man`/`install-completions` commands rewrite the pages and
+scripts (they're rendered from the new
 binary, so they're always current), and `install-plugin` refreshes the
 registered copy (or `container-distro install-plugin --from
 <installed>` from a newer build).
@@ -127,6 +161,7 @@ registered copy (or `container-distro install-plugin --from
 container-distro uninstall-plugin   # only removes our registration
 cm --uninstall-alias wsl            # if you installed one
 cm --uninstall-man && container-distro uninstall-man
+cm --uninstall-completions && container-distro uninstall-completions
 cargo uninstall cm container-distro
 ```
 

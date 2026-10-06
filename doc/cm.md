@@ -133,12 +133,14 @@ prefer real port publishing (`--publish` at install, or
 
 ## Man page and `wsl` alias
 
-| Option                         | Description                                                                                                                                                        |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `--install-man[=DIR]`          | Install `cm(1)` (generated from the CLI definition); bare, targets `share/man/man1` of the binary's install prefix — pass `=DIR` when `cm` isn't under a `bin` dir |
-| `--uninstall-man[=DIR]`        | Remove `cm(1)` again — only files still looking like our generated pages                                                                                           |
-| `--install-alias NAME\|PATH`   | Symlink `NAME`/`PATH` to `cm` (e.g. `wsl`), plus `NAME(1)` → `cm.1` when the man page is installed                                                                 |
-| `--uninstall-alias NAME\|PATH` | Remove an alias — only a symlink that actually resolves to this `cm`, and its man-page link                                                                        |
+| Option                          | Description                                                                                                                                                        |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--install-man[=DIR]`           | Install `cm(1)` (generated from the CLI definition); bare, targets `share/man/man1` of the binary's install prefix — pass `=DIR` when `cm` isn't under a `bin` dir |
+| `--uninstall-man[=DIR]`         | Remove `cm(1)` again — only files still looking like our generated pages                                                                                           |
+| `--install-completions[=DIR]`   | Install bash/zsh/fish completions (generated from the CLI definition); bare, targets `share/` of the binary's install prefix                                       |
+| `--uninstall-completions[=DIR]` | Remove the completions again — only files still looking like generated scripts                                                                                     |
+| `--install-alias NAME\|PATH`    | Symlink `NAME`/`PATH` to `cm` (e.g. `wsl`), plus `NAME(1)` → `cm.1` when the man page is installed                                                                 |
+| `--uninstall-alias NAME\|PATH`  | Remove an alias — only a symlink that actually resolves to this `cm`, and its man-page link                                                                        |
 
 See [install.md](install.md#man-pages) for where the defaults land.
 `--install-alias` is idempotent: re-running it after

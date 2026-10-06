@@ -195,6 +195,21 @@ Remove the pages `install-man` wrote. Only files that still look like
 our generated pages are removed — a foreign or edited page of the same
 name is left in place with a warning.
 
+### `install-completions [--dir DIR]`
+
+Write bash, zsh, and fish completions for `container-distro`,
+generated from the CLI definition. The share root defaults to the
+binary's install prefix (`$CARGO_HOME/share` after `cargo install`);
+files land in `bash-completion/completions/`, `zsh/site-functions/`,
+and `fish/vendor_completions.d/`. See
+[install.md](install.md#shell-completions).
+
+### `uninstall-completions [--dir DIR]`
+
+Remove the scripts `install-completions` wrote. Only files that still
+look like generated completions are removed — a foreign or edited
+file of the same name is left in place with a warning.
+
 ### `uninstall-plugin [--plugin-dir DIR]`
 
 Remove the plugin registration (only if it was installed by

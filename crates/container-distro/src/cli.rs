@@ -233,6 +233,23 @@ pub enum Command {
         dir: Option<PathBuf>,
     },
 
+    /// Install bash/zsh/fish completions for `container-distro`
+    InstallCompletions {
+        /// Share root (default: the `share` next to the binary's `bin`
+        /// directory — e.g. $CARGO_HOME/share after `cargo install`)
+        #[arg(long, value_name = "DIR")]
+        dir: Option<PathBuf>,
+    },
+
+    /// Remove completions installed by `install-completions` (only
+    /// files that still look like generated scripts are removed)
+    UninstallCompletions {
+        /// Share root (default: the same binary-derived location
+        /// `install-completions` uses)
+        #[arg(long, value_name = "DIR")]
+        dir: Option<PathBuf>,
+    },
+
     /// Remove the `container distro` plugin registration
     UninstallPlugin {
         #[arg(long)]
