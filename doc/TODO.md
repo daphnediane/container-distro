@@ -7,8 +7,9 @@ source of truth. "Rung" references are the integration levels in
 
 ## Distros (`container distro`)
 
-- [ ] **Distro → machine migration** -- the reverse of `migrate`;
-  planned as a separate subcommand (see `ops.rs::migrate` notes; [#1])
+- [x] **Distro → machine migration** -- `migrate --out` clones the
+  distro's rootfs into a newly created `container machine`; `--in`
+  selects the default direction explicitly ([#1])
 
 ## Machines (WSL parity, mostly upstream-blocked)
 

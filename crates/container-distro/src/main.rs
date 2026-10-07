@@ -249,11 +249,18 @@ fn run(cli: Cli) -> Result<()> {
         }
         Command::Migrate {
             name,
+            out,
             target_name,
             keep,
             opts,
+            ..
         } => {
-            println!("{}", ops::migrate(&name, target_name, keep, &opts)?);
+            let result = if out {
+                ops::migrate_to_machine(&name, target_name, keep, &opts)?
+            } else {
+                ops::migrate(&name, target_name, keep, &opts)?
+            };
+            println!("{result}");
         }
         Command::InstallPlugin { plugin_dir, from } => {
             plugin::install(plugin_dir, from.as_deref())?;

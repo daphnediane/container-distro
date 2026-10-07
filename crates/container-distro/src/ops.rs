@@ -713,12 +713,19 @@ pub fn delete(force: bool, names: &[String]) -> Result<()> {
             }
             run_container_quiet(&["stop", n])?;
         }
-        run_container_quiet(&["delete", n])?;
-        remove_snapshot_images(n, None);
-        cleanup_preserved(n, &lock);
-        if default_name().as_deref() == Some(n.as_str()) {
-            write_default(None)?;
-        }
+        delete_stopped_locked(n, &lock)?;
+    }
+    Ok(())
+}
+
+/// Delete a stopped distro under its lock: the container, its snapshot
+/// images, anything `set` staged, and the default marker.
+fn delete_stopped_locked(n: &str, lock: &DistroLock) -> Result<()> {
+    run_container_quiet(&["delete", n])?;
+    remove_snapshot_images(n, None);
+    cleanup_preserved(n, lock);
+    if default_name().as_deref() == Some(n) {
+        write_default(None)?;
     }
     Ok(())
 }
@@ -1438,14 +1445,13 @@ pub fn import_machine(name: &str, file: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Migrate a `container machine` into a distro, carrying its root
-/// filesystem across with it. Unless `keep`, the machine is removed
-/// once the distro exists. `target` renames the result. Returns the
-/// distro's name.
+/// Migrate a `container machine` into a distro (`migrate`, `--in`),
+/// carrying its root filesystem across with it. Unless `keep`, the
+/// machine is removed once the distro exists. `target` renames the
+/// result. Returns the distro's name.
 ///
-/// (The reverse — distro → machine — is planned as a separate
-/// subcommand; tracked in
-/// [#1](https://github.com/daphnediane/container-distro/issues/1).)
+/// The reverse — distro → machine — is [`migrate_to_machine`]
+/// (`migrate --out`).
 pub fn migrate(
     machine: &str,
     target: Option<String>,
@@ -1529,6 +1535,16 @@ fn machine_state_dir(name: &str) -> Result<PathBuf> {
         .join(name))
 }
 
+/// The `source` of a `rootFsOverride` record in a container's
+/// runtime-configuration.json — where the daemon mounts its disk from.
+fn rootfs_override_source(json: &str) -> Option<PathBuf> {
+    serde_json::from_str::<serde_json::Value>(json)
+        .ok()?
+        .pointer("/options/rootFsOverride/source")?
+        .as_str()
+        .map(PathBuf::from)
+}
+
 /// The `source` of a `rootfs.json`-shaped mount record.
 fn rootfs_source(json: &str) -> Option<PathBuf> {
     serde_json::from_str::<serde_json::Value>(json)
@@ -1553,15 +1569,7 @@ fn machine_rootfs(m: &MachineDetail) -> Result<Option<PathBuf>> {
                 .join("runtime-configuration.json"),
         )
         .ok()
-        .and_then(|s| {
-            serde_json::from_str::<serde_json::Value>(&s)
-                .ok()
-                .and_then(|v| {
-                    v.pointer("/options/rootFsOverride/source")
-                        .and_then(|s| s.as_str())
-                        .map(PathBuf::from)
-                })
-        })
+        .and_then(|s| rootfs_override_source(&s))
         && src.is_file()
     {
         return Ok(Some(src));
@@ -1659,6 +1667,230 @@ fn migrate_to_distro(
         write_default(Some(name))?;
     }
     Ok(name.to_string())
+}
+
+/// A distro's ext4 rootfs: the `rootFsOverride` source when the runtime
+/// configuration records one, else the conventional
+/// `containers/<id>/rootfs.ext4`. `None` before the first boot — the
+/// filesystem is still the pristine image (and `container export` has
+/// nothing to snapshot either).
+fn distro_rootfs(id: &str) -> Result<Option<PathBuf>> {
+    let dir = container_dir(id)?;
+    if let Some(src) = fs::read_to_string(dir.join("runtime-configuration.json"))
+        .ok()
+        .and_then(|s| rootfs_override_source(&s))
+        && src.is_file()
+    {
+        return Ok(Some(src));
+    }
+    let ext4 = dir.join("rootfs.ext4");
+    Ok(ext4.is_file().then_some(ext4))
+}
+
+/// The `CreateOptions` `machine create` can't honor — `--out` rejects
+/// them rather than silently dropping user intent.
+fn reject_machine_opts(opts: &CreateOptions) -> Result<()> {
+    let mut bad: Vec<&str> = Vec::new();
+    if !opts.volumes.is_empty() {
+        bad.push("--volume");
+    }
+    if opts.automount.is_some() {
+        bad.push("--automount");
+    }
+    if !opts.publish.is_empty() {
+        bad.push("--publish");
+    }
+    if opts.network.is_some() {
+        bad.push("--network");
+    }
+    if opts.ssh || opts.no_ssh {
+        bad.push("--ssh/--no-ssh");
+    }
+    if opts.sudo || opts.no_sudo {
+        bad.push("--sudo/--no-sudo");
+    }
+    if opts.restricted {
+        bad.push("--restricted");
+    }
+    if !bad.is_empty() {
+        bail!(
+            "{} cannot be applied to a machine (supported overrides: --cpus, --memory, --home-mount)",
+            bad.join(", ")
+        );
+    }
+    Ok(())
+}
+
+/// The image to `machine create` from when migrating a distro out: the
+/// distro's own when it is still local. When it is gone and a
+/// filesystem is being carried, any local image does — the rootfs is
+/// replaced right after the first boot. Without a filesystem to carry
+/// the image is the machine's whole content, so the distro's reference
+/// is passed through for `machine create` to pull.
+fn machine_create_image(spec_image: &str, carrying: bool) -> Result<String> {
+    let images = container::list_images().unwrap_or_default();
+    let is = |n: &str| {
+        n == spec_image
+            || n.strip_prefix("docker.io/") == Some(spec_image)
+            || n.strip_prefix("docker.io/library/") == Some(spec_image)
+    };
+    if let Some(i) = images.iter().find(|i| is(&i.configuration.name)) {
+        return Ok(i.configuration.name.clone());
+    }
+    if !carrying {
+        return Ok(spec_image.to_string());
+    }
+    images
+        .first()
+        .map(|i| {
+            eprintln!(
+                "container-distro: image `{spec_image}` is no longer local; creating the machine from {}",
+                i.configuration.name
+            );
+            i.configuration.name.clone()
+        })
+        .context("no local images to create the machine from")
+}
+
+/// `container machine create` for a distro migrating out: its
+/// cpus/memory/home-mount with `opts` overrides on top. The machine
+/// boots once — its plugin-state rootfs only materializes then — and is
+/// stopped by the caller for the filesystem swap.
+fn create_machine(name: &str, image: &str, spec: &DistroSpec, opts: &CreateOptions) -> Result<()> {
+    let mut a: Vec<String> = ["machine", "create", "--name", name]
+        .map(String::from)
+        .to_vec();
+    if let Some(c) = opts.cpus.or(spec.cpus) {
+        a.extend(["--cpus".into(), c.to_string()]);
+    }
+    if let Some(m) = opts.memory.clone().or_else(|| spec.memory.clone()) {
+        a.extend(["--memory".into(), m]);
+    }
+    a.extend([
+        "--home-mount".into(),
+        opts.home_mount.unwrap_or(spec.home_mount).as_str().into(),
+    ]);
+    a.push(image.to_string());
+    let a: Vec<&str> = a.iter().map(String::as_str).collect();
+    run_container(&a)
+}
+
+/// Migrate a distro into a `container machine` (`migrate --out`), the
+/// mirror of [`migrate_to_distro`]: create the machine from the distro's
+/// image — its internal boot materializes the plugin-state disk — stop
+/// it, then clone the distro's `rootfs.ext4` over the machine's. No
+/// tar/image round-trip. Unless `keep`, the distro is removed once the
+/// machine exists. `target` renames the result. Returns the machine's
+/// name.
+pub fn migrate_to_machine(
+    distro: &str,
+    target: Option<String>,
+    keep: bool,
+    opts: &CreateOptions,
+) -> Result<String> {
+    ensure_started()?;
+    reject_machine_opts(opts)?;
+    let name = target.unwrap_or_else(|| distro.to_string());
+    validate_name(&name)?;
+    if container::list_machines()?.iter().any(|m| m.id == name) {
+        bail!("a machine named `{name}` already exists (use `-n` to pick another)");
+    }
+    // Serialize against a concurrent `set`/`start`/`rm` on the distro,
+    // then finish any interrupted `set` before reading its filesystem.
+    let lock = DistroLock::acquire(distro)?;
+    container::warn_unverified_version();
+    recover_interrupted(distro, &lock)?;
+    let info = find(distro)?;
+    let spec = DistroSpec::from_container(&info, &host_home()?)?;
+    let was_running = info.is_running();
+    if was_running {
+        run_container_quiet(&["stop", distro])?;
+    }
+    let src = distro_rootfs(info.id())?;
+    if src.is_none() {
+        eprintln!(
+            "container-distro: distro `{distro}` has no rootfs to carry — the machine starts from its image"
+        );
+    }
+    let image = machine_create_image(&spec.image, src.is_some())?;
+    if let Err(e) = create_machine(&name, &image, &spec, opts) {
+        if was_running {
+            let _ = boot(distro, &lock);
+        }
+        return Err(e);
+    }
+    // Replace the machine's filesystem while it is stopped: clone to a
+    // sibling then rename over its disk, so an interruption leaves the
+    // old disk or the new one, never a partial file.
+    let swap = (|| -> Result<()> {
+        run_container_quiet(&["machine", "stop", &name])?;
+        let Some(src) = src else { return Ok(()) };
+        let detail = container::inspect_machine(&name)?;
+        let dst = machine_rootfs(&detail)?.context("the new machine has no rootfs to replace")?;
+        let mut tmp = dst.clone().into_os_string();
+        tmp.push(".new");
+        let tmp = PathBuf::from(tmp);
+        let _ = fs::remove_file(&tmp);
+        // `fs::copy` is a clonefile on APFS — instant and copy-on-write.
+        fs::copy(&src, &tmp).with_context(|| format!("failed to clone {}", src.display()))?;
+        fs::rename(&tmp, &dst).with_context(|| format!("failed to install {}", dst.display()))?;
+        Ok(())
+    })();
+    if let Err(e) = swap {
+        // The machine holds only its image filesystem; remove it so a
+        // retry isn't blocked, and restart the distro.
+        if let Err(r) = run_container_quiet(&["machine", "rm", &name]) {
+            eprintln!("container-distro: removing incomplete machine `{name}` failed: {r:#}");
+        }
+        if was_running {
+            let _ = boot(distro, &lock);
+        }
+        return Err(e.context(format!(
+            "failed to move `{distro}`'s filesystem into machine `{name}`"
+        )));
+    }
+    // `machine create`'s internal boot already absorbed the first-boot
+    // provisioning flake; this run verifies the swapped filesystem and
+    // leaves the machine running, like `migrate --in` leaves the distro.
+    if !opts.no_boot {
+        let booted = (0..3).any(|attempt| {
+            if attempt > 0 {
+                std::thread::sleep(std::time::Duration::from_secs(2));
+            }
+            boot_machine(&name).is_ok()
+        });
+        if !booted {
+            if was_running {
+                let _ = boot(distro, &lock);
+            }
+            bail!(
+                "machine `{name}` holds the migrated filesystem but failed to boot; \
+                 distro `{distro}` left in place (see `container machine logs {name}`)"
+            );
+        }
+    }
+    if !keep {
+        delete_stopped_locked(distro, &lock)?;
+    } else {
+        if name == distro {
+            eprintln!(
+                "container-distro: `{name}` is now both a distro and a machine; `cm` resolves the name to the distro"
+            );
+        }
+        if was_running {
+            let _ = boot(distro, &lock);
+        }
+    }
+    if opts.set_default
+        || no_default(
+            default_name().as_deref(),
+            &distros()?,
+            &container::list_machines().unwrap_or_default(),
+        )
+    {
+        run_container_quiet(&["machine", "set-default", &name])?;
+    }
+    Ok(name)
 }
 
 #[cfg(test)]
@@ -2033,6 +2265,52 @@ mod tests {
         // Unlabeled images are never touched — even under our repo.
         let unlabeled = img("local/distro-d1:imported-1", &[]);
         assert!(!is_our_image(&unlabeled, "d1"));
+    }
+
+    #[test]
+    fn machine_opts_rejection() {
+        // The `machine create` subset passes.
+        assert!(
+            reject_machine_opts(&CreateOptions {
+                cpus: Some(2),
+                memory: Some("1G".into()),
+                home_mount: Some(HomeMount::Ro),
+                no_boot: true,
+                set_default: true,
+                ..CreateOptions::default()
+            })
+            .is_ok()
+        );
+        // Distro-only options are refused, named in the error.
+        let err = reject_machine_opts(&CreateOptions {
+            volumes: vec!["/a:/b".parse().unwrap()],
+            publish: vec!["8080".parse().unwrap()],
+            network: Some("none".into()),
+            no_ssh: true,
+            sudo: true,
+            restricted: true,
+            ..CreateOptions::default()
+        })
+        .unwrap_err()
+        .to_string();
+        for f in [
+            "--volume",
+            "--publish",
+            "--network",
+            "--ssh/--no-ssh",
+            "--sudo/--no-sudo",
+            "--restricted",
+        ] {
+            assert!(err.contains(f), "{err}");
+        }
+        // --automount (even bare) and an explicit --network are refused.
+        assert!(
+            reject_machine_opts(&CreateOptions {
+                automount: Some(Automount::Rw),
+                ..CreateOptions::default()
+            })
+            .is_err()
+        );
     }
 
     #[test]

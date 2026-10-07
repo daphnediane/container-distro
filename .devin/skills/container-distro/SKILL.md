@@ -91,14 +91,19 @@ that reads or writes `appRoot` internals calls `warn_unverified_version()`
 `VERIFIED_CONTAINER_MINOR` release. Ports default to
 `127.0.0.1`. Only an explicit `--set-default` sets the default distro.
 
-`migrate MACHINE` turns a `container machine` into a distro: it finds
-the machine's `rootfs.ext4` (backing container's `rootFsOverride`
+`migrate [--in] MACHINE` turns a `container machine` into a distro: it
+finds the machine's `rootfs.ext4` (backing container's `rootFsOverride`
 source, else `rootfs.json`, else the plugin-state path — machines get
 a backing container only after first boot), stages it through
 `preserved/` like `set` does, and recreates it as a distro carrying
-the machine's cpus/memory/home-mount/user. `--keep` retains the
-machine; `-n` renames. Distro → machine is planned as a separate
-subcommand.
+the machine's cpus/memory/home-mount/user. `migrate --out DISTRO` is
+the reverse: it `machine create`s from the distro's image (the internal
+boot materializes the plugin-state disk — never `--no-boot`), stops it,
+and clonefile-copies the distro's `rootfs.ext4` over the machine's via
+a sibling temp + rename, then boot-probes. `--keep` retains the source;
+`-n` renames the target. `--out` rejects `create` options `machine
+create` can't honor (only cpus/memory/home-mount/no-boot/set-default
+apply).
 
 `create`/`import` take `--restricted` (alias `--untrusted`): a defaults
 preset giving `--home-mount none --network none --no-ssh --no-sudo`

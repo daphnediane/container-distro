@@ -161,14 +161,22 @@ distribution package works too (it's a rootfs tar; its
 options including `--restricted`. Importing an image is trusting it
 with your identity -- see security.md.
 
-### `migrate MACHINE [-n NAME] [--keep] [OPTIONS]`
+### `migrate [--in] MACHINE | --out DISTRO [-n NAME] [--keep] [OPTIONS]`
 
-Turn a `container machine` into a distro without an export/import
-round-trip: the machine's `rootfs.ext4` is staged through the same
-machinery as `set`, then recreated as a distro carrying the machine's
-cpus/memory/home-mount/user. The machine is removed unless `--keep`;
-accepts `create` options as overrides. Distro → machine is [planned] but
-not implemented.
+Migrate between a `container machine` and a distro without an
+export/import round-trip: the source's `rootfs.ext4` is cloned onto the
+target — staged through the same `preserved/` machinery as `set` going
+in, and written over the new machine's plugin-state disk going out. The
+source is removed unless `--keep`.
+
+`--in` (the default) turns a machine into a distro carrying the
+machine's cpus/memory/home-mount/user; it accepts `create` options as
+overrides. `--out` creates a machine from the distro's image, boots it
+once to materialize its disk, then replaces that disk with a clone of
+the distro's rootfs; only the `machine create` subset applies (`--cpus`,
+`--memory`, `--home-mount`, `--no-boot`, `--set-default`) and other
+`create` options are refused. A never-booted source has no filesystem
+to carry, so the target starts from the image.
 
 ### `install-plugin [--plugin-dir DIR] [--from BIN]`
 
@@ -230,4 +238,3 @@ Keep publishes on loopback unless you want LAN-reachable services -- a
 [install.md]: install.md#man-pages
 [install.md-2]: install.md#shell-completions
 [naming.md]: naming.md
-[planned]: TODO.md#distros-container-distro

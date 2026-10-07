@@ -187,19 +187,27 @@ pub enum Command {
         opts: CreateOptions,
     },
 
-    /// Migrate a `container machine` into a distro, carrying its root
-    /// filesystem across; the machine is removed unless `--keep`
+    /// Migrate between a `container machine` and a distro, carrying the
+    /// root filesystem across; the source is removed unless `--keep`
     Migrate {
-        /// Machine to migrate
+        /// Machine to migrate in (with --out, the distro to migrate out)
         name: String,
-        /// Name for the distro (default: the same name)
+        /// Machine → distro (the default direction)
+        #[arg(long = "in", conflicts_with = "out")]
+        inbound: bool,
+        /// Distro → machine
+        #[arg(long)]
+        out: bool,
+        /// Name for the result (default: the same name)
         #[arg(short = 'n', long)]
         target_name: Option<String>,
-        /// Keep the machine instead of removing it
+        /// Keep the source instead of removing it
         #[arg(long)]
         keep: bool,
         /// Options for the new distro — extra mounts, published ports,
-        /// and resource/home-mount overrides to the machine's settings
+        /// and resource/home-mount overrides to the machine's settings.
+        /// With --out, only the `machine create` subset applies:
+        /// --cpus, --memory, --home-mount, --no-boot, --set-default
         #[command(flatten)]
         opts: CreateOptions,
     },
@@ -330,5 +338,31 @@ mod tests {
     #[test]
     fn bad_volume_rejected() {
         assert!(parse(&["distro", "create", "-v", "relative:/x", "alpine"]).is_err());
+    }
+
+    #[test]
+    fn migrate_direction() {
+        let cli = parse(&["distro", "migrate", "m1"]).unwrap();
+        let Command::Migrate { inbound, out, .. } = cli.command else {
+            panic!("expected migrate");
+        };
+        assert!(!inbound && !out);
+        let cli = parse(&["distro", "migrate", "--in", "m1"]).unwrap();
+        let Command::Migrate { inbound, out, .. } = cli.command else {
+            panic!("expected migrate");
+        };
+        assert!(inbound && !out);
+        let cli = parse(&["distro", "migrate", "--out", "d1", "-n", "m2"]).unwrap();
+        let Command::Migrate {
+            name,
+            out,
+            target_name,
+            ..
+        } = cli.command
+        else {
+            panic!("expected migrate");
+        };
+        assert!(out && name == "d1" && target_name.as_deref() == Some("m2"));
+        assert!(parse(&["distro", "migrate", "--in", "--out", "x"]).is_err());
     }
 }

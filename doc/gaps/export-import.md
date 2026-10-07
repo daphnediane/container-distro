@@ -103,8 +103,10 @@ directory, open). A new issue is still warranted, with the repro above
   `Cmd`), so the scratch container passes an explicit `--entrypoint
   /bin/sh`; and a SIGKILLed export can leak the scratch container, so
   it carries an `export-scratch` label naming the machine.
-- **`distro migrate --keep`.** The same clone machinery, landing in a
-  distro instead of a tar — still the better path for machine → distro.
+- **`distro migrate` / `migrate --out`.** The same clone machinery —
+  `migrate` stages the machine's disk into a distro, `migrate --out`
+  replaces a new machine's disk with the distro's — still the better
+  path for moving either direction without a tar round-trip.
 - **Guest-side tar stream (prototyped, rejected).** Run
   `machine run --root -- sh -c '<bind-mount / and tar it>'` and capture
   stdout. It works (byte-identical over 3 runs, no first-write loss),

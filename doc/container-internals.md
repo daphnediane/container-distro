@@ -195,8 +195,10 @@ storage -- not a promised interface. Call sites are marked with
   new distro -- it prefers the backing container's
   `rootFsOverride.source` when the machine has been booted (a
   never-booted machine has no backing container at all), then falls back
-  to `rootfs.json`'s `source`, then the conventional path. We never
-  write to machine plugin state or machine backing containers.
+  to `rootfs.json`'s `source`, then the conventional path. `migrate
+  --out` is the one place we write machine plugin state: the new
+  machine's `rootfs.ext4` is replaced, in place, by a clonefile of the
+  distro's (sibling temp + rename, so the disk is never partial).
 - `rootfs.ext4` is **sparse** -- allocated blocks (`st_blocks * 512`)
   are what `machine list` reports as DISK and what `distro list` reports
   (`container_disk_usage`).
@@ -269,7 +271,8 @@ process on stderr when `server.version` isn't a verified release.
    `plugin-state/`).
 4. `machine inspect` still reports `containerId` + `userSetup`, and the
    machine plugin-state layout (`machines/<name>/rootfs.json`'s
-   `source`, `rootfs.ext4`) that `distro migrate` reads.
+   `source`, `rootfs.ext4`) that `distro migrate` reads and `migrate
+   --out` replaces.
 5. `container exec -w` still auto-creates missing dirs (else
    `machine_workdir` needs a re-think).
 6. `machine run` argv handling -- if [apple/container#1954] is fixed, the
