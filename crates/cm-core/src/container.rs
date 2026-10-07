@@ -640,6 +640,44 @@ pub fn validate_user(user: &str) -> Result<()> {
     Ok(())
 }
 
+/// Expand an image reference for comparison: implied `docker.io` (and
+/// `library/` for a bare name) plus the `:latest` tag, so `alpine`,
+/// `docker.io/alpine`, and `docker.io/library/alpine:latest` all
+/// compare equal. `container` reports references in this expanded form.
+fn normalize_image_ref(r: &str) -> String {
+    let (name, digest) = match r.split_once('@') {
+        Some((n, d)) => (n, format!("@{d}")),
+        None => (r, String::new()),
+    };
+    let mut name = name.to_string();
+    // A first component is a registry only when followed by `/` and it
+    // looks like a host (`.`/`:`/`localhost`) — `name:tag` alone is a
+    // bare name, not `registry:port`. Otherwise docker.io is implied,
+    // and `library/` for a bare name.
+    let first = name.split('/').next().unwrap_or_default();
+    let has_registry =
+        name.contains('/') && (first.contains('.') || first.contains(':') || first == "localhost");
+    if !has_registry {
+        name = format!("docker.io/{name}");
+    }
+    if let Some(rest) = name.strip_prefix("docker.io/")
+        && !rest.contains('/')
+    {
+        name = format!("docker.io/library/{rest}");
+    }
+    if !name.rsplit('/').next().is_some_and(|l| l.contains(':')) {
+        name.push_str(":latest");
+    }
+    format!("{name}{digest}")
+}
+
+/// Whether two image references name the same image once registry and
+/// tag defaults are applied.
+#[must_use]
+pub fn same_image(a: &str, b: &str) -> bool {
+    normalize_image_ref(a) == normalize_image_ref(b)
+}
+
 /// Derive a machine name from an image reference (`alpine:latest` →
 /// `alpine-latest`); non-`[a-z0-9]` characters become `-` so the result
 /// always passes [`validate_name`].
@@ -815,6 +853,20 @@ mod tests {
         for bad in ["", "-u", "--root", "a b", "x;y", "a/b", "x=y"] {
             assert!(validate_user(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn image_refs_normalize() {
+        assert!(same_image("alpine", "docker.io/library/alpine:latest"));
+        assert!(same_image(
+            "docker.io/alpine:3",
+            "docker.io/library/alpine:3"
+        ));
+        assert!(same_image("quay.io/x/y:1", "quay.io/x/y:1"));
+        assert!(same_image("localhost:5000/x", "localhost:5000/x:latest"));
+        assert!(same_image("a@sha256:ff", "a:latest@sha256:ff"));
+        assert!(!same_image("alpine:3", "alpine:latest"));
+        assert!(!same_image("alpine", "quay.io/library/alpine:latest"));
     }
 
     #[test]

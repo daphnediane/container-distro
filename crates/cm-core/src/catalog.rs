@@ -210,19 +210,118 @@ pub fn lookup<'a>(entries: &'a [Entry], name: &str) -> Option<&'a Entry> {
     entries.iter().find(|e| e.name.eq_ignore_ascii_case(name))
 }
 
+/// The header above both `--list --online` tables.
+const HEADER: &str = "The following is a list of valid distributions that can be installed.\n\
+                      Install using 'cm --install <Distro>'.\n\n";
+
 /// `wsl --list --online`-shaped output: a two-line header then a
 /// `NAME FRIENDLY NAME` table — the format remote-WSL editor extensions
 /// scrape. Entries not installable on `arch` are hidden, like WSL
 /// on ARM hiding amd64-only distributions.
 #[must_use]
 pub fn render(entries: &[Entry], arch: &str) -> String {
-    let mut out = String::from(
-        "The following is a list of valid distributions that can be installed.\n\
-         Install using 'cm --install <Distro>'.\n\n",
-    );
+    let mut out = String::from(HEADER);
     let mut rows = vec![vec!["NAME".to_string(), "FRIENDLY NAME".to_string()]];
     for e in entries.iter().filter(|e| e.installable(arch)) {
         rows.push(vec![e.name.clone(), e.friendly_name.clone()]);
+    }
+    for line in table::columns(&rows, 3) {
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out
+}
+
+/// Whether an entry's install source is present locally.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Local {
+    /// Not present, or undetermined (e.g. `container` services down).
+    #[default]
+    No,
+    /// The image is pulled, or the `.wsl` sits verified in the cache.
+    Yes,
+    /// A `.wsl` fetch is in flight in another process.
+    Downloading,
+}
+
+/// Local state for one catalog entry, for [`render_verbose`]. The
+/// caller knows about the download cache, pulled images, and installed
+/// machines/distros; the default renders as "nothing local".
+#[derive(Debug, Clone, Default)]
+pub struct EntryStatus {
+    /// Whether the entry's install source is already on disk.
+    pub local: Local,
+    /// Machines/distros built from this entry, as `(name, running)`.
+    pub instances: Vec<(String, bool)>,
+}
+
+/// `cm -l -o -v`: the catalog table plus local state per entry —
+/// `LOCAL` reports a `pulled` image or `cached` `.wsl` (`downloading`
+/// while another process is fetching it), and `INSTANCES` lists the
+/// machines/distros installed from the entry, marking running ones.
+/// `status` is parallel to `entries`. `verbosity >= 2` adds `SOURCE`
+/// (`image`/`.wsl`) and `REF` (the image reference or download hash).
+#[must_use]
+pub fn render_verbose(
+    entries: &[Entry],
+    arch: &str,
+    status: &[EntryStatus],
+    verbosity: u8,
+) -> String {
+    debug_assert_eq!(entries.len(), status.len());
+    let mut out = String::from(HEADER);
+    let dash = || "-".to_string();
+    let mut header = vec!["NAME".to_string(), "FRIENDLY NAME".to_string()];
+    if verbosity >= 2 {
+        header.extend(["SOURCE".to_string(), "REF".to_string()]);
+    }
+    header.extend(["LOCAL".to_string(), "INSTANCES".to_string()]);
+    let mut rows = vec![header];
+    for (e, st) in entries
+        .iter()
+        .zip(status)
+        .filter(|(e, _)| e.installable(arch))
+    {
+        let local = match st.local {
+            Local::Yes => match e.source(arch) {
+                Some(Source::Image(_)) => "pulled".to_string(),
+                _ => "cached".to_string(),
+            },
+            Local::Downloading => "downloading".to_string(),
+            Local::No => dash(),
+        };
+        let instances = if st.instances.is_empty() {
+            dash()
+        } else {
+            st.instances
+                .iter()
+                .map(|(n, running)| {
+                    if *running {
+                        format!("{n} (running)")
+                    } else {
+                        n.clone()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let mut row = vec![e.name.clone(), e.friendly_name.clone()];
+        if verbosity >= 2 {
+            let (kind, r) = match e.source(arch) {
+                Some(Source::Image(i)) => ("image".to_string(), i.to_string()),
+                Some(Source::Wsl(d)) => {
+                    let sha = d.sha256_normalized();
+                    (
+                        ".wsl".to_string(),
+                        format!("{}…", &sha[..12.min(sha.len())]),
+                    )
+                }
+                None => (dash(), dash()),
+            };
+            row.extend([kind, r]);
+        }
+        row.extend([local, instances]);
+        rows.push(row);
     }
     for line in table::columns(&rows, 3) {
         out.push_str(&line);
@@ -333,5 +432,60 @@ mod tests {
         );
         assert!(out.contains("RLCPlus-10"));
         assert!(out.contains("Alpine"));
+    }
+
+    #[test]
+    fn render_verbose_adds_status_columns() {
+        let cat = load(None).unwrap();
+        let mut status = vec![EntryStatus::default(); cat.entries.len()];
+        let i = cat.entries.iter().position(|e| e.name == "Ubuntu").unwrap();
+        status[i].local = Local::Yes;
+        status[i].instances = vec![("dev".into(), true), ("old".into(), false)];
+        let i = cat
+            .entries
+            .iter()
+            .position(|e| e.name == "RLCPlus-10")
+            .unwrap();
+        status[i].local = Local::Downloading;
+
+        let out = render_verbose(&cat.entries, "arm64", &status, 1);
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(
+            lines[3].split_whitespace().collect::<Vec<_>>(),
+            ["NAME", "FRIENDLY", "NAME", "LOCAL", "INSTANCES"]
+        );
+        let ubuntu = lines.iter().find(|l| l.starts_with("Ubuntu ")).unwrap();
+        assert!(ubuntu.contains("pulled"));
+        assert!(ubuntu.contains("dev (running), old"));
+        let rlc = lines.iter().find(|l| l.starts_with("RLCPlus-10")).unwrap();
+        assert!(rlc.contains("downloading"));
+        let alpine = lines.iter().find(|l| l.starts_with("Alpine")).unwrap();
+        assert!(alpine.trim_end().ends_with('-'));
+    }
+
+    #[test]
+    fn render_very_verbose_adds_source_columns() {
+        let cat = load(None).unwrap();
+        let status = vec![EntryStatus::default(); cat.entries.len()];
+        let out = render_verbose(&cat.entries, "arm64", &status, 2);
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(
+            lines[3].split_whitespace().collect::<Vec<_>>(),
+            [
+                "NAME",
+                "FRIENDLY",
+                "NAME",
+                "SOURCE",
+                "REF",
+                "LOCAL",
+                "INSTANCES"
+            ]
+        );
+        let ubuntu = lines.iter().find(|l| l.starts_with("Ubuntu ")).unwrap();
+        assert!(ubuntu.contains("image"));
+        assert!(ubuntu.contains("docker.io/library/ubuntu:latest"));
+        let rlc = lines.iter().find(|l| l.starts_with("RLCPlus-10")).unwrap();
+        assert!(rlc.contains(".wsl"));
+        assert!(rlc.contains("b87c820232b2…"));
     }
 }

@@ -15,7 +15,7 @@
 //! during install is a surface we don't take on silently — see
 //! security.md T4.
 
-use std::fs::{self, File};
+use std::fs::{self, File, TryLockError};
 use std::io::{BufReader, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -336,8 +336,27 @@ pub struct CacheEntry {
     pub meta: Option<CacheMeta>,
 }
 
+/// Whether a `fetch` of `sha256` is in flight in another process: the
+/// entry's `<sha256>.lock` is held while the verified `.wsl` isn't
+/// there yet. Never blocks — the lockfile is probed with
+/// `try_lock_shared`, which fails only while a download holds it
+/// exclusive (a shared holder means the import phase, which implies
+/// the `.wsl` already exists), so a listing reports the download
+/// rather than waiting on it.
+#[must_use]
+pub fn download_in_progress(sha256: &str) -> bool {
+    let Some(dir) = cache_dir() else {
+        return false;
+    };
+    let Ok(lock) = File::open(dir.join(format!("{sha256}.lock"))) else {
+        return false;
+    };
+    matches!(lock.try_lock_shared(), Err(TryLockError::WouldBlock))
+}
+
 /// `.wsl` files in the download cache, oldest first. Empty when the
-/// cache directory can't be read.
+/// cache directory can't be read. Reads files directly — no flocking —
+/// so listing never waits on an in-flight download or import.
 pub fn cache_entries() -> Vec<CacheEntry> {
     let Some(dir) = cache_dir() else {
         return Vec::new();

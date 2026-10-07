@@ -139,7 +139,8 @@ pub struct Args {
     )]
     pub quiet: bool,
 
-    /// Show a NAME/STATE/VERSION table (with --list); repeat for more columns
+    /// Show a NAME/STATE/VERSION table (with --list); repeat for more
+    /// columns. With --online, adds per-entry local status instead
     #[arg(
         short = 'v',
         long = "verbose",
@@ -150,12 +151,12 @@ pub struct Args {
     pub verbose: u8,
 
     /// List the installable-distro catalog instead of installed machines
-    /// and distros (with --list)
+    /// and distros (with --list); --verbose adds LOCAL/INSTANCES columns
     #[arg(
         short = 'o',
         long = "online",
         requires = "list",
-        conflicts_with_all = ["all", "running", "quiet", "verbose", "cache"]
+        conflicts_with_all = ["all", "running", "quiet", "cache"]
     )]
     pub online: bool,
 
@@ -338,7 +339,9 @@ pub enum Action {
     Run,
     /// WSL-shaped machine list; `online` lists the installable catalog
     /// instead (`wsl --list --online`), `cache` lists the `.wsl`
-    /// download cache — both honoring `--catalog`.
+    /// download cache — both honoring `--catalog`. `online` + `verbose`
+    /// adds each entry's local state (cached/pulled, installed
+    /// instances).
     List {
         running_only: bool,
         quiet: bool,
@@ -778,7 +781,24 @@ mod tests {
         ));
         assert!(parse(&["cm", "--online"]).is_err());
         assert!(parse(&["cm", "-l", "-o", "-q"]).is_err());
-        assert!(parse(&["cm", "-l", "-o", "-v"]).is_err());
+        let args = parse(&["cm", "-l", "-o", "-v"]).unwrap();
+        assert!(matches!(
+            args.action().unwrap(),
+            Action::List {
+                online: true,
+                verbosity: 1,
+                ..
+            }
+        ));
+        let args = parse(&["cm", "-l", "-o", "-v", "-v"]).unwrap();
+        assert!(matches!(
+            args.action().unwrap(),
+            Action::List {
+                online: true,
+                verbosity: 2,
+                ..
+            }
+        ));
         assert!(parse(&["cm", "-l", "-o", "--running"]).is_err());
     }
 

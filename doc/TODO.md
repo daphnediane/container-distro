@@ -48,6 +48,13 @@ source of truth. "Rung" references are the integration levels in
   flocking and provenance sidecars, listable via `--list --cache` and
   clearable via `--purge-cache`; covers the `wsl.exe --list --online`
   call surface in [remote-wsl-interop]
+- [x] **`cm --list --online --verbose`** -- `-l -o -v` appends `LOCAL`
+  (`pulled` image / `cached` `.wsl` / `downloading`) and `INSTANCES`
+  (machines and distros installed from the entry, running marked);
+  `-v -v` adds `SOURCE`/`REF`. Probes are best-effort and never
+  block: cache state is read without flocking (in-flight fetches
+  detected via `try_lock` on the `.lock` sidecar) and `container` is
+  queried only when already running
 
 - [ ] **Remote-WSL editor extensions** -- decide between the
   fake-`wsl.exe` shim, a forked `open-remote-wsl` resolver, and in-guest

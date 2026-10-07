@@ -83,6 +83,7 @@ guest's very first write; see [gaps/exec-stdio].
 | `-l --all`         | Accepted for WSL compatibility; `-l` already lists stopped entries                 |
 | `-l --running`     | Only running machines and distros                                                  |
 | `-l -o, --online`  | The installable-distro catalog (`NAME FRIENDLY NAME`) instead of installed ones    |
+| `-l -o -v`         | Plus `LOCAL`/`INSTANCES` status columns; `-v -v` adds `SOURCE`/`REF`               |
 | `-l --cache`       | The `.wsl` download cache: SHA-256, size, catalog entry, and the image it loaded   |
 | `--purge-cache`    | Empty the `.wsl` download cache                                                    |
 
@@ -153,6 +154,17 @@ since anything under `$HOME` is guest-writable and a default search
 path would let a distro rewrite familiar names to hostile images (see
 security.md). `container distro` itself never consults the catalog; it
 takes image refs only.
+
+`cm -l -o -v` annotates the catalog with local state: `LOCAL` is
+`pulled` for an image already in `container image list`, `cached` for
+a `.wsl` whose hash sits verified in the download cache, and
+`downloading` while another process's fetch holds the entry's
+lockfile; `INSTANCES` lists the machines and distros built from the
+entry (`name (running)`), traced through image references and the
+`rootfs-sha256` label. The probes are best-effort and never block —
+cache state is read without flocking and `container` is queried only
+when already running — so a download in another process can't stall
+the listing.
 
 `--from-file` imports a local rootfs tar or a `.wsl` distribution
 package (WSL 2.4.4+ tar format) as a **distro** — machines can't boot a

@@ -222,12 +222,8 @@ fn list(
     cache: bool,
     catalog_file: Option<PathBuf>,
 ) -> Result<ExitCode> {
-    // The catalog is baked in (or a `--catalog` file); listing it never
-    // touches `container`.
     if online {
-        let cat = catalog::load(catalog_file.as_deref())?;
-        print!("{}", catalog::render(&cat.entries, oci::host_arch()));
-        return Ok(ExitCode::SUCCESS);
+        return list_online(verbosity, catalog_file.as_deref());
     }
     if cache {
         return list_cache(catalog_file.as_deref());
@@ -274,6 +270,143 @@ fn list(
     };
     print!("{out}");
     Ok(ExitCode::SUCCESS)
+}
+
+/// `cm -l -o`: the installable catalog — baked in (or a `--catalog`
+/// file), so a plain listing never touches `container`. `-v` adds each
+/// entry's local state — `LOCAL` (a pulled image, a cached `.wsl`, or
+/// `downloading` while a fetch is in flight) and `INSTANCES` (machines
+/// and distros installed from the entry, running ones marked).
+///
+/// Every probe is best-effort and never blocks: `container` is
+/// consulted only when already running — a listing shouldn't start
+/// services — and the cache is read without flocking; an in-flight
+/// download is detected by `try_lock` on its `.lock` sidecar, never
+/// waited on.
+fn list_online(verbosity: u8, catalog_file: Option<&Path>) -> Result<ExitCode> {
+    let cat = catalog::load(catalog_file)?;
+    let arch = oci::host_arch();
+    if verbosity == 0 {
+        print!("{}", catalog::render(&cat.entries, arch));
+        return Ok(ExitCode::SUCCESS);
+    }
+    let probe = OnlineProbe::gather();
+    let status: Vec<catalog::EntryStatus> =
+        cat.entries.iter().map(|e| probe.status_of(e)).collect();
+    print!(
+        "{}",
+        catalog::render_verbose(&cat.entries, arch, &status, verbosity)
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Local state for `--list --online --verbose`. Every field degrades
+/// to empty rather than erroring or blocking.
+struct OnlineProbe {
+    /// Verified `<sha256>.wsl` files in the download cache, by hash.
+    cached: std::collections::HashSet<String>,
+    /// Images `container` knows, or empty when services are down.
+    images: Vec<container::ImageListEntry>,
+    /// `(running, image reference)` per installed name — a distro
+    /// shadows a same-named machine, like everywhere else in `cm`.
+    instances: std::collections::BTreeMap<String, (bool, Option<String>)>,
+}
+
+/// A SHA-256 in cache-filename form: lowercase hex, `0x` stripped —
+/// the label on an imported image keeps the catalog's raw spelling.
+fn normalize_sha(s: &str) -> String {
+    s.strip_prefix("0x")
+        .or_else(|| s.strip_prefix("0X"))
+        .unwrap_or(s)
+        .to_lowercase()
+}
+
+impl OnlineProbe {
+    fn gather() -> Self {
+        use std::collections::{BTreeMap, HashSet};
+        let cached: HashSet<String> = wsl::cache_entries().into_iter().map(|e| e.sha256).collect();
+        let mut images = Vec::new();
+        let mut instances = BTreeMap::new();
+        if container::system_running() {
+            images = container::list_images().unwrap_or_default();
+            // `machine list` has no image column; inspect reports the
+            // reference each machine was created from.
+            for m in container::list_machines().unwrap_or_default() {
+                let image = container::inspect_machine(&m.id)
+                    .ok()
+                    .and_then(|d| d.image.map(|i| i.reference));
+                instances.insert(m.id.clone(), (m.is_running(), image));
+            }
+            if backend::distros_enabled() {
+                for c in distro::distros().unwrap_or_default() {
+                    instances.insert(
+                        c.id().to_string(),
+                        (
+                            c.is_running(),
+                            c.configuration.image.as_ref().map(|i| i.reference.clone()),
+                        ),
+                    );
+                }
+            }
+        }
+        Self {
+            cached,
+            images,
+            instances,
+        }
+    }
+
+    /// The `rootfs-sha256` label on a local image, normalized — the
+    /// link from a distro's image back to the `.wsl` download it was
+    /// imported from.
+    fn rootfs_sha(&self, image_ref: &str) -> Option<String> {
+        use container_distro::spec::LABEL_ROOTFS_SHA256;
+        let key = naming::label_key(LABEL_ROOTFS_SHA256);
+        self.images
+            .iter()
+            .find(|i| container::same_image(&i.configuration.name, image_ref))
+            .and_then(|i| i.labels().get(&key).map(|s| normalize_sha(s)))
+    }
+
+    fn status_of(&self, e: &catalog::Entry) -> catalog::EntryStatus {
+        let mut st = catalog::EntryStatus::default();
+        let Some(source) = e.source(oci::host_arch()) else {
+            return st;
+        };
+        for (name, (running, image)) in &self.instances {
+            let hit = image.as_deref().is_some_and(|r| match source {
+                catalog::Source::Image(i) => container::same_image(r, i),
+                catalog::Source::Wsl(d) => self
+                    .rootfs_sha(r)
+                    .is_some_and(|s| s == d.sha256_normalized()),
+            });
+            if hit {
+                st.instances.push((name.clone(), *running));
+            }
+        }
+        st.local = match source {
+            catalog::Source::Image(i)
+                if self
+                    .images
+                    .iter()
+                    .any(|x| container::same_image(&x.configuration.name, i)) =>
+            {
+                catalog::Local::Yes
+            }
+            catalog::Source::Wsl(d) => {
+                let sha = d.sha256_normalized();
+                if self.cached.contains(&sha) {
+                    catalog::Local::Yes
+                } else if wsl::download_in_progress(&sha) {
+                    catalog::Local::Downloading
+                } else {
+                    catalog::Local::No
+                }
+            }
+            _ => catalog::Local::No,
+        };
+        st
+    }
 }
 
 /// `cm --list --cache`: the `.wsl` download cache, which catalog entry
