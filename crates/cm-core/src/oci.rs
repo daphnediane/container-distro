@@ -181,6 +181,9 @@ pub fn load_rootfs(rootfs: &Path, reference: &str, labels: &[(String, String)]) 
         .suffix(".tar")
         .tempfile()
         .context("failed to create a temporary file")?;
+    // Each phase below is a full pass over the rootfs — worth a status
+    // line, since wrapping a ~1 GB tar takes visibly long.
+    eprintln!("  wrapping rootfs as an OCI image …");
     build_layout(
         rootfs,
         io::BufWriter::new(layout.as_file()),
@@ -188,6 +191,7 @@ pub fn load_rootfs(rootfs: &Path, reference: &str, labels: &[(String, String)]) 
         host_arch(),
         labels,
     )?;
+    eprintln!("  loading image into the container store …");
     let status = crate::container::container_cmd()
         .args(["image", "load", "-i"])
         .arg(layout.path())

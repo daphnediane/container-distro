@@ -1,104 +1,187 @@
 {
-  "distributions": [
-    {
-      "name": "Ubuntu",
-      "friendly_name": "Ubuntu",
-      "image": "docker.io/library/ubuntu:latest"
-    },
-    {
-      "name": "Ubuntu-26.04",
-      "friendly_name": "Ubuntu 26.04 LTS",
-      "image": "docker.io/library/ubuntu:26.04"
-    },
-    {
-      "name": "Ubuntu-24.04",
-      "friendly_name": "Ubuntu 24.04 LTS",
-      "image": "docker.io/library/ubuntu:24.04"
-    },
-    {
-      "name": "Ubuntu-22.04",
-      "friendly_name": "Ubuntu 22.04 LTS",
-      "image": "docker.io/library/ubuntu:22.04"
-    },
-    {
-      "name": "openSUSE-Tumbleweed",
-      "friendly_name": "openSUSE Tumbleweed",
-      "image": "docker.io/opensuse/tumbleweed:latest"
-    },
-    {
-      "name": "openSUSE-Leap-16.0",
-      "friendly_name": "openSUSE Leap 16.0",
-      "image": "docker.io/opensuse/leap:16.0"
-    },
-    {
-      "name": "RockyLinux-10",
-      "friendly_name": "Rocky Linux 10",
-      "image": "quay.io/rockylinux/rockylinux:10"
-    },
-    {
-      "name": "RockyLinux-9",
-      "friendly_name": "Rocky Linux 9",
-      "image": "quay.io/rockylinux/rockylinux:9"
-    },
-    {
-      "name": "kali-linux",
-      "friendly_name": "Kali Linux Rolling",
-      "image": "docker.io/kalilinux/kali-rolling:latest"
-    },
-    {
-      "name": "Debian",
-      "friendly_name": "Debian GNU/Linux",
-      "image": "docker.io/library/debian:latest"
-    },
-    {
-      "name": "AlmaLinux-8",
-      "friendly_name": "AlmaLinux OS 8",
-      "image": "docker.io/library/almalinux:8"
-    },
-    {
-      "name": "AlmaLinux-9",
-      "friendly_name": "AlmaLinux OS 9",
-      "image": "docker.io/library/almalinux:9"
-    },
-    {
-      "name": "AlmaLinux-10",
-      "friendly_name": "AlmaLinux OS 10",
-      "image": "docker.io/library/almalinux:10"
-    },
-    {
-      "name": "FedoraLinux-44",
-      "friendly_name": "Fedora Linux 44",
-      "image": "docker.io/library/fedora:44"
-    },
-    {
-      "name": "FedoraLinux-43",
-      "friendly_name": "Fedora Linux 43",
-      "image": "docker.io/library/fedora:43"
-    },
-    {
-      "name": "ArchLinux",
-      "friendly_name": "Arch Linux",
-      "image": "docker.io/library/archlinux:latest"
-    },
-    {
-      "name": "Alpine",
-      "friendly_name": "Alpine Linux",
-      "image": "docker.io/library/alpine:latest"
-    },
-    {
-      "name": "OracleLinux-9",
-      "friendly_name": "Oracle Linux 9",
-      "image": "docker.io/library/oraclelinux:9"
-    },
-    {
-      "name": "RedHat-UBI-10",
-      "friendly_name": "Red Hat Universal Base Image 10",
-      "image": "registry.access.redhat.com/ubi10/ubi:latest"
-    },
-    {
-      "name": "RedHat-UBI-9",
-      "friendly_name": "Red Hat Universal Base Image 9",
-      "image": "registry.access.redhat.com/ubi9/ubi:latest"
-    }
-  ]
+  "Default": "Ubuntu",
+  "ModernDistributions": {
+    "Ubuntu": [
+      {
+        "Name": "Ubuntu",
+        "FriendlyName": "Ubuntu",
+        "Default": true,
+        "Image": "docker.io/library/ubuntu:latest"
+      },
+      {
+        "Name": "Ubuntu-26.04",
+        "FriendlyName": "Ubuntu 26.04 LTS",
+        "Image": "docker.io/library/ubuntu:26.04"
+      },
+      {
+        "Name": "Ubuntu-24.04",
+        "FriendlyName": "Ubuntu 24.04 LTS",
+        "Image": "docker.io/library/ubuntu:24.04"
+      },
+      {
+        "Name": "Ubuntu-22.04",
+        "FriendlyName": "Ubuntu 22.04 LTS",
+        "Image": "docker.io/library/ubuntu:22.04"
+      }
+    ],
+    "openSUSE": [
+      {
+        "Name": "openSUSE-Tumbleweed",
+        "FriendlyName": "openSUSE Tumbleweed",
+        "Image": "docker.io/opensuse/tumbleweed:latest"
+      },
+      {
+        "Name": "openSUSE-Leap-16.0",
+        "FriendlyName": "openSUSE Leap 16.0",
+        "Image": "docker.io/opensuse/leap:16.0"
+      }
+    ],
+    "RLCPlus": [
+      {
+        "Name": "RLCPlus-9",
+        "FriendlyName": "Rocky Linux Plus 9 (CIQ)",
+        "Amd64Url": {
+          "Url": "https://github.com/ctrliq/rlcplus-wsl-images/releases/download/v20260812/RLCPlus-9-WSL-9-20260812.0.x86_64.wsl",
+          "Sha256": "202ba60ac09205b3bb574f69bcad69c5c2463fd243019fc1067437a4bc9af939"
+        },
+        "Arm64Url": {
+          "Url": "https://github.com/ctrliq/rlcplus-wsl-images/releases/download/v20260812/RLCPlus-9-WSL-9-20260812.0.aarch64.wsl",
+          "Sha256": "5b24a384fdfbf004e75441d5e7ade4ef9579e52d58223741b195c41075a28b1b"
+        }
+      },
+      {
+        "Name": "RLCPlus-10",
+        "FriendlyName": "Rocky Linux Plus 10 (CIQ)",
+        "Amd64Url": {
+          "Url": "https://github.com/ctrliq/rlcplus-wsl-images/releases/download/v20260812/RLCPlus-10-WSL-10-20260812.0.x86_64.wsl",
+          "Sha256": "2b181172c9aa3160a803d5ecaee517d237f59b41eb21848ee60699b89d5b8d84"
+        },
+        "Arm64Url": {
+          "Url": "https://github.com/ctrliq/rlcplus-wsl-images/releases/download/v20260812/RLCPlus-10-WSL-10-20260812.0.aarch64.wsl",
+          "Sha256": "b87c820232b2ce1b76be3643be615c4fee7ebc6bb31de4ac222d52b58d9cdd67"
+        }
+      }
+    ],
+    "SUSE": [
+      {
+        "Name": "SUSE-Linux-Enterprise-15-SP7",
+        "FriendlyName": "SUSE Linux Enterprise 15 SP7",
+        "Amd64Url": {
+          "Url": "https://github.com/SUSE/WSL-instarball/releases/download/v20260902.0/SUSE-Linux-Enterprise-15-SP7-15.7.x86_64-32.57-Build32.57.wsl",
+          "Sha256": "0xa683af7e33d49f04aa7633bd85cdaab1a048d3789c0fcf64c019ac5c88f09754"
+        }
+      },
+      {
+        "Name": "SUSE-Linux-Enterprise-16.0",
+        "FriendlyName": "SUSE Linux Enterprise 16.0",
+        "Amd64Url": {
+          "Url": "https://github.com/SUSE/WSL-instarball/releases/download/v20260805.0/SUSE-Linux-Enterprise-16.0-16.0.x86_64-1.131-Build1.131.wsl",
+          "Sha256": "0xc80dce10e2f7fd0bc0b4e7f3e489c36c60159f3a4a32adb74a36d0a4924b1460"
+        }
+      }
+    ],
+    "kali": [
+      {
+        "Name": "kali-linux",
+        "FriendlyName": "Kali Linux Rolling",
+        "Image": "docker.io/kalilinux/kali-rolling:latest"
+      }
+    ],
+    "Debian": [
+      {
+        "Name": "Debian",
+        "FriendlyName": "Debian GNU/Linux",
+        "Image": "docker.io/library/debian:latest"
+      }
+    ],
+    "AlmaLinux": [
+      {
+        "Name": "AlmaLinux-8",
+        "FriendlyName": "AlmaLinux OS 8",
+        "Image": "docker.io/library/almalinux:8"
+      },
+      {
+        "Name": "AlmaLinux-9",
+        "FriendlyName": "AlmaLinux OS 9",
+        "Image": "docker.io/library/almalinux:9"
+      },
+      {
+        "Name": "AlmaLinux-Kitten-10",
+        "FriendlyName": "AlmaLinux OS Kitten 10",
+        "Image": "docker.io/almalinux/almalinux:10-kitten"
+      },
+      {
+        "Name": "AlmaLinux-10",
+        "FriendlyName": "AlmaLinux OS 10",
+        "Image": "docker.io/library/almalinux:10"
+      }
+    ],
+    "archlinux": [
+      {
+        "Name": "archlinux",
+        "FriendlyName": "Arch Linux",
+        "Image": "docker.io/library/archlinux:latest"
+      }
+    ],
+    "Fedora": [
+      {
+        "Name": "FedoraLinux-44",
+        "FriendlyName": "Fedora Linux 44",
+        "Image": "docker.io/library/fedora:44"
+      },
+      {
+        "Name": "FedoraLinux-43",
+        "FriendlyName": "Fedora Linux 43",
+        "Image": "docker.io/library/fedora:43"
+      }
+    ],
+    "eLxr": [
+      {
+        "Name": "eLxr",
+        "FriendlyName": "eLxr 12.12.0.0 GNU/Linux",
+        "Amd64Url": {
+          "Url": "https://gitlab.com/api/v4/projects/68007430/packages/generic/wsl/12.12.0.0/eLxr_WSL_AMD64_12.12.0.0.wsl",
+          "Sha256": "f94e0c44be51550478100ea150b80535f955bf87487d1b964f4636d97478c05d"
+        }
+      }
+    ],
+    "RockyLinux": [
+      {
+        "Name": "RockyLinux-10",
+        "FriendlyName": "Rocky Linux 10",
+        "Image": "quay.io/rockylinux/rockylinux:10"
+      },
+      {
+        "Name": "RockyLinux-9",
+        "FriendlyName": "Rocky Linux 9",
+        "Image": "quay.io/rockylinux/rockylinux:9"
+      }
+    ],
+    "Alpine": [
+      {
+        "Name": "Alpine",
+        "FriendlyName": "Alpine Linux",
+        "Image": "docker.io/library/alpine:latest"
+      }
+    ],
+    "OracleLinux": [
+      {
+        "Name": "OracleLinux-9",
+        "FriendlyName": "Oracle Linux 9",
+        "Image": "docker.io/library/oraclelinux:9"
+      }
+    ],
+    "RedHat": [
+      {
+        "Name": "RedHat-UBI-10",
+        "FriendlyName": "Red Hat Universal Base Image 10",
+        "Image": "registry.access.redhat.com/ubi10/ubi:latest"
+      },
+      {
+        "Name": "RedHat-UBI-9",
+        "FriendlyName": "Red Hat Universal Base Image 9",
+        "Image": "registry.access.redhat.com/ubi9/ubi:latest"
+      }
+    ]
+  }
 }

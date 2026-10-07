@@ -90,15 +90,24 @@ it your identity and home directory.
 - **Mitigations that exist:** `import --restricted` wraps the rootfs
   with no mounts, no network, no agent, and no privilege grant -- the
   intended path for rootfses you didn't build.
-- **Re-evaluate if:** we add a *remote* import path (`--install
-  --from-file URL`, or catalog entries backed by `.wsl` URLs rather than
-  OCI refs), at which point a safer default (`--home-mount none` for
-  import specifically) is worth real consideration. The curated catalog
-  (`cm -l -o`, landed with `--list --online`) is an install path, not an
-  import path — entries are official/verified images and keep the same
-  defaults as any image install; `--from-file` imports local files
-  where the user already has the bits, so the T4 argument above applies
-  as-is.
+- **Remote `.wsl` catalog entries** (landed): catalog entries without
+  an `Image` carry `Amd64Url`/`Arm64Url` downloads with a **mandatory
+  `Sha256`**, fetched in-process via ureq (platform trust store, env
+  proxies) and verified before import — the trust equivalent of an
+  image pull, since the hash is pinned in the built-in catalog.
+  Downloads are cached content-addressed (`<sha256>.wsl`) in the Darwin
+  user cache dir; cache hits re-verify the hash, so a guest (who can
+  write the cache) can delete files but cannot poison them. The
+  imported rootfs still gets full provisioning,
+  so `--restricted` remains the right choice for distributions you
+  don't fully trust; making it the default for downloaded rootfses is
+  still under consideration. `--from-file` imports local files where
+  the user already has the bits, so the T4 argument above applies
+  as-is. A `--catalog FILE` override can supply arbitrary `.wsl` URLs
+  with attacker-chosen hashes — but a custom catalog is already an
+  explicit act of trust (it can equally point `Image` at a hostile
+  registry), so pinning to a caller-supplied manifest adds no new
+  trust.
 
 ### T5. `container` is resolved from `PATH` (or `CONTAINER_CLI`)
 

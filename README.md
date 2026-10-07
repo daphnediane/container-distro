@@ -58,14 +58,16 @@ Full reference: doc/cm.md · man pages: `man cm`, `man container-distro`.
 
 | Option               | Description                                                                                         |
 | -------------------- | --------------------------------------------------------------------------------------------------- |
-| `-l, --list`         | List machines and distros (`--all`, `--running`, `-q`, `-v`, `-v -v`; `-o`: installable catalog)    |
+| `-l, --list`         | List machines and distros (`--all`, `--running`, `-q`, `-v`, `-v -v`; `-o`: installable catalog,    |
+|                      | `--cache`: `.wsl` download cache; `--purge-cache` empties it)                                       |
 | `-s, --set-default`  | Set the default machine or distro                                                                   |
 | `-t, --terminate`    | Stop a running machine or distro                                                                    |
 | `--shutdown`         | Stop all running machines and distros (`--system`: also stop services)                              |
 | `--status`           | Show container system status                                                                        |
 | `--unregister`       | Delete a machine or distro and its storage                                                          |
 | `--install [distro]` | Create + boot a machine (`--name`, `--no-launch`, `--cpus`, `--memory`, `--home-mount`); bare =     |
-|                      | catalog default (Ubuntu). Names resolve via the catalog (`cm -l -o`, `--catalog FILE` overrides),   |
+|                      | catalog default (Ubuntu). Names resolve via the catalog (`cm -l -o`, `--catalog FILE` overrides —   |
+|                      | Microsoft's `DistributionInfo.json` schema + `Image`; `.wsl` URL entries download+verify SHA-256),  |
 |                      | image refs pass through (`--from-image` forces), `--from-file` imports a tar/`.wsl` as a distro     |
 |                      | …or a distro with `--distro`, `--share SRC:DST[:ro]`, `--publish [IP:]HOST[:GUEST]`, `--restricted` |
 | `--forward <p[:g]>`  | (experimental) Forward localhost port `p` to port `g` of the machine or distro                      |

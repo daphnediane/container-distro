@@ -245,7 +245,10 @@ fn run(cli: Cli) -> Result<()> {
         Command::SetDefault { name, .. } => ops::set_default(name.as_deref())?,
         Command::Export { name, output } => ops::export(&name, output.as_deref())?,
         Command::Import { name, file, opts } => {
-            println!("{}", ops::import(&name, &file, &opts)?);
+            println!(
+                "{}",
+                ops::import(&name, &file, &opts, ops::ImportSource::Local)?
+            );
         }
         Command::Migrate {
             name,

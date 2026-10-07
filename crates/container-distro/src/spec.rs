@@ -38,10 +38,15 @@ pub const LABEL_USER: &str = "user";
 pub const LABEL_ADMIN: &str = "admin";
 /// Guest path where the init assets are mounted.
 pub const INIT_DIR: &str = "/sbin.distro";
-/// Image label: the tar path an `import`ed rootfs came from. Set on
+/// Image label: where an `import`ed rootfs came from — a local path
+/// (or `-` for stdin), or the URL for a catalog `.wsl` download. Set on
 /// images `import` loads (alongside the `distro` label) so cleanup
 /// removes them by ownership, not by name prefix.
 pub const LABEL_IMPORTED_FROM: &str = "imported-from";
+/// Image label: the verified SHA-256 of a catalog-downloaded `.wsl`
+/// rootfs. Matches the cache filename (`<sha256>.wsl`), linking an
+/// imported image back to its cached download.
+pub const LABEL_ROOTFS_SHA256: &str = "rootfs-sha256";
 /// Image label: the machine a `cm --import`-loaded rootfs image was
 /// created for. Deliberately not `distro` — that label is what
 /// `distro rm`/`set` treat as image-cleanup ownership, and machine

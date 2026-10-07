@@ -24,7 +24,7 @@ use clap::{CommandFactory, Parser};
 use cli::{Action, Args, InstallOpts, InstallSource, ShellType};
 use cm_core::container::{self, ArgvMode};
 use cm_core::forward::PortMapping;
-use cm_core::{catalog, wsl};
+use cm_core::{catalog, naming, oci, table, wsl};
 use container_distro::ops::{self as distro, CreateOptions, RunOpts};
 use list::Entry;
 
@@ -55,8 +55,17 @@ fn run(args: Args) -> Result<ExitCode> {
             quiet,
             verbosity,
             online,
+            cache,
             catalog,
-        } => list(running_only, quiet, verbosity, online, catalog),
+        } => list(running_only, quiet, verbosity, online, cache, catalog),
+        Action::PurgeCache => {
+            let (count, bytes) = wsl::purge_cache();
+            println!(
+                "Removed {count} cached .wsl file(s), freed {} MiB",
+                bytes >> 20
+            );
+            Ok(ExitCode::SUCCESS)
+        }
         Action::SetDefault(m) => set_default(&m),
         Action::Terminate(m) => terminate(&m),
         Action::Unregister(m) => unregister(&m),
@@ -210,14 +219,18 @@ fn list(
     quiet: bool,
     verbosity: u8,
     online: bool,
+    cache: bool,
     catalog_file: Option<PathBuf>,
 ) -> Result<ExitCode> {
     // The catalog is baked in (or a `--catalog` file); listing it never
     // touches `container`.
     if online {
-        let entries = catalog::load(catalog_file.as_deref())?;
-        print!("{}", catalog::render(&entries));
+        let cat = catalog::load(catalog_file.as_deref())?;
+        print!("{}", catalog::render(&cat.entries, oci::host_arch()));
         return Ok(ExitCode::SUCCESS);
+    }
+    if cache {
+        return list_cache(catalog_file.as_deref());
     }
     container::ensure_started()?;
     let machines = container::list_machines()?;
@@ -260,6 +273,83 @@ fn list(
         list::format_simple(&entries)
     };
     print!("{out}");
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `cm --list --cache`: the `.wsl` download cache, which catalog entry
+/// each file is for, and which image it was imported as. Cache files
+/// are named by their verified SHA-256 — the same hash lands on the
+/// imported image's `rootfs-sha256` label, which is how the two link.
+fn list_cache(catalog_file: Option<&std::path::Path>) -> Result<ExitCode> {
+    use container_distro::spec::LABEL_ROOTFS_SHA256;
+
+    let cached = wsl::cache_entries();
+    let cat = catalog::load(catalog_file).ok();
+    let images = container::list_images().unwrap_or_default();
+    let sha_key = naming::label_key(LABEL_ROOTFS_SHA256);
+
+    println!(
+        "Cached .wsl downloads ({})",
+        wsl::cache_dir().map_or_else(|| "?".into(), |p| p.display().to_string())
+    );
+    if cached.is_empty() {
+        println!("  (empty)");
+        return Ok(ExitCode::SUCCESS);
+    }
+    let mut rows = vec![vec![
+        "SHA256".into(),
+        "SIZE".into(),
+        "CATALOG ENTRY".into(),
+        "IMPORTED AS".into(),
+    ]];
+    for e in &cached {
+        // Prefer the catalog's own name for this SHA; fall back to the
+        // name recorded in the lockfile at fetch time, marking it when
+        // the catalog still knows the name but at a different SHA —
+        // i.e. a superseded build.
+        let entry_name = cat
+            .as_ref()
+            .and_then(|c| {
+                c.entries
+                    .iter()
+                    .find(|en| {
+                        [&en.amd64_url, &en.arm64_url]
+                            .into_iter()
+                            .flatten()
+                            .any(|d| d.sha256_normalized() == e.sha256)
+                    })
+                    .map(|en| en.name.clone())
+            })
+            .or_else(|| {
+                let meta = e.meta.as_ref()?;
+                let superseded = cat.as_ref().is_some_and(|c| {
+                    c.entries
+                        .iter()
+                        .any(|en| en.name.eq_ignore_ascii_case(&meta.name))
+                });
+                Some(if superseded {
+                    format!("{} (superseded)", meta.name)
+                } else {
+                    meta.name.clone()
+                })
+            })
+            .unwrap_or_default();
+        let image_ref = images
+            .iter()
+            .filter(|i| i.labels().get(&sha_key) == Some(&e.sha256))
+            .map(|i| i.configuration.name.clone())
+            .collect::<Vec<_>>()
+            .join(", ");
+        rows.push(vec![
+            format!("{}…", &e.sha256[..12.min(e.sha256.len())]),
+            format!("{} MiB", e.size >> 20),
+            entry_name,
+            image_ref,
+        ]);
+    }
+    for line in table::columns(&rows, 3) {
+        println!("{line}");
+    }
     Ok(ExitCode::SUCCESS)
 }
 
@@ -337,23 +427,49 @@ fn shutdown(system: bool) -> Result<ExitCode> {
     Ok(code)
 }
 
+/// What `--install` resolved to on this host.
+enum Resolved {
+    /// An OCI image to create a machine or distro from.
+    Image(String),
+    /// A catalog `.wsl` download (URL + SHA-256); the entry's NAME is
+    /// the last-resort distro name after the package's own manifest.
+    Wsl {
+        url: String,
+        sha256: String,
+        name: String,
+    },
+}
+
 /// The positional `--install` argument is a catalog name when it
 /// matches one (case-insensitive), otherwise an image reference —
 /// catalog names contain no `/`/`:`/`@`, so a qualified ref always
-/// bypasses the catalog, as does `--from-image` explicitly.
-fn resolve_image(entries: &[catalog::Entry], source: &InstallSource) -> Result<String> {
-    Ok(match source {
-        InstallSource::Default => entries
-            .first()
-            .context("the distro catalog is empty")?
-            .image
-            .clone(),
-        InstallSource::CatalogOrImage(a) => {
-            catalog::lookup(entries, a).map_or_else(|| a.clone(), |e| e.image.clone())
-        }
-        InstallSource::Image(r) => r.clone(),
+/// bypasses the catalog, as does `--from-image` explicitly. A catalog
+/// entry resolves to its `Image` or to the `.wsl` download for the
+/// host arch; an entry with neither is un-installable here (like WSL
+/// on ARM rejecting amd64-only distributions).
+fn resolve(cat: &catalog::Catalog, source: &InstallSource) -> Result<Resolved> {
+    let entry = match source {
+        InstallSource::Default => cat.default_entry().context("the distro catalog is empty")?,
+        InstallSource::CatalogOrImage(a) => match catalog::lookup(&cat.entries, a) {
+            Some(e) => e,
+            None => return Ok(Resolved::Image(a.clone())),
+        },
+        InstallSource::Image(r) => return Ok(Resolved::Image(r.clone())),
         InstallSource::File(_) => bail!("internal error: file source resolved as image"),
-    })
+    };
+    match entry.source(oci::host_arch()) {
+        Some(catalog::Source::Image(i)) => Ok(Resolved::Image(i.to_string())),
+        Some(catalog::Source::Wsl(d)) => Ok(Resolved::Wsl {
+            url: d.url.clone(),
+            sha256: d.sha256.clone(),
+            name: entry.name.clone(),
+        }),
+        None => bail!(
+            "{:?} is not available for {} (no image or .wsl download for that architecture)",
+            entry.name,
+            oci::host_arch()
+        ),
+    }
 }
 
 /// WSL `--install`: create a machine (or, with distro options, a distro)
@@ -370,10 +486,28 @@ fn install(opts: &InstallOpts) -> Result<ExitCode> {
         ..CreateOptions::default()
     };
     if let InstallSource::File(file) = &opts.source {
-        return install_from_file(opts, &create, file);
+        return install_from_file(opts, &create, file, None, distro::ImportSource::Local);
     }
-    let entries = catalog::load(opts.catalog.as_deref())?;
-    let image = resolve_image(&entries, &opts.source)?;
+    let cat = catalog::load(opts.catalog.as_deref())?;
+    let image = match resolve(&cat, &opts.source)? {
+        Resolved::Image(i) => i,
+        Resolved::Wsl { url, sha256, name } => {
+            // `fetched` holds a shared lock on the cache entry — purge
+            // and prune wait for the import below instead of deleting
+            // the file mid-flight.
+            let fetched = wsl::fetch(&url, &sha256, &name)?;
+            return install_from_file(
+                opts,
+                &create,
+                fetched.path(),
+                Some(&name),
+                distro::ImportSource::Download {
+                    url: &url,
+                    sha256: &sha256,
+                },
+            );
+        }
+    };
     let name = opts
         .name
         .clone()
@@ -416,13 +550,18 @@ fn install(opts: &InstallOpts) -> Result<ExitCode> {
     Err(anyhow::Error::from(cmd.exec()).context("failed to exec `container machine run`"))
 }
 
-/// `--install --from-file`: import a rootfs tar or `.wsl` package as a
-/// distro — machines can't boot a bare rootfs, so this is always the
-/// distro path regardless of `--distro`.
+/// `--install --from-file`, or a catalog `.wsl` entry: import a rootfs
+/// tar or `.wsl` package as a distro — machines can't boot a bare
+/// rootfs, so this is always the distro path regardless of `--distro`.
+/// `name_hint` is a catalog entry's NAME when the source was a catalog
+/// download; the naming order is `--name`, the `.wsl` manifest's
+/// `oobe.defaultName`, `name_hint`, then the file stem.
 fn install_from_file(
     opts: &InstallOpts,
     create: &CreateOptions,
     file: &std::path::Path,
+    name_hint: Option<&str>,
+    source: distro::ImportSource<'_>,
 ) -> Result<ExitCode> {
     if !backend::distros_enabled() {
         bail!("--from-file needs distro support (unset CM_BACKEND=machine)");
@@ -438,11 +577,12 @@ fn install_from_file(
             &wsl::distribution_name(file)
                 .ok()
                 .flatten()
+                .or_else(|| name_hint.map(str::to_string))
                 .unwrap_or_else(|| file_default_name(file)),
         ),
     };
     container::validate_name(&name)?;
-    let name = distro::import(&name, file, create)?;
+    let name = distro::import(&name, file, create, source)?;
     if opts.no_launch {
         return Ok(ExitCode::SUCCESS);
     }
@@ -489,7 +629,12 @@ fn import(
         if container::list_machines()?.iter().any(|m| m.id == name) {
             eprintln!("cm: `{name}` is also a machine; `cm` resolves the name to the distro");
         }
-        distro::import(name, file, &CreateOptions::default())?;
+        distro::import(
+            name,
+            file,
+            &CreateOptions::default(),
+            distro::ImportSource::Local,
+        )?;
     } else {
         distro::import_machine(name, file)?;
     }

@@ -83,6 +83,8 @@ guest's very first write; see [gaps/exec-stdio].
 | `-l --all`         | Accepted for WSL compatibility; `-l` already lists stopped entries                 |
 | `-l --running`     | Only running machines and distros                                                  |
 | `-l -o, --online`  | The installable-distro catalog (`NAME FRIENDLY NAME`) instead of installed ones    |
+| `-l --cache`       | The `.wsl` download cache: SHA-256, size, catalog entry, and the image it loaded   |
+| `--purge-cache`    | Empty the `.wsl` download cache                                                    |
 
 Listing covers both kinds; an `interrupted`/`recreating` distro row
 means a `distro set` was cut off mid-recreate -- see
@@ -122,13 +124,35 @@ fully-qualified ref always bypasses the catalog, and `--from-image`
 skips name resolution entirely. A bare `cm --install` installs the
 catalog default, Ubuntu, matching `wsl --install`.
 
-The catalog is a compiled-in list of official/verified-publisher OCI
-images (`crates/cm-core/src/catalog.json`). `--catalog FILE` substitutes
-a custom JSON file in the same schema — it is an explicit per-invocation
-override, never auto-loaded from `$HOME`, since anything under `$HOME`
-is guest-writable and a default search path would let a distro rewrite
-familiar names to hostile images (see security.md). `container distro`
-itself never consults the catalog; it takes image refs only.
+The catalog is a compiled-in list (`crates/cm-core/src/catalog.json`)
+whose schema is Microsoft's `DistributionInfo.json` — the file behind
+`wsl --list --online`, in the `microsoft/WSL` repo — extended with an
+`Image` field. Each `ModernDistributions` vendor group holds entries
+with a `Name`, `FriendlyName`, and either `Image` (an OCI reference;
+installs can create a machine or distro) or per-arch `Amd64Url` /
+`Arm64Url` `.wsl` downloads (`{"Url", "Sha256"}`; the rootfs is
+fetched, verified, and imported as a distro). Downloads are cached
+content-addressed (`<sha256>.wsl`) under the Darwin per-user cache
+directory (`cm -l --cache` lists it, `cm --purge-cache` empties it),
+so a second install skips the fetch; the OS may reclaim the cache
+under storage pressure. The imported image is labeled with the source
+URL and rootfs SHA-256, which is what links a cached file to its image
+in `--list --cache`. Concurrent installs and purges are serialized by
+per-file flocks (`<sha256>.lock`), the same pattern as distro locks —
+a second fetch waits rather than re-downloading, and purge waits for
+an in-flight import. The lockfile doubles as a sidecar: it records the
+source URL and catalog NAME as JSON, so `--list --cache` identifies a
+file even after the catalog points that entry at a newer SHA-256 (such
+entries show as `NAME (superseded)`). Entries with no source
+for the host arch are hidden from `-l -o` and refused at install,
+which is why amd64-only `.wsl` distributions (SLES, eLxr) don't appear
+on Apple Silicon. `--catalog FILE` substitutes a custom file in the
+same schema — Microsoft's own manifest works verbatim. It is an
+explicit per-invocation override, never auto-loaded from `$HOME`,
+since anything under `$HOME` is guest-writable and a default search
+path would let a distro rewrite familiar names to hostile images (see
+security.md). `container distro` itself never consults the catalog; it
+takes image refs only.
 
 `--from-file` imports a local rootfs tar or a `.wsl` distribution
 package (WSL 2.4.4+ tar format) as a **distro** — machines can't boot a

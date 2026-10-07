@@ -155,9 +155,23 @@ pub struct Args {
         short = 'o',
         long = "online",
         requires = "list",
-        conflicts_with_all = ["all", "running", "quiet", "verbose"]
+        conflicts_with_all = ["all", "running", "quiet", "verbose", "cache"]
     )]
     pub online: bool,
+
+    /// List the `.wsl` download cache and the images imported from it
+    /// instead of installed machines and distros (with --list)
+    #[arg(
+        long = "cache",
+        requires = "list",
+        conflicts_with_all = ["all", "running", "quiet", "verbose"]
+    )]
+    pub cache: bool,
+
+    /// Delete cached `.wsl` downloads (verified against their SHA-256
+    /// on reuse anyway; imported images are unaffected)
+    #[arg(long = "purge-cache")]
+    pub purge_cache: bool,
 
     /// Set the default machine
     #[arg(short = 's', long = "set-default", value_name = "MACHINE")]
@@ -323,14 +337,18 @@ pub enum Action {
     /// Open a shell or run a command in a machine.
     Run,
     /// WSL-shaped machine list; `online` lists the installable catalog
-    /// instead (`wsl --list --online`), honoring `--catalog`.
+    /// instead (`wsl --list --online`), `cache` lists the `.wsl`
+    /// download cache — both honoring `--catalog`.
     List {
         running_only: bool,
         quiet: bool,
         verbosity: u8,
         online: bool,
+        cache: bool,
         catalog: Option<PathBuf>,
     },
+    /// Empty the `.wsl` download cache.
+    PurgeCache,
     /// Stop every running machine; with `system`, also stop services.
     Shutdown { system: bool },
     /// `container system status`.
@@ -381,8 +399,10 @@ impl Args {
         // The catalog only feeds `--install` name resolution and
         // `--list --online`; anywhere else it's silently ignored, so
         // reject it instead.
-        if self.catalog.is_some() && !(self.install.is_some() || (self.list && self.online)) {
-            bail!("--catalog only applies to --install and --list --online");
+        if self.catalog.is_some()
+            && !(self.install.is_some() || (self.list && (self.online || self.cache)))
+        {
+            bail!("--catalog only applies to --install and --list --online/--cache");
         }
         // `--distro` selects the distro backend for both creators.
         if self.distro && self.install.is_none() && self.import.is_none() {
@@ -464,12 +484,15 @@ impl Args {
             Action::Shutdown {
                 system: self.system,
             }
+        } else if self.purge_cache {
+            Action::PurgeCache
         } else if self.list {
             Action::List {
                 running_only: self.running,
                 quiet: self.quiet,
                 verbosity: self.verbose,
                 online: self.online,
+                cache: self.cache,
                 catalog: self.catalog.clone(),
             }
         } else {
@@ -590,6 +613,7 @@ mod tests {
                 quiet: false,
                 verbosity: 0,
                 online: false,
+                cache: false,
                 catalog: None
             }
         );
@@ -743,6 +767,7 @@ mod tests {
                 quiet: false,
                 verbosity: 0,
                 online: true,
+                cache: false,
                 catalog: None
             }
         );

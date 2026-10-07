@@ -94,6 +94,13 @@ allow = [
     "BSD-2-Clause",
     # required by unicode-ident's "(MIT OR Apache-2.0) AND Unicode-3.0"
     "Unicode-3.0",
+    # ISC — untrusted, rustls-webpki, ring ("Apache-2.0 AND ISC")
+    "ISC",
+    # BSD-3-Clause — subtle (rustls's constant-time helpers)
+    "BSD-3-Clause",
+    # CDLA-Permissive-2.0 — webpki-root-certs (Mozilla root store data,
+    # hard dep of rustls-platform-verifier); permissive data license
+    "CDLA-Permissive-2.0",
 ]
 # The confidence threshold for detecting a license from license text.
 # The higher the value, the more closely the license text must be to the

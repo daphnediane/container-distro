@@ -39,10 +39,15 @@ source of truth. "Rung" references are the integration levels in
 
 ## Interop
 
-- [x] **Distro catalog (`--list --online`)** -- curated image list,
-  `--install` catalog-name/default resolution plus `--from-image` and
-  `--from-file` (`.wsl` package import), `--catalog` override; covers
-  the `wsl.exe --list --online` call surface in [remote-wsl-interop]
+- [x] **Distro catalog (`--list --online`)** -- curated catalog in a
+  `DistributionInfo.json` superset (Microsoft's manifest parses via
+  `--catalog`), `--install` catalog-name/default resolution plus
+  `--from-image` and `--from-file` (`.wsl` package import); `.wsl`
+  catalog entries download (ureq + platform trust store, SHA-256
+  verified) into the OS-managed content-addressed cache with per-hash
+  flocking and provenance sidecars, listable via `--list --cache` and
+  clearable via `--purge-cache`; covers the `wsl.exe --list --online`
+  call surface in [remote-wsl-interop]
 
 - [ ] **Remote-WSL editor extensions** -- decide between the
   fake-`wsl.exe` shim, a forked `open-remote-wsl` resolver, and in-guest

@@ -25,8 +25,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::spec::{
     Automount, DistroSpec, HomeMount, HostUser, INIT_DIR, LABEL_DISTRO, LABEL_EXPORT_SCRATCH,
-    LABEL_HOME_MOUNT, LABEL_IMPORTED_FROM, LABEL_MACHINE, MountSpec, PublishSpec, SpecChanges,
-    automounts,
+    LABEL_HOME_MOUNT, LABEL_IMPORTED_FROM, LABEL_MACHINE, LABEL_ROOTFS_SHA256, MountSpec,
+    PublishSpec, SpecChanges, automounts,
 };
 
 /// One distro, as reported by [`summaries`] (and `list --format json`).
@@ -1206,8 +1206,24 @@ pub fn export(name: &str, output: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
+/// Where an imported rootfs came from, recorded in the loaded image's
+/// labels (`imported-from`, plus `rootfs-sha256` for downloads).
+#[derive(Debug, Clone, Copy)]
+pub enum ImportSource<'a> {
+    /// A local file path (or `-` for stdin).
+    Local,
+    /// A catalog `.wsl` download: the URL and the SHA-256 it was
+    /// verified against.
+    Download { url: &'a str, sha256: &'a str },
+}
+
 /// Create a distro from a rootfs tar; returns its name.
-pub fn import(name: &str, file: &Path, opts: &CreateOptions) -> Result<String> {
+pub fn import(
+    name: &str,
+    file: &Path,
+    opts: &CreateOptions,
+    source: ImportSource<'_>,
+) -> Result<String> {
     validate_name(name)?;
     ensure_started()?;
     if distros()?.iter().any(|c| c.id() == name) {
@@ -1226,18 +1242,24 @@ pub fn import(name: &str, file: &Path, opts: &CreateOptions) -> Result<String> {
     };
     let reference = format!("{}:imported-{}", snapshot_repo(name), timestamp());
     // Labels mark the image as ours and record where it came from —
-    // cleanup and debugging don't have to guess from the name.
-    let labels = [
-        (label_key(LABEL_DISTRO), name.to_string()),
-        (
+    // cleanup and debugging don't have to guess from the name. For a
+    // catalog download that's the URL plus the verified hash; the cache
+    // path would be noise.
+    let mut labels = vec![(label_key(LABEL_DISTRO), name.to_string())];
+    match source {
+        ImportSource::Local => labels.push((
             label_key(LABEL_IMPORTED_FROM),
             if file == Path::new("-") {
                 "-".to_string()
             } else {
                 file.to_string_lossy().into_owned()
             },
-        ),
-    ];
+        )),
+        ImportSource::Download { url, sha256 } => {
+            labels.push((label_key(LABEL_IMPORTED_FROM), url.to_string()));
+            labels.push((label_key(LABEL_ROOTFS_SHA256), sha256.to_string()));
+        }
+    }
     oci::load_rootfs(rootfs, &reference, &labels)?;
     let spec = build_spec(name.to_string(), reference, opts)?;
     create_from_spec(&spec, opts.no_boot, opts.set_default)
