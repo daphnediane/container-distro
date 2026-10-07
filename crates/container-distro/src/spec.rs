@@ -42,6 +42,16 @@ pub const INIT_DIR: &str = "/sbin.distro";
 /// images `import` loads (alongside the `distro` label) so cleanup
 /// removes them by ownership, not by name prefix.
 pub const LABEL_IMPORTED_FROM: &str = "imported-from";
+/// Image label: the machine a `cm --import`-loaded rootfs image was
+/// created for. Deliberately not `distro` — that label is what
+/// `distro rm`/`set` treat as image-cleanup ownership, and machine
+/// images are not distro images.
+pub const LABEL_MACHINE: &str = "machine";
+/// Container label on the short-lived scratch container `export_machine`
+/// creates to hold a clone of a machine's rootfs for `container export`;
+/// the value is the machine name. Marks leftovers if an export is
+/// SIGKILLed mid-run (a normal exit deletes it via drop).
+pub const LABEL_EXPORT_SCRATCH: &str = "export-scratch";
 /// Whether the distro auto-manages `/Volumes` mounts, and how:
 /// `rw`/`ro`/`none`. Not recoverable from `container inspect` — mounts
 /// and volumes look alike — so it persists as a label.

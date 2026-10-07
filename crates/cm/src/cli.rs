@@ -229,8 +229,9 @@ pub struct Args {
     )]
     pub home_mount: Option<HomeMount>,
 
-    /// Create a distro (`container distro`) instead of a machine with --install
-    #[arg(long = "distro", requires = "install")]
+    /// Create a distro (`container distro`) instead of a machine with
+    /// --install; with --import, import as a distro instead of a machine
+    #[arg(long = "distro")]
     pub distro: bool,
 
     /// Restricted defaults for a distro created by --install: no home or
@@ -254,6 +255,21 @@ pub struct Args {
     /// prefer --publish at install or `container distro set --publish`
     #[arg(long = "forward", value_name = "HOST_PORT[:GUEST_PORT]")]
     pub forward: Vec<PortMapping>,
+
+    /// Export a machine's or distro's root filesystem as a tar (FILE `-`
+    /// writes stdout)
+    #[arg(long = "export", num_args = 2, value_names = ["NAME", "FILE"])]
+    pub export: Option<Vec<String>>,
+
+    /// Create a machine from a rootfs tar or tar.gz (FILE `-` reads
+    /// stdin; with --distro, imports a distro instead). INSTALL_LOCATION
+    /// is accepted for WSL compatibility and ignored
+    #[arg(
+        long = "import",
+        num_args = 2..=3,
+        value_names = ["NAME", "INSTALL_LOCATION", "FILE"]
+    )]
+    pub import: Option<Vec<String>>,
 
     /// Install the `cm(1)` man page; writes to DIR, or the `share/man/man1`
     /// next to the binary's `bin` directory (e.g. $CARGO_HOME/share/man/man1
@@ -327,6 +343,17 @@ pub enum Action {
     Unregister(String),
     /// `container machine create`, then optionally open a shell.
     Install(InstallOpts),
+    /// `container export` for a distro; the scratch-container workaround
+    /// for a machine. `file` is `-` for stdout.
+    Export { name: String, file: String },
+    /// `machine create` from an OCI-wrapped rootfs tar — or `distro
+    /// import` with `--distro`.
+    Import {
+        name: String,
+        install_location: Option<String>,
+        file: String,
+        distro: bool,
+    },
     /// Forward localhost ports to a machine.
     Forward {
         machine: Option<String>,
@@ -356,6 +383,10 @@ impl Args {
         // reject it instead.
         if self.catalog.is_some() && !(self.install.is_some() || (self.list && self.online)) {
             bail!("--catalog only applies to --install and --list --online");
+        }
+        // `--distro` selects the distro backend for both creators.
+        if self.distro && self.install.is_none() && self.import.is_none() {
+            bail!("--distro only applies to --install and --import");
         }
         let action = if self.version {
             Action::Version
@@ -408,6 +439,20 @@ impl Args {
                 shares: self.shares.clone(),
                 publish: self.publish.clone(),
             })
+        } else if let Some(e) = &self.export {
+            Action::Export {
+                name: e[0].clone(),
+                file: e[1].clone(),
+            }
+        } else if let Some(i) = &self.import {
+            // WSL's three values are NAME INSTALL_LOCATION FILE; with
+            // two, the second is FILE.
+            Action::Import {
+                name: i[0].clone(),
+                install_location: (i.len() == 3).then(|| i[1].clone()),
+                file: i.last().unwrap().clone(),
+                distro: self.distro,
+            }
         } else if !self.forward.is_empty() {
             let action = Action::Forward {
                 machine: self.distribution.clone(),
@@ -802,5 +847,76 @@ mod tests {
     #[test]
     fn name_requires_install() {
         assert!(parse(&["cm", "--name", "dev"]).is_err());
+    }
+
+    #[test]
+    fn export_takes_name_and_file() {
+        let args = parse(&["cm", "--export", "alpine", "out.tar"]).unwrap();
+        assert_eq!(
+            args.action().unwrap(),
+            Action::Export {
+                name: "alpine".into(),
+                file: "out.tar".into()
+            }
+        );
+        let args = parse(&["cm", "--export", "alpine", "-"]).unwrap();
+        assert_eq!(
+            args.action().unwrap(),
+            Action::Export {
+                name: "alpine".into(),
+                file: "-".into()
+            }
+        );
+        // Both values are required; run-only options are rejected.
+        assert!(parse(&["cm", "--export", "alpine"]).is_err());
+        let args = parse(&["cm", "--export", "alpine", "f.tar", "-d", "x"]).unwrap();
+        assert!(args.action().is_err());
+        let args = parse(&["cm", "--export", "alpine", "f.tar", "ls"]).unwrap();
+        assert!(args.action().is_err());
+    }
+
+    #[test]
+    fn import_takes_name_location_file() {
+        // WSL's three values.
+        let args = parse(&["cm", "--import", "u1", "C:\\wsl", "in.tar"]).unwrap();
+        assert_eq!(
+            args.action().unwrap(),
+            Action::Import {
+                name: "u1".into(),
+                install_location: Some("C:\\wsl".into()),
+                file: "in.tar".into(),
+                distro: false,
+            }
+        );
+        // Two values omit the ignored location.
+        let args = parse(&["cm", "--import", "u1", "in.tar"]).unwrap();
+        assert_eq!(
+            args.action().unwrap(),
+            Action::Import {
+                name: "u1".into(),
+                install_location: None,
+                file: "in.tar".into(),
+                distro: false,
+            }
+        );
+        // `--distro` selects the distro import; `-` means stdin.
+        let args = parse(&["cm", "--import", "u1", "-", "--distro"]).unwrap();
+        assert_eq!(
+            args.action().unwrap(),
+            Action::Import {
+                name: "u1".into(),
+                install_location: None,
+                file: "-".into(),
+                distro: true,
+            }
+        );
+        assert!(parse(&["cm", "--import", "u1"]).is_err());
+        let args = parse(&["cm", "--import", "u1", "loc", "f", "-u", "root"]).unwrap();
+        assert!(args.action().is_err());
+        // `--distro` without a creator is meaningless.
+        let args = parse(&["cm", "--distro"]).unwrap();
+        assert!(args.action().is_err());
+        let args = parse(&["cm", "-l", "--distro"]).unwrap();
+        assert!(args.action().is_err());
     }
 }

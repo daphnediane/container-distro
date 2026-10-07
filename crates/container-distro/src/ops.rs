@@ -16,7 +16,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use cm_core::container::{
-    self, ContainerInfo, Machine, MachineDetail, container_cmd, default_machine_name,
+    self, ArgvMode, ContainerInfo, Machine, MachineDetail, container_cmd, default_machine_name,
     ensure_started, validate_name,
 };
 use cm_core::naming::{label_key, label_lookup, state_dir};
@@ -24,8 +24,9 @@ use cm_core::oci;
 use serde::{Deserialize, Serialize};
 
 use crate::spec::{
-    Automount, DistroSpec, HomeMount, HostUser, INIT_DIR, LABEL_DISTRO, LABEL_HOME_MOUNT,
-    LABEL_IMPORTED_FROM, MountSpec, PublishSpec, SpecChanges, automounts,
+    Automount, DistroSpec, HomeMount, HostUser, INIT_DIR, LABEL_DISTRO, LABEL_EXPORT_SCRATCH,
+    LABEL_HOME_MOUNT, LABEL_IMPORTED_FROM, LABEL_MACHINE, MountSpec, PublishSpec, SpecChanges,
+    automounts,
 };
 
 /// One distro, as reported by [`summaries`] (and `list --format json`).
@@ -1233,6 +1234,208 @@ pub fn import(name: &str, file: &Path, opts: &CreateOptions) -> Result<String> {
     oci::load_rootfs(rootfs, &reference, &labels)?;
     let spec = build_spec(name.to_string(), reference, opts)?;
     create_from_spec(&spec, opts.no_boot, opts.set_default)
+}
+
+/// A scratch container created for a machine export — deleted on drop
+/// so a failed export can't leak it. (A SIGKILL still can; the
+/// `export-scratch` label identifies leftovers in `container list`.)
+struct ScratchContainer(String);
+
+impl ScratchContainer {
+    fn create(name: &str, image: &str, machine: &str) -> Result<Self> {
+        let label = format!("{}={machine}", label_key(LABEL_EXPORT_SCRATCH));
+        // --entrypoint only satisfies `create`'s requirement that a
+        // command be specified even for images with no Cmd — the
+        // scratch container is never started.
+        run_container_quiet(&[
+            "create",
+            "--name",
+            name,
+            "--label",
+            &label,
+            "--entrypoint",
+            "/bin/sh",
+            image,
+        ])
+        .context("failed to create the export scratch container")?;
+        Ok(Self(name.to_string()))
+    }
+}
+
+impl Drop for ScratchContainer {
+    fn drop(&mut self) {
+        let _ = container_cmd()
+            .args(["delete", &self.0])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
+/// The scratch container's name: the machine's (truncated to fit the
+/// 63-char `container` limit with the `-export-<timestamp>` suffix) so
+/// a leftover is recognizable.
+fn export_scratch_name(machine: &str) -> String {
+    let base: String = machine.chars().take(44).collect();
+    format!("{}-export-{}", base.trim_end_matches('-'), timestamp())
+}
+
+/// The image a scratch export container is created from: the machine's
+/// own image when still local, else any local image — the container is
+/// never booted, so the image only has to exist. Fails when the daemon
+/// holds no images at all.
+fn scratch_image(detail: &MachineDetail) -> Result<String> {
+    let images = container::list_images().unwrap_or_default();
+    let want = detail.image.as_ref().map(|i| i.reference.as_str());
+    let is = |n: &str| {
+        want.is_some_and(|w| {
+            n == w
+                || n.strip_prefix("docker.io/") == Some(w)
+                || n.strip_prefix("docker.io/library/") == Some(w)
+        })
+    };
+    if let Some(i) = images.iter().find(|i| is(&i.configuration.name)) {
+        return Ok(i.configuration.name.clone());
+    }
+    images
+        .first()
+        .map(|i| i.configuration.name.clone())
+        .context("no local images to create the export scratch container from")
+}
+
+/// `cm --export` for a machine. `container export` snapshots
+/// `containers/<id>/rootfs.ext4` literally — a machine's backing
+/// container mounts its disk from plugin state instead, so export
+/// can't see it. The workaround: clone the machine's ext4 into a
+/// scratch container that exports normally, then delete it (the
+/// machine → distro `migrate` path uses the same clone mechanism).
+/// The machine is stopped while its disk is cloned — a running
+/// machine's clone would only be crash-consistent — and restarted if
+/// it was running.
+pub fn export_machine(machine: &str, output: Option<&Path>) -> Result<()> {
+    ensure_started()?;
+    // Reads and writes the daemon's containers/ directory internals.
+    container::warn_unverified_version();
+    let detail = container::inspect_machine(machine)?;
+    if let Some(o) = output {
+        check_export_output(o)?;
+    }
+    let scratch = ScratchContainer::create(
+        &export_scratch_name(machine),
+        &scratch_image(&detail)?,
+        machine,
+    )?;
+    let was_running = detail.is_running();
+    let cloned = (|| -> Result<()> {
+        if was_running {
+            run_container_quiet(&["machine", "stop", machine])?;
+        }
+        let src = machine_rootfs(&detail)?
+            .with_context(|| format!("machine `{machine}` has no root filesystem to export"))?;
+        // `fs::copy` is a clonefile on APFS — instant and copy-on-write.
+        fs::copy(&src, container_dir(&scratch.0)?.join("rootfs.ext4"))
+            .with_context(|| format!("failed to clone {}", src.display()))?;
+        Ok(())
+    })();
+    if was_running && let Err(e) = boot_machine(machine) {
+        eprintln!("container-distro: warning: failed to restart machine `{machine}`: {e:#}");
+    }
+    cloned?;
+    let mut args = vec!["export".to_string(), scratch.0.clone()];
+    if let Some(o) = output {
+        args.push("--output".into());
+        args.push(o.to_string_lossy().into_owned());
+    }
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    run_container(&args)
+}
+
+/// `cm --import` for a machine: wrap the rootfs tar as an OCI image
+/// (`oci::build_layout`), `image load` it, and `machine create` from
+/// it. A boot probe then retries the documented first-boot flake — the
+/// first `machine run` after `machine create` can lose a race while the
+/// VM restarts after provisioning, for stock and imported images alike
+/// — and leaves the machine stopped, like `wsl --import`.
+pub fn import_machine(name: &str, file: &Path) -> Result<()> {
+    validate_name(name)?;
+    ensure_started()?;
+    if container::list_machines()?.iter().any(|m| m.id == name) {
+        bail!("a machine named `{name}` already exists");
+    }
+    // A same-named distro would shadow the machine everywhere in `cm`.
+    if find(name).is_ok() {
+        bail!(
+            "`{name}` is a distro — `cm` resolves that name to the distro; \
+             pick another name, or use `cm --import --distro`"
+        );
+    }
+    let stdin_copy;
+    let rootfs = if file == Path::new("-") {
+        stdin_copy = oci::stdin_to_tempfile()?;
+        stdin_copy.path()
+    } else {
+        file
+    };
+    let reference = format!("local/machine-{name}:imported-{}", timestamp());
+    // Labels mark the image as ours without `distro`, which would make
+    // `distro rm`/`set` image cleanup claim it.
+    let labels = [
+        (label_key(LABEL_MACHINE), name.to_string()),
+        (
+            label_key(LABEL_IMPORTED_FROM),
+            if file == Path::new("-") {
+                "-".to_string()
+            } else {
+                file.to_string_lossy().into_owned()
+            },
+        ),
+    ];
+    oci::load_rootfs(rootfs, &reference, &labels)?;
+    // `machine create` boots the machine; its internal boot absorbs the
+    // first-boot provisioning reboot. `--no-boot` is avoided on purpose:
+    // a `machine run` on a never-booted machine races the boot and fails
+    // every time (upstream #2024-adjacent).
+    let created = run_container(&["machine", "create", "--name", name, &reference]);
+    if created.is_err() {
+        // Don't leave the just-loaded image orphaned behind the failed
+        // create.
+        let _ = container_cmd()
+            .args(["image", "delete", &reference])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        return created;
+    }
+    // Boot probe: the first `machine run` after `machine create` can
+    // still lose the race while the VM settles — retry with a pause.
+    let booted = (0..5).any(|attempt| {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+        }
+        container::run_command(
+            Some(name),
+            None,
+            None,
+            &[],
+            None,
+            &["true".to_string()],
+            ArgvMode::Shell,
+        )
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+    });
+    if booted {
+        // `wsl --import` registers without starting; leave it stopped.
+        let _ = run_container_quiet(&["machine", "stop", name]);
+    } else {
+        eprintln!(
+            "warning: `{name}` was created but did not boot; see `container machine logs {name}`"
+        );
+    }
+    Ok(())
 }
 
 /// Migrate a `container machine` into a distro, carrying its root

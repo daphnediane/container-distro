@@ -335,16 +335,16 @@ path boring.
 Each `cm`/machine gap has its own document under [`gaps/`], including
 the level that solves it and a recommendation:
 
-| Gap                                        | Document                   | Cheapest fix level          |
-| ------------------------------------------ | -------------------------- | --------------------------- |
-| No mounts outside `$HOME` (`/Volumes/...`) | [gaps/mounts-outside-home] | upstream PR, else L2.5      |
-| No localhost port forwarding               | [gaps/port-forwarding]     | L0 (manual forwarder)       |
-| No `--export`/`--import`, snapshots        | [gaps/export-import]       | **L0** -- CLI composition   |
-| No config files (`wsl.conf`/`.wslconfig`)  | [gaps/configuration-files] | L0 host config              |
-| `-v` ignored, no verbose list              | [gaps/verbose-list]        | **L0** -- `machine inspect` |
-| Subprocess overhead + JSON scraping        | [gaps/subprocess-overhead] | L2 only if it hurts         |
-| Startup `system start` dance               | [gaps/service-startup]     | L0 -- stop-what-we-started  |
-| `machine run` exec stdio loss              | [gaps/exec-stdio]          | upstream fix; L0 `-i`       |
+| Gap                                                           | Document                   | Cheapest fix level          |
+| ------------------------------------------------------------- | -------------------------- | --------------------------- |
+| No mounts outside `$HOME` (`/Volumes/...`)                    | [gaps/mounts-outside-home] | upstream PR, else L2.5      |
+| No localhost port forwarding                                  | [gaps/port-forwarding]     | L0 (manual forwarder)       |
+| `--export`/`--import` (L0, done; upstream export bug remains) | [gaps/export-import]       | **L0** -- CLI composition   |
+| No config files (`wsl.conf`/`.wslconfig`)                     | [gaps/configuration-files] | L0 host config              |
+| `-v` ignored, no verbose list                                 | [gaps/verbose-list]        | **L0** -- `machine inspect` |
+| Subprocess overhead + JSON scraping                           | [gaps/subprocess-overhead] | L2 only if it hurts         |
+| Startup `system start` dance                                  | [gaps/service-startup]     | L0 -- stop-what-we-started  |
+| `machine run` exec stdio loss                                 | [gaps/exec-stdio]          | upstream fix; L0 `-i`       |
 
 Only **mounts outside `$HOME`** and **port forwarding** genuinely
 require going below the CLI -- everything else is reachable at L0.

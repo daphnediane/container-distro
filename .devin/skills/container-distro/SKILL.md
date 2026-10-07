@@ -44,8 +44,18 @@ from `cm_core::naming`; see `doc/naming.md` before changing any of them.
 - `--forward HOST[:GUEST]` (repeatable, `-d` selects) → foreground
   localhost → machine-IP TCP forwarder
 - `--status` → `container system status`
-- `--export`/`--import` are punted (see `doc/gaps/export-import.md`);
-  the prototype lives on branch `wip/export-import`
+- `--export NAME FILE` (`-` = stdout) → distro: `container export`;
+  machine: `ops::export_machine` — stop, clone `rootfs.ext4` into a
+  never-started scratch container (explicit `--entrypoint /bin/sh`;
+  `create` requires a command), `container export` it, delete on drop,
+  restart the machine. Works around `container export` only reading
+  `containers/<id>/rootfs.ext4`, never the `rootfs.json` mount source
+- `--import NAME [LOC] FILE` (`-` = stdin; LOC ignored) →
+  `ops::import_machine`: `oci::build_layout` + `image load`, then plain
+  `machine create` (NOT `--no-boot` — a never-booted machine's
+  `machine run` races the boot and fails every time; create's internal
+  boot absorbs it) plus a retrying `run -- true` boot probe; `--distro`
+  → `distro import` instead
 
 Before any machine operation `cm` runs `container system start` if
 services are down.

@@ -29,17 +29,17 @@ One document per gap, each noting the integration level (see the rung
 definitions in [lower-level-integration][lower-level-integration-2])
 that would fix it:
 
-| Gap                                        | Cheapest fix                             |
-| ------------------------------------------ | ---------------------------------------- |
-| [Mounts outside `$HOME`]                   | distros (L2.5, done); machines upstream  |
-| [Localhost port forwarding]                | `cm --forward`, distro `-p` (done)       |
-| [`--export` / `--import`]                  | distros done; machines punted (upstream) |
-| [Configuration files]                      | L0 host config; guest `wsl.conf` harder  |
-| [`-v` verbose list]                        | done (L0)                                |
-| [Subprocess overhead / JSON scraping]      | L2 if it ever hurts                      |
-| [Service startup / `--shutdown` semantics] | L0 -- "stop what we started"             |
-| [`machine run` exec stdio loss]            | L0 `-i` + quoting done; race upstream    |
-| [GUI apps (X11/Wayland, WSLg)]             | L0 -- host X server + env plumbing       |
+| Gap                                        | Cheapest fix                            |
+| ------------------------------------------ | --------------------------------------- |
+| [Mounts outside `$HOME`]                   | distros (L2.5, done); machines upstream |
+| [Localhost port forwarding]                | `cm --forward`, distro `-p` (done)      |
+| [`--export` / `--import`]                  | done (L0 workaround for machines)       |
+| [Configuration files]                      | L0 host config; guest `wsl.conf` harder |
+| [`-v` verbose list]                        | done (L0)                               |
+| [Subprocess overhead / JSON scraping]      | L2 if it ever hurts                     |
+| [Service startup / `--shutdown` semantics] | L0 -- "stop what we started"            |
+| [`machine run` exec stdio loss]            | L0 `-i` + quoting done; race upstream   |
+| [GUI apps (X11/Wayland, WSLg)]             | L0 -- host X server + env plumbing      |
 
 Upstream references:
 

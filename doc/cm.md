@@ -148,6 +148,27 @@ semi-trusted images: no home share, no network, no SSH-agent forward,
 no sudo -- explicit flags still apply, and it is *not* a sandbox (see
 security.md).
 
+## Exporting and importing
+
+| Option                     | Description                                                                              |
+| -------------------------- | ---------------------------------------------------------------------------------------- |
+| `--export NAME FILE`       | Write the distro's or machine's root filesystem as a tar (`-` = stdout)                  |
+| `--import NAME [LOC] FILE` | Register a rootfs `tar`/`tar.gz` as a machine (`-` = stdin; `--distro` imports a distro) |
+
+`--export` briefly stops a running machine while its filesystem is
+snapshotted, then restarts it -- `container export` can't read a
+machine's rootfs directly, so `cm` exports a clone (see
+[gaps/export-import]).
+
+`--import` registers the tar as a machine -- or as a distro with
+`--distro` (`container distro import`). `LOC` is WSL's
+install-location argument: accepted for compatibility and ignored,
+since storage is managed by `container`; the two-value form
+`--import NAME FILE` omits it. Names are lowercase DNS-style, as
+`machine create` requires. Like `wsl --import`, the result is left
+stopped; `cm` boots it once to verify and retries the documented
+first-boot flake before warning.
+
 ## Port forwarding
 
 `cm --forward HOST[:GUEST]` (repeatable, `-d` picks the target) runs a
@@ -188,5 +209,6 @@ man-page link.
 [apple/container#1954]: https://github.com/apple/container/issues/1954
 [container-distro.md]: container-distro.md#interrupted-set-recovery
 [gaps/exec-stdio]: gaps/exec-stdio.md
+[gaps/export-import]: gaps/export-import.md
 [gaps/port-forwarding]: gaps/port-forwarding.md
 [install.md]: install.md#man-pages

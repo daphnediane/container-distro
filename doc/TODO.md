@@ -12,9 +12,16 @@ source of truth. "Rung" references are the integration levels in
 
 ## Machines (WSL parity, mostly upstream-blocked)
 
-- [ ] **`cm --export` / `--import`** -- machine export is blocked
-  upstream; prototype parked on `wip/export-import` ([#2];
-  [gaps/export-import])
+- [x] **`cm --export` / `--import` workarounds** -- machine export
+  clones the rootfs into a scratch regular container for
+  `container export`; import OCI-wraps the tar and `machine create`s
+  it, retrying the generic first-boot flake. `--distro` imports a
+  distro ([#2]; [gaps/export-import])
+- [ ] **`cm --export` / `--import` via upstream primitives** -- once
+  `container export` honors a machine's rootfs mount source, drop the
+  scratch-container workaround; once a `--no-boot` machine can be
+  booted by `machine run`, use it and drop the create-boot probe. Both
+  bugs still need filing upstream ([#15]; [gaps/export-import])
 - [ ] **Mounts outside `$HOME` for machines** -- upstream
   ([apple/container#1805], [apple/container#2278]); distros cover it
   today ([#3]; [gaps/mounts-outside-home])
@@ -69,6 +76,7 @@ From [security.md's checklist]:
 [#12]: https://github.com/daphnediane/container-distro/issues/12
 [#13]: https://github.com/daphnediane/container-distro/issues/13
 [#14]: https://github.com/daphnediane/container-distro/issues/14
+[#15]: https://github.com/daphnediane/container-distro/issues/15
 [#2]: https://github.com/daphnediane/container-distro/issues/2
 [apple/container#2278]: https://github.com/apple/container/issues/2278
 [#3]: https://github.com/daphnediane/container-distro/issues/3

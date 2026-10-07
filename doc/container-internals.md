@@ -84,7 +84,7 @@ missing ones fall back to defaults.
   SSH-agent forwarding, all caps, no masked paths; our distro spec
   replicates that shape (`spec.rs create_args`).
 - `machine run` **shell-evaluates**: the guest init execs
-  `$SHELL -c "$*"`, so argv is re-split (apple/container#1954). `cm -e`
+  `$SHELL -c "$*"`, so argv is re-split ([apple/container#1954]). `cm -e`
   bypasses via `container exec`; the fallback path single-quotes each
   argument (`ArgvMode::Exact`); the shell-probe is passed as one
   pre-joined string (C12).
@@ -92,7 +92,15 @@ missing ones fall back to defaults.
   `machine run -- true` as the boot primitive before `exec` or IP
   lookup. The first `machine run` after `machine create` can fail with
   "Operation not supported by device" (observed 1.5.0, possibly related
-  to #2024); a retry succeeds -- worth retrying once in boot paths.
+  to [apple/container#2024]; the guest log shows the injected
+  `/sbin.machine/init` `exec /sbin/init`, the image's init rebooting
+  once during provisioning — e.g. alpine's inittab pointing at a
+  missing openrc);
+  a retry once the VM settles succeeds -- worth retrying in boot paths.
+  Worse: a machine created `--no-boot` appears unbootable via
+  `machine run` — every run races the boot and failed in testing
+  (1.5.0). `cm --import` therefore uses plain `machine create`, whose
+  internal boot absorbs the first-boot reboot.
 - **A machine's backing container only exists after first boot** --
   `machine create` writes the plugin-state dir (including a materialized
   `rootfs.ext4`) but `machine inspect` reports no `containerId` until
@@ -127,7 +135,8 @@ missing ones fall back to defaults.
   including `rootfs.ext4` -- which is why `set` stages the filesystem in
   our own `preserved/` dir first.
 - `container export` **deletes an existing output directory** (upstream
-  #2325) -- `check_export_output` refuses directories first.
+  [apple/container#2325]) -- `check_export_output` refuses directories
+  first.
 - `export` snapshots `containers/<id>/rootfs.ext4` literally, ignoring
   any configured rootfs mount -- so it fails on machines and on
   never-booted containers. We deliberately point `rootFsOverride` at the
@@ -146,7 +155,7 @@ missing ones fall back to defaults.
   reports `cpus + 1`).
 - Names must be lowercase DNS `[a-z0-9-]`, ≤63 chars (`validate_name`).
 - `exec` exit codes propagate (with the 255-ambiguity caveat, upstream
-  #2210).
+  [apple/container#2210]).
 
 ## On-disk layout under `appRoot` (tier: Layout)
 
@@ -263,7 +272,7 @@ process on stderr when `server.version` isn't a verified release.
    `source`, `rootfs.ext4`) that `distro migrate` reads.
 5. `container exec -w` still auto-creates missing dirs (else
    `machine_workdir` needs a re-think).
-6. `machine run` argv handling -- if #1954 is fixed, the
+6. `machine run` argv handling -- if [apple/container#1954] is fixed, the
    single-quote-per-arg fallback and the pre-joined shell probe can be
    simplified.
 7. `--masked-path NONE`/`--read-only-path NONE` and `--ssh` unchanged.
@@ -283,6 +292,10 @@ process on stderr when `server.version` isn't a verified release.
 - Gap docs: [exec-stdio], [export-import], [mounts-outside-home],
   [service-startup], [subprocess-overhead]
 
+[apple/container#1954]: https://github.com/apple/container/issues/1954
+[apple/container#2024]: https://github.com/apple/container/issues/2024
+[apple/container#2210]: https://github.com/apple/container/issues/2210
+[apple/container#2325]: https://github.com/apple/container/issues/2325
 [exec-stdio]: gaps/exec-stdio.md
 [export-import]: gaps/export-import.md
 [gaps/exec-stdio]: gaps/exec-stdio.md

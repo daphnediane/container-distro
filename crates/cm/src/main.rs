@@ -15,7 +15,7 @@ mod list;
 use std::io::IsTerminal;
 use std::net::{IpAddr, Ipv4Addr};
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{ExitCode, ExitStatus, Stdio};
 
 use anyhow::{Context, Result, bail};
@@ -61,6 +61,13 @@ fn run(args: Args) -> Result<ExitCode> {
         Action::Terminate(m) => terminate(&m),
         Action::Unregister(m) => unregister(&m),
         Action::Install(opts) => install(&opts),
+        Action::Export { name, file } => export(&name, &file),
+        Action::Import {
+            name,
+            install_location,
+            file,
+            distro,
+        } => import(&name, install_location.as_deref(), &file, distro),
         Action::Forward { machine, mappings } => forward(machine.as_deref(), &mappings),
         Action::Run => run_in_target(&args),
     }
@@ -444,6 +451,49 @@ fn install_from_file(
         ..RunOpts::default()
     })?;
     Err(anyhow::Error::from(cmd.exec()).context("failed to exec `container exec`"))
+}
+
+/// WSL `--export`: distros go through `container export` directly;
+/// machines through the scratch-container workaround (`container
+/// export` can't snapshot a machine's plugin-state rootfs — see
+/// doc/gaps/export-import.md). FILE `-` writes the tar to stdout.
+fn export(name: &str, file: &str) -> Result<ExitCode> {
+    let output = (file != "-").then_some(Path::new(file));
+    match named_target(name)? {
+        Target::Distro(d) => distro::export(&d, output)?,
+        Target::Machine(_) => distro::export_machine(name, output)?,
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// WSL `--import`: wrap the rootfs tar as an OCI image, load it, and
+/// create a machine — or, with `--distro`, import it as a distro.
+fn import(
+    name: &str,
+    install_location: Option<&str>,
+    file: &str,
+    as_distro: bool,
+) -> Result<ExitCode> {
+    container::validate_name(name)?;
+    if let Some(loc) = install_location.filter(|l| !l.is_empty() && *l != "-") {
+        eprintln!("cm: ignoring install location `{loc}` — storage is managed by `container`");
+    }
+    let file = Path::new(file);
+    if as_distro {
+        if !backend::distros_enabled() {
+            bail!("--distro needs distro support (unset CM_BACKEND=machine)");
+        }
+        container::ensure_started()?;
+        // The new distro would shadow a same-named machine for `cm` —
+        // warn, like `-d` resolution does.
+        if container::list_machines()?.iter().any(|m| m.id == name) {
+            eprintln!("cm: `{name}` is also a machine; `cm` resolves the name to the distro");
+        }
+        distro::import(name, file, &CreateOptions::default())?;
+    } else {
+        distro::import_machine(name, file)?;
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 /// Derive a default distro name from a rootfs filename: drop the

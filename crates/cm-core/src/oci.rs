@@ -102,10 +102,19 @@ pub fn build_layout(
         .iter()
         .map(|(k, v)| (k.clone(), v.clone().into()))
         .collect();
+    // `config` carries the fields every base image sets — a default
+    // PATH, Cmd, and WorkingDir. `container machine`/`distro` supply
+    // their own init so they never read them, but plain
+    // `container run` on the imported image needs them.
     let config = serde_json::to_vec(&json!({
         "architecture": arch,
         "os": "linux",
-        "config": { "Labels": label_map },
+        "config": {
+            "Env": ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"],
+            "Cmd": ["/bin/sh"],
+            "WorkingDir": "/",
+            "Labels": label_map,
+        },
         "rootfs": { "type": "layers", "diff_ids": [format!("sha256:{diff_id}")] },
         "history": [{ "created_by": "container distro import", "comment": "imported rootfs" }],
     }))?;

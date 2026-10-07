@@ -252,9 +252,9 @@ setup.
 - `--shutdown` stops machines but leaves `container` services running;
   `--shutdown --system` also runs `container system stop` (which stops
   every container, not just machines).
-- `cm --export`/`--import` are not implemented: machine export is
-  blocked upstream (see doc/gaps/export-import.md). Distros support it
-  via `container distro export`/`import`.
+- `cm --export`/`--import` cover machines and distros; `--import`'s
+  install-location argument is accepted and ignored (details:
+  doc/gaps/export-import.md).
 - No GUI app support (WSLg's X11/Wayland) -- see doc/gaps/gui-apps.md
   for what it would take.
 - No equivalents for `--update`, `--manage`, `--mount` (VHDs), or
@@ -293,6 +293,10 @@ for re-evaluation, is in doc/security.md.
   `cm`).
 - `container` is resolved from `/usr/local/bin/container` (the upstream
   install location), then `PATH`; set `CONTAINER_CLI` to override.
+- Built and verified against `container` 1.5.0. Some features reach
+  into daemon internals that may change on newer releases -- a warning
+  appears on unverified versions; see doc/container-internals.md
+  (version gating).
 - Open work and planned features are tracked in doc/TODO.md; the rest of
   the docs live in [doc/].
 

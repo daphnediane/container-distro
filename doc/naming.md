@@ -35,6 +35,8 @@ project domain, `io.github.<user>.<project>` is the usual choice.
 | Plugin metadata          | `<prefix>/libexec/container-plugins/distro/config.toml` (`author`, `abstract`)                                                                                                 | `APP_NAME`                                        |
 | Plugin / subcommand name | `container distro`, `bin/distro`                                                                                                                                               | `plugin::PLUGIN_NAME`                             |
 | Snapshot / import images | `local/distro-<name>:imported-<timestamp>` (plus pre-0.2 `:<timestamp>` `set` snapshots); image labels `<LABEL_PREFIX>.distro=<name>` and `<LABEL_PREFIX>.imported-from=<tar>` | `LABEL_PREFIX` (labels), hard-coded `ops` (names) |
+| Machine import images    | `local/machine-<name>:imported-<timestamp>` from `cm --import`; image labels `<LABEL_PREFIX>.machine=<name>` and `<LABEL_PREFIX>.imported-from=<tar>`                          | `LABEL_PREFIX` (labels), hard-coded `ops` (names) |
+| Export scratch label     | `<LABEL_PREFIX>.export-scratch=<machine>` on the short-lived scratch container `cm --export` creates for a machine export                                                      | `LABEL_PREFIX`                                    |
 | In-guest files           | `/sbin.distro` mount, `/etc/.distro.initialized`, `/etc/.distro.user.<name>`, `/etc/.distro.admin.<name>`, `/etc/sudoers.d/<name>`, `/etc/doas.d/<name>.conf`                  | hard-coded in `spec`/assets                       |
 
 The plugin subcommand (`container distro`) and the in-guest paths are

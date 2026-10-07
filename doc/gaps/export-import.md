@@ -1,14 +1,14 @@
 # Gap: `--export` / `--import`
 
-- **Status:** punted for machines -- the obvious L0 recipe doesn't work
-  (`container` 1.5.0, build d265d66). Prototype parked on branch
-  `wip/export-import`. **Works for distros:** `container distro
-  export`/`import` (regular containers export fine, and imported images
-  boot).
-- **Fix level:** upstream fix for export; host-side ext4 reader (L0, no
-  guest tools) as a workaround; import blocked on an unexplained boot
-  failure
-- **Tracking:** [#2]
+- **Status:** implemented (`container` 1.5.0, build d265d66). Machine
+  export works around the upstream `container export` rootfs bug with a
+  scratch regular container; machine import works, modulo a generic
+  first-boot flake it retries. Distros use `container distro
+  export`/`import` directly.
+- **Fix level:** shipped as host-side workarounds; the export bug and a
+  `--no-boot` boot bug are both still worth filing upstream
+- **Tracking:** [#2] (the feature); [#15] (dropping the workarounds
+  once upstream is fixed)
 
 ## What WSL does
 
@@ -19,7 +19,23 @@
 
 ## What we have today
 
-Nothing exposed via `cm`.
+`cm --export NAME FILE` and `cm --import NAME INSTALL_LOCATION FILE`,
+covering machines and distros in one namespace:
+
+- `--export` on a distro is `container distro export`. On a machine it
+  stops the machine, clones its `rootfs.ext4` into a scratch regular
+  container, runs `container export` on that, deletes the scratch
+  container, and restarts the machine. `FILE -` writes stdout.
+- `--import` wraps the tar in an OCI image layout
+  (`cm_core::oci::build_layout`), `container image load`s it, and
+  `machine create`s it — then probes with `machine run -- true` and
+  leaves the machine stopped, like `wsl --import`. With `--distro` it
+  is `container distro import` instead. `FILE -` reads stdin;
+  `INSTALL_LOCATION` is accepted and ignored (machine state lives in
+  `container`'s app root).
+- Names are lowercase DNS-style — `wsl --import` accepts arbitrary
+  distro names, but `container machine` requires it and `cm` holds
+  distros to the same rule.
 
 ## Export: `container export` can't snapshot machines
 
@@ -45,8 +61,7 @@ machine plugin's state instead -- the container's `rootfs.json`:
 ```
 
 Export ignores the configured rootfs mount source. It's an upstream bug.
-Regular containers, including the planned `container distro` ones, are
-unaffected.
+Regular containers, including `container distro` ones, are unaffected.
 
 The mechanism (verified 2026-10-04): a container's data dir holds only
 `runtime-configuration.json` until first start; then the daemon copies
@@ -67,39 +82,48 @@ and `delete` removes the disk with the container.
 are about other things: [apple/container#1400] (export of running
 containers, closed), [apple/container#1265] (export should write a tar,
 closed), and [apple/container#2325] (`export -o` deletes an existing
-directory, open). A new issue is warranted, with the repro above.
+directory, open). A new issue is still warranted, with the repro above
+— tracked by [#15].
 
-### Workarounds considered
+### Workarounds
 
+- **Scratch regular container (shipped).** `ops::export_machine`
+  creates a scratch `container create` (never started), clonefile-copies
+  the machine's `rootfs.ext4` — found via `machine_rootfs`, i.e. the
+  `rootfs.json`/`rootFsOverride` source, not a hard-coded path — into
+  `containers/<scratch-id>/rootfs.ext4`, runs `container export` on the
+  scratch container, and deletes it on drop. That exploits the exact
+  assumption behind the bug: export reads the conventional path
+  literally, no matter where the container would have mounted its disk
+  from. The machine is stopped while its disk is cloned — a running
+  machine's clone is only crash-consistent — and restarted if it was
+  running. No guest `sh`/`mount`/`tar` needed. Two implementation
+  notes: `container create` requires a command/entrypoint even for a
+  container that never starts (our older imported images carry no
+  `Cmd`), so the scratch container passes an explicit `--entrypoint
+  /bin/sh`; and a SIGKILLed export can leak the scratch container, so
+  it carries an `export-scratch` label naming the machine.
+- **`distro migrate --keep`.** The same clone machinery, landing in a
+  distro instead of a tar — still the better path for machine → distro.
 - **Guest-side tar stream (prototyped, rejected).** Run
   `machine run --root -- sh -c '<bind-mount / and tar it>'` and capture
   stdout. It works (byte-identical over 3 runs, no first-write loss),
   but it depends on `sh`, `mount`, and `tar` being installed in the
   distro. That's the wrong dependency for an export tool.
-- **Host-side ext4 read (preferred if we revisit).** Take an APFS clone
-  of the machine's `rootfs.ext4` (`cp -c`, instant). The clone is
-  crash-consistent if the machine is running and exact if it's stopped.
-  Walk it with a pure-Rust read-only ext4 reader (`ext4-view`) and write
-  the tar with the `tar` crate. No guest involvement. To verify: does
-  the reader expose device major/minor and xattrs? Also, the machine
-  plugin's state path is internal, so read it from `container inspect`'s
-  rootfs source rather than hard-coding it.
+- **Host-side ext4 read.** Take an APFS clone of the machine's
+  `rootfs.ext4`, walk it with a pure-Rust read-only ext4 reader
+  (`ext4-view`), write the tar with the `tar` crate. Now unnecessary —
+  the scratch-container workaround covers it without an ext4 reader.
 - **Upstream fix.** Once export honors the rootfs mount source, plain
-  `container export` is the whole implementation.
-- **Shipped for migration, not export.** `container distro migrate`
-  clones the machine's `rootfs.ext4` straight into a distro (the
-  `rootfs.json`/`rootFsOverride` source path, clonefile -- same
-  mechanism as `distro set`), sidestepping the export bug for the
-  machine → distro case. Export-to-tar still needs the reader or the
-  upstream fix.
+  `container export <container-id>` on the machine's backing container
+  is the whole implementation.
 
-## Import: imported machines don't boot
+## Import: the boot failure was the generic first-boot flake
 
-The prototype wrapped the rootfs tar in an OCI image layout. The single
-layer is stored as-is (plain or gzip), with the `diff_id` computed over
-the uncompressed stream. It then ran `container image load` and
-`container machine create --no-boot local/<name>:imported`. Loading and
-creating both succeed, and the machine is listed. **Booting fails:**
+The prototype wrapped the rootfs tar in an OCI image layout (single
+layer stored as-is, `diff_id` over the uncompressed stream), ran
+`container image load`, and `container machine create --no-boot
+local/<name>:imported`. Loading and creating succeeded; booting failed:
 
 ```console
 $ container machine run -n a2 -- true
@@ -107,31 +131,49 @@ Error: The operation couldn’t be completed. Operation not supported by device
 ```
 
 The machine's `stdio.log` shows busybox init running `/etc/inittab`,
-failing `can't run '/sbin/openrc'`, then rebooting. The source machine
-(stock `alpine:latest`) has the same inittab and no openrc but boots
-fine, so the difference lies elsewhere: image config, layer handling, or
-init environment. Root cause not determined. It may be related to
-[apple/container#2024] (machine create succeeds for images that then
-fail to boot, with a misleading error).
+failing `can't run '/sbin/openrc'`, then rebooting. **That signature is
+not an import defect** — a stock `alpine:latest` machine reproduces it
+exactly (verified 2026-10-06): the machine plugin's `/sbin.machine/init`
+ends with an unconditional `exec /sbin/init`, alpine's inittab points
+at openrc which the image doesn't ship, busybox init reboots, and the
+second boot succeeds. It's the first-boot provisioning flake already
+noted in container-internals.md, possibly related to
+[apple/container#2024].
 
-## Caveats (still apply)
+Missing OCI `config` fields were a real but *separate* issue: generated
+import images carried only `Labels` — no `Env`/`Cmd`/`WorkingDir` — and
+`container create` refuses an image with no command, which broke the
+export scratch container. `oci::build_layout` now writes the
+conventional defaults (`PATH`, `Cmd /bin/sh`, `WorkingDir /`), so
+imported images also work via plain `container run`.
 
-- Machine names are lowercase DNS-style (`[a-z0-9-]`); `wsl --import`
-  accepts arbitrary distro names -- `cm` must validate.
-- WSL `--import` takes an install location. Machines keep their state
-  inside `container`'s app root, so `cm` would accept the argument for
-  compatibility and ignore it.
+Two upstream quirks the implementation works around:
+
+- **`machine create --no-boot` is effectively unbootable** — a
+  `machine run` on a never-booted machine races the boot and every
+  attempt failed in testing (1.5.0). `cm --import` therefore uses plain
+  `machine create`, whose internal boot absorbs the first-boot
+  provisioning reboot, rather than `--no-boot`.
+- **The first `machine run` after `machine create` can still lose the
+  settle race** — the import boot probe retries with a pause before
+  warning (the machine is left created, not deleted).
+
+## Caveats
+
+- An export of a running machine briefly stops it; the resulting clone
+  is exact, not crash-consistent.
+- Importing an image is trusting it with your identity — see
+  security.md.
 
 ## Recommendation
 
-Punt for now. File the export bug upstream. Revisit with the host-side
-ext4 reader for export if upstream is slow. For import, debug the boot
-failure by diffing the inspect output and config of a stock-image
-machine against an imported one. A `container distro` backend (regular
-containers) sidesteps the export bug entirely, so export/import may be
-best delivered there first.
+Shipped as described. Remaining — tracked by [#15]: file the two
+upstream bugs (`container export`'s `containers/<id>/rootfs.ext4`
+assumption, and `--no-boot` machines failing every `machine run`),
+then swap the workarounds for the primitives.
 
 [#2]: https://github.com/daphnediane/container-distro/issues/2
+[#15]: https://github.com/daphnediane/container-distro/issues/15
 [apple/container#1265]: https://github.com/apple/container/issues/1265
 [apple/container#1400]: https://github.com/apple/container/issues/1400
 [apple/container#2024]: https://github.com/apple/container/issues/2024
