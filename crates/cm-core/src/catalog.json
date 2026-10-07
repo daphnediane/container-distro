@@ -1,0 +1,104 @@
+{
+  "distributions": [
+    {
+      "name": "Ubuntu",
+      "friendly_name": "Ubuntu",
+      "image": "docker.io/library/ubuntu:latest"
+    },
+    {
+      "name": "Ubuntu-26.04",
+      "friendly_name": "Ubuntu 26.04 LTS",
+      "image": "docker.io/library/ubuntu:26.04"
+    },
+    {
+      "name": "Ubuntu-24.04",
+      "friendly_name": "Ubuntu 24.04 LTS",
+      "image": "docker.io/library/ubuntu:24.04"
+    },
+    {
+      "name": "Ubuntu-22.04",
+      "friendly_name": "Ubuntu 22.04 LTS",
+      "image": "docker.io/library/ubuntu:22.04"
+    },
+    {
+      "name": "openSUSE-Tumbleweed",
+      "friendly_name": "openSUSE Tumbleweed",
+      "image": "docker.io/opensuse/tumbleweed:latest"
+    },
+    {
+      "name": "openSUSE-Leap-16.0",
+      "friendly_name": "openSUSE Leap 16.0",
+      "image": "docker.io/opensuse/leap:16.0"
+    },
+    {
+      "name": "RockyLinux-10",
+      "friendly_name": "Rocky Linux 10",
+      "image": "quay.io/rockylinux/rockylinux:10"
+    },
+    {
+      "name": "RockyLinux-9",
+      "friendly_name": "Rocky Linux 9",
+      "image": "quay.io/rockylinux/rockylinux:9"
+    },
+    {
+      "name": "kali-linux",
+      "friendly_name": "Kali Linux Rolling",
+      "image": "docker.io/kalilinux/kali-rolling:latest"
+    },
+    {
+      "name": "Debian",
+      "friendly_name": "Debian GNU/Linux",
+      "image": "docker.io/library/debian:latest"
+    },
+    {
+      "name": "AlmaLinux-8",
+      "friendly_name": "AlmaLinux OS 8",
+      "image": "docker.io/library/almalinux:8"
+    },
+    {
+      "name": "AlmaLinux-9",
+      "friendly_name": "AlmaLinux OS 9",
+      "image": "docker.io/library/almalinux:9"
+    },
+    {
+      "name": "AlmaLinux-10",
+      "friendly_name": "AlmaLinux OS 10",
+      "image": "docker.io/library/almalinux:10"
+    },
+    {
+      "name": "FedoraLinux-44",
+      "friendly_name": "Fedora Linux 44",
+      "image": "docker.io/library/fedora:44"
+    },
+    {
+      "name": "FedoraLinux-43",
+      "friendly_name": "Fedora Linux 43",
+      "image": "docker.io/library/fedora:43"
+    },
+    {
+      "name": "ArchLinux",
+      "friendly_name": "Arch Linux",
+      "image": "docker.io/library/archlinux:latest"
+    },
+    {
+      "name": "Alpine",
+      "friendly_name": "Alpine Linux",
+      "image": "docker.io/library/alpine:latest"
+    },
+    {
+      "name": "OracleLinux-9",
+      "friendly_name": "Oracle Linux 9",
+      "image": "docker.io/library/oraclelinux:9"
+    },
+    {
+      "name": "RedHat-UBI-10",
+      "friendly_name": "Red Hat Universal Base Image 10",
+      "image": "registry.access.redhat.com/ubi10/ubi:latest"
+    },
+    {
+      "name": "RedHat-UBI-9",
+      "friendly_name": "Red Hat Universal Base Image 9",
+      "image": "registry.access.redhat.com/ubi9/ubi:latest"
+    }
+  ]
+}

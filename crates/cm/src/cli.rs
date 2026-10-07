@@ -18,10 +18,28 @@ use cm_core::forward::PortMapping;
 pub use container_distro::spec::HomeMount;
 use container_distro::spec::{MountSpec, PublishSpec};
 
+/// What `--install` installs from.
+#[derive(Debug, Clone, PartialEq)]
+pub enum InstallSource {
+    /// Bare `--install`: the catalog's default entry (Ubuntu, like WSL).
+    Default,
+    /// Positional argument: a catalog name (case-insensitive) or an
+    /// image reference.
+    CatalogOrImage(String),
+    /// `--from-image`: an image reference, catalog bypassed entirely.
+    Image(String),
+    /// `--from-file`: a local rootfs tar / `.wsl` package
+    /// (`wsl --install --from-file`). Implies `--distro` — machines
+    /// can't boot a bare rootfs.
+    File(PathBuf),
+}
+
 /// Options for `--install`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct InstallOpts {
-    pub image: String,
+    pub source: InstallSource,
+    /// `--catalog` override, for resolving `CatalogOrImage` names.
+    pub catalog: Option<PathBuf>,
     pub name: Option<String>,
     pub no_launch: bool,
     pub cpus: Option<u32>,
@@ -39,7 +57,11 @@ pub struct InstallOpts {
 impl InstallOpts {
     /// `--distro`, or any distro-only option, selects a distro.
     pub fn wants_distro(&self) -> bool {
-        self.distro || self.restricted || !self.shares.is_empty() || !self.publish.is_empty()
+        self.distro
+            || self.restricted
+            || matches!(self.source, InstallSource::File(_))
+            || !self.shares.is_empty()
+            || !self.publish.is_empty()
     }
 }
 
@@ -127,6 +149,16 @@ pub struct Args {
     )]
     pub verbose: u8,
 
+    /// List the installable-distro catalog instead of installed machines
+    /// and distros (with --list)
+    #[arg(
+        short = 'o',
+        long = "online",
+        requires = "list",
+        conflicts_with_all = ["all", "running", "quiet", "verbose"]
+    )]
+    pub online: bool,
+
     /// Set the default machine
     #[arg(short = 's', long = "set-default", value_name = "MACHINE")]
     pub set_default: Option<String>,
@@ -151,9 +183,26 @@ pub struct Args {
     #[arg(long = "unregister", value_name = "MACHINE")]
     pub unregister: Option<String>,
 
-    /// Create a machine from a container image and boot it
-    #[arg(long = "install", value_name = "IMAGE")]
-    pub install: Option<String>,
+    /// Create a machine from a catalog name or container image and boot
+    /// it (`cm -l -o` lists the catalog); bare installs the default
+    /// distribution
+    #[arg(long = "install", value_name = "DISTRO|IMAGE", num_args = 0..=1)]
+    pub install: Option<Option<String>>,
+
+    /// Install from an image reference, bypassing catalog name
+    /// resolution (with --install)
+    #[arg(long = "from-image", requires = "install", value_name = "IMAGE")]
+    pub from_image: Option<String>,
+
+    /// Install from a local rootfs tar or `.wsl` package instead of an
+    /// image (with --install; implies --distro)
+    #[arg(long = "from-file", requires = "install", value_name = "FILE")]
+    pub from_file: Option<PathBuf>,
+
+    /// Use FILE as the installable-distro catalog instead of the
+    /// built-in list (with `-l -o` or `--install`)
+    #[arg(long, value_name = "FILE")]
+    pub catalog: Option<PathBuf>,
 
     /// Name for the machine created by --install
     #[arg(long = "name", requires = "install", value_name = "NAME")]
@@ -257,11 +306,14 @@ pub struct Args {
 pub enum Action {
     /// Open a shell or run a command in a machine.
     Run,
-    /// WSL-shaped machine list.
+    /// WSL-shaped machine list; `online` lists the installable catalog
+    /// instead (`wsl --list --online`), honoring `--catalog`.
     List {
         running_only: bool,
         quiet: bool,
         verbosity: u8,
+        online: bool,
+        catalog: Option<PathBuf>,
     },
     /// Stop every running machine; with `system`, also stop services.
     Shutdown { system: bool },
@@ -299,6 +351,12 @@ pub enum Action {
 impl Args {
     /// Resolve the parsed arguments into a single validated action.
     pub fn action(&self) -> Result<Action> {
+        // The catalog only feeds `--install` name resolution and
+        // `--list --online`; anywhere else it's silently ignored, so
+        // reject it instead.
+        if self.catalog.is_some() && !(self.install.is_some() || (self.list && self.online)) {
+            bail!("--catalog only applies to --install and --list --online");
+        }
         let action = if self.version {
             Action::Version
         } else if let Some(dir) = &self.install_man {
@@ -322,8 +380,24 @@ impl Args {
         } else if let Some(m) = &self.unregister {
             Action::Unregister(m.clone())
         } else if let Some(i) = &self.install {
+            let sources = self.from_file.is_some() as u8
+                + self.from_image.is_some() as u8
+                + i.is_some() as u8;
+            if sources > 1 {
+                bail!("--install takes at most one of an image, --from-image, or --from-file");
+            }
+            let source = if let Some(f) = &self.from_file {
+                InstallSource::File(f.clone())
+            } else if let Some(r) = &self.from_image {
+                InstallSource::Image(r.clone())
+            } else if let Some(a) = i {
+                InstallSource::CatalogOrImage(a.clone())
+            } else {
+                InstallSource::Default
+            };
             Action::Install(InstallOpts {
-                image: i.clone(),
+                source,
+                catalog: self.catalog.clone(),
                 name: self.name.clone(),
                 no_launch: self.no_launch,
                 cpus: self.cpus,
@@ -350,6 +424,8 @@ impl Args {
                 running_only: self.running,
                 quiet: self.quiet,
                 verbosity: self.verbose,
+                online: self.online,
+                catalog: self.catalog.clone(),
             }
         } else {
             return self.validate_run();
@@ -467,7 +543,9 @@ mod tests {
             Action::List {
                 running_only: false,
                 quiet: false,
-                verbosity: 0
+                verbosity: 0,
+                online: false,
+                catalog: None
             }
         );
         let args = parse(&["cm", "-l", "-q"]).unwrap();
@@ -524,7 +602,8 @@ mod tests {
         assert_eq!(
             args.action().unwrap(),
             Action::Install(InstallOpts {
-                image: "alpine:latest".into(),
+                source: InstallSource::CatalogOrImage("alpine:latest".into()),
+                catalog: None,
                 name: Some("dev".into()),
                 no_launch: false,
                 cpus: None,
@@ -536,6 +615,101 @@ mod tests {
                 publish: vec![],
             })
         );
+    }
+
+    #[test]
+    fn install_bare_installs_default() {
+        let args = parse(&["cm", "--install"]).unwrap();
+        let Action::Install(opts) = args.action().unwrap() else {
+            panic!("expected install");
+        };
+        assert_eq!(opts.source, InstallSource::Default);
+        assert!(!opts.wants_distro());
+    }
+
+    #[test]
+    fn install_sources_are_exclusive() {
+        let args = parse(&["cm", "--install", "--from-image", "ghcr.io/x/y:1"]).unwrap();
+        let Action::Install(opts) = args.action().unwrap() else {
+            panic!("expected install");
+        };
+        assert_eq!(opts.source, InstallSource::Image("ghcr.io/x/y:1".into()));
+        assert!(!opts.wants_distro());
+
+        let args = parse(&["cm", "--install", "--from-file", "rocky-9.wsl"]).unwrap();
+        let Action::Install(opts) = args.action().unwrap() else {
+            panic!("expected install");
+        };
+        assert_eq!(
+            opts.source,
+            InstallSource::File(PathBuf::from("rocky-9.wsl"))
+        );
+        assert!(opts.wants_distro());
+
+        // At most one source per --install.
+        for extra in [
+            &["alpine", "--from-file", "x.wsl"][..],
+            &["--from-image", "a:b", "--from-file", "x.wsl"][..],
+            &["alpine", "--from-image", "a:b"][..],
+        ] {
+            let mut argv = vec!["cm", "--install"];
+            argv.extend_from_slice(extra);
+            let args = parse(&argv).unwrap();
+            assert!(args.action().is_err(), "{argv:?}");
+        }
+        // --from-* need --install.
+        assert!(parse(&["cm", "--from-file", "x.wsl"]).is_err());
+        assert!(parse(&["cm", "--from-image", "a:b"]).is_err());
+    }
+
+    #[test]
+    fn catalog_override_pairs() {
+        let args = parse(&["cm", "--catalog", "c.json", "-l", "-o"]).unwrap();
+        assert!(matches!(
+            args.action().unwrap(),
+            Action::List {
+                online: true,
+                catalog: Some(_),
+                ..
+            }
+        ));
+        let args = parse(&["cm", "--catalog", "c.json", "--install", "X"]).unwrap();
+        assert!(matches!(
+            args.action().unwrap(),
+            Action::Install(InstallOpts {
+                catalog: Some(_),
+                ..
+            })
+        ));
+        // Meaningless elsewhere.
+        let args = parse(&["cm", "--catalog", "c.json", "-l"]).unwrap();
+        assert!(args.action().is_err());
+        let args = parse(&["cm", "--catalog", "c.json", "-d", "x"]).unwrap();
+        assert!(args.action().is_err());
+    }
+
+    #[test]
+    fn list_online() {
+        let args = parse(&["cm", "-l", "-o"]).unwrap();
+        assert_eq!(
+            args.action().unwrap(),
+            Action::List {
+                running_only: false,
+                quiet: false,
+                verbosity: 0,
+                online: true,
+                catalog: None
+            }
+        );
+        let args = parse(&["cm", "--list", "--online"]).unwrap();
+        assert!(matches!(
+            args.action().unwrap(),
+            Action::List { online: true, .. }
+        ));
+        assert!(parse(&["cm", "--online"]).is_err());
+        assert!(parse(&["cm", "-l", "-o", "-q"]).is_err());
+        assert!(parse(&["cm", "-l", "-o", "-v"]).is_err());
+        assert!(parse(&["cm", "-l", "-o", "--running"]).is_err());
     }
 
     #[test]

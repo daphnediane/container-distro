@@ -90,10 +90,15 @@ it your identity and home directory.
 - **Mitigations that exist:** `import --restricted` wraps the rootfs
   with no mounts, no network, no agent, and no privilege grant -- the
   intended path for rootfses you didn't build.
-- **Re-evaluate if:** we add a curated/"online list" import path
-  (remote-WSL interop doc mentions `--list --online`), at which point a
-  safer default (`--home-mount none` for import specifically) is worth
-  real consideration.
+- **Re-evaluate if:** we add a *remote* import path (`--install
+  --from-file URL`, or catalog entries backed by `.wsl` URLs rather than
+  OCI refs), at which point a safer default (`--home-mount none` for
+  import specifically) is worth real consideration. The curated catalog
+  (`cm -l -o`, landed with `--list --online`) is an install path, not an
+  import path — entries are official/verified images and keep the same
+  defaults as any image install; `--from-file` imports local files
+  where the user already has the bits, so the T4 argument above applies
+  as-is.
 
 ### T5. `container` is resolved from `PATH` (or `CONTAINER_CLI`)
 
@@ -217,7 +222,10 @@ Each open gap adds attack surface; flagging the traps up front.
   guest-writable (T6) → confused deputy: guest writes `mounts`/`env`
   into your config and the *next host `cm` call* grants it. Either scope
   dangerous keys to a file the guest can't reach, or treat config as
-  hint-level trust.
+  hint-level trust. The same trap is why the `--catalog` distro-catalog
+  override is an explicit per-invocation flag with no `$HOME` search
+  path — a guest-rewritten default catalog would point familiar names
+  at hostile images.
 - **Publishing beyond loopback.** `create`/`import`/`migrate`/`set` warn
   when a publish spec binds a non-loopback address, and
   `start`/first-run reports each published listener (loopback as info,

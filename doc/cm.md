@@ -82,6 +82,7 @@ guest's very first write; see [gaps/exec-stdio].
 | `-l -v -v`         | Plus `container`-specific columns incl. `KIND` (`machine`/`distro`), IP, resources |
 | `-l --all`         | Accepted for WSL compatibility; `-l` already lists stopped entries                 |
 | `-l --running`     | Only running machines and distros                                                  |
+| `-l -o, --online`  | The installable-distro catalog (`NAME FRIENDLY NAME`) instead of installed ones    |
 
 Listing covers both kinds; an `interrupted`/`recreating` distro row
 means a `distro set` was cut off mid-recreate -- see
@@ -105,20 +106,47 @@ on a distro when a same-named machine exists.
 ## Installing (`--install`)
 
 ```text
-cm --install IMAGE [--name NAME] [--no-launch]
+cm --install [DISTRO|IMAGE] [--name NAME] [--no-launch]
                   [--cpus N] [--memory SIZE] [--home-mount rw|ro|none]
                   [--distro] [--restricted]
                   [--share SRC:DST[:ro]]... [--publish SPEC]...
+cm --install --from-image IMAGE ...
+cm --install --from-file ROOTFS.tar|.wsl ...
+cm --catalog FILE --install DISTRO | -l -o
 ```
+
+The positional argument is resolved against the curated catalog first
+(case-insensitive; `cm -l -o` lists it) and otherwise passed through as
+an image reference — catalog names contain no `/`/`:`/`@`, so a
+fully-qualified ref always bypasses the catalog, and `--from-image`
+skips name resolution entirely. A bare `cm --install` installs the
+catalog default, Ubuntu, matching `wsl --install`.
+
+The catalog is a compiled-in list of official/verified-publisher OCI
+images (`crates/cm-core/src/catalog.json`). `--catalog FILE` substitutes
+a custom JSON file in the same schema — it is an explicit per-invocation
+override, never auto-loaded from `$HOME`, since anything under `$HOME`
+is guest-writable and a default search path would let a distro rewrite
+familiar names to hostile images (see security.md). `container distro`
+itself never consults the catalog; it takes image refs only.
+
+`--from-file` imports a local rootfs tar or a `.wsl` distribution
+package (WSL 2.4.4+ tar format) as a **distro** — machines can't boot a
+bare rootfs, so it implies `--distro`. The name comes from `--name`,
+then the package's `etc/wsl-distribution.conf` `oobe.defaultName`, then
+the file stem. Other manifest keys are ignored: distros provision the
+host user rather than honoring `oobe.defaultUid`, and `oobe.command`
+never runs (security.md T4).
 
 Without distro options, `--install` runs `container machine create` then
 opens a shell in the new machine (`--no-launch` skips the shell). With
-`--distro` -- or implied by `--share`/`--publish`/`--restricted` -- it
-creates a distro instead; those three options have no machine
-equivalent. `--restricted` (alias `--untrusted`) is a defaults preset
-for semi-trusted images: no home share, no network, no SSH-agent
-forward, no sudo -- explicit flags still apply, and it is *not* a
-sandbox (see security.md).
+`--distro` -- or implied by
+`--share`/`--publish`/`--restricted`/`--from-file` -- it creates a
+distro instead; those options have no machine equivalent.
+`--restricted` (alias `--untrusted`) is a defaults preset for
+semi-trusted images: no home share, no network, no SSH-agent forward,
+no sudo -- explicit flags still apply, and it is *not* a sandbox (see
+security.md).
 
 ## Port forwarding
 

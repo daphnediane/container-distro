@@ -21,9 +21,10 @@ use std::process::{ExitCode, ExitStatus, Stdio};
 use anyhow::{Context, Result, bail};
 use backend::Target;
 use clap::{CommandFactory, Parser};
-use cli::{Action, Args, InstallOpts, ShellType};
+use cli::{Action, Args, InstallOpts, InstallSource, ShellType};
 use cm_core::container::{self, ArgvMode};
 use cm_core::forward::PortMapping;
+use cm_core::{catalog, wsl};
 use container_distro::ops::{self as distro, CreateOptions, RunOpts};
 use list::Entry;
 
@@ -53,7 +54,9 @@ fn run(args: Args) -> Result<ExitCode> {
             running_only,
             quiet,
             verbosity,
-        } => list(running_only, quiet, verbosity),
+            online,
+            catalog,
+        } => list(running_only, quiet, verbosity, online, catalog),
         Action::SetDefault(m) => set_default(&m),
         Action::Terminate(m) => terminate(&m),
         Action::Unregister(m) => unregister(&m),
@@ -195,7 +198,20 @@ fn argv_mode(args: &Args) -> ArgvMode {
     }
 }
 
-fn list(running_only: bool, quiet: bool, verbosity: u8) -> Result<ExitCode> {
+fn list(
+    running_only: bool,
+    quiet: bool,
+    verbosity: u8,
+    online: bool,
+    catalog_file: Option<PathBuf>,
+) -> Result<ExitCode> {
+    // The catalog is baked in (or a `--catalog` file); listing it never
+    // touches `container`.
+    if online {
+        let entries = catalog::load(catalog_file.as_deref())?;
+        print!("{}", catalog::render(&entries));
+        return Ok(ExitCode::SUCCESS);
+    }
     container::ensure_started()?;
     let machines = container::list_machines()?;
     let distros = backend::distro_summaries(running_only)?;
@@ -314,29 +330,53 @@ fn shutdown(system: bool) -> Result<ExitCode> {
     Ok(code)
 }
 
+/// The positional `--install` argument is a catalog name when it
+/// matches one (case-insensitive), otherwise an image reference —
+/// catalog names contain no `/`/`:`/`@`, so a qualified ref always
+/// bypasses the catalog, as does `--from-image` explicitly.
+fn resolve_image(entries: &[catalog::Entry], source: &InstallSource) -> Result<String> {
+    Ok(match source {
+        InstallSource::Default => entries
+            .first()
+            .context("the distro catalog is empty")?
+            .image
+            .clone(),
+        InstallSource::CatalogOrImage(a) => {
+            catalog::lookup(entries, a).map_or_else(|| a.clone(), |e| e.image.clone())
+        }
+        InstallSource::Image(r) => r.clone(),
+        InstallSource::File(_) => bail!("internal error: file source resolved as image"),
+    })
+}
+
 /// WSL `--install`: create a machine (or, with distro options, a distro)
 /// from an image, then open a shell in it.
 fn install(opts: &InstallOpts) -> Result<ExitCode> {
     container::ensure_started()?;
+    let create = CreateOptions {
+        volumes: opts.shares.clone(),
+        publish: opts.publish.clone(),
+        cpus: opts.cpus.map(u64::from),
+        memory: opts.memory.clone(),
+        home_mount: opts.home_mount,
+        restricted: opts.restricted,
+        ..CreateOptions::default()
+    };
+    if let InstallSource::File(file) = &opts.source {
+        return install_from_file(opts, &create, file);
+    }
+    let entries = catalog::load(opts.catalog.as_deref())?;
+    let image = resolve_image(&entries, &opts.source)?;
     let name = opts
         .name
         .clone()
-        .unwrap_or_else(|| container::default_machine_name(&opts.image));
+        .unwrap_or_else(|| container::default_machine_name(&image));
     container::validate_name(&name)?;
     if opts.wants_distro() {
         if !backend::distros_enabled() {
             bail!("distro options need distro support (unset CM_BACKEND=machine)");
         }
-        let create = CreateOptions {
-            volumes: opts.shares.clone(),
-            publish: opts.publish.clone(),
-            cpus: opts.cpus.map(u64::from),
-            memory: opts.memory.clone(),
-            home_mount: opts.home_mount,
-            restricted: opts.restricted,
-            ..CreateOptions::default()
-        };
-        let name = distro::create(Some(name), &create, &opts.image)?;
+        let name = distro::create(Some(name), &create, &image)?;
         if opts.no_launch {
             return Ok(ExitCode::SUCCESS);
         }
@@ -359,7 +399,7 @@ fn install(opts: &InstallOpts) -> Result<ExitCode> {
         cmd.args(["--home-mount", h.as_str()]);
     }
     let status = cmd
-        .arg(&opts.image)
+        .arg(&image)
         .status()
         .context("failed to run `container machine create`")?;
     if !status.success() || opts.no_launch {
@@ -367,6 +407,58 @@ fn install(opts: &InstallOpts) -> Result<ExitCode> {
     }
     let mut cmd = container::run_command(Some(&name), None, None, &[], None, &[], ArgvMode::Shell);
     Err(anyhow::Error::from(cmd.exec()).context("failed to exec `container machine run`"))
+}
+
+/// `--install --from-file`: import a rootfs tar or `.wsl` package as a
+/// distro — machines can't boot a bare rootfs, so this is always the
+/// distro path regardless of `--distro`.
+fn install_from_file(
+    opts: &InstallOpts,
+    create: &CreateOptions,
+    file: &std::path::Path,
+) -> Result<ExitCode> {
+    if !backend::distros_enabled() {
+        bail!("--from-file needs distro support (unset CM_BACKEND=machine)");
+    }
+    if !file.is_file() {
+        bail!("{} does not exist", file.display());
+    }
+    // --name is used verbatim; a derived name (the .wsl manifest's
+    // oobe.defaultName, else the file stem) is sanitized to a valid one.
+    let name = match &opts.name {
+        Some(n) => n.clone(),
+        None => container::default_machine_name(
+            &wsl::distribution_name(file)
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| file_default_name(file)),
+        ),
+    };
+    container::validate_name(&name)?;
+    let name = distro::import(&name, file, create)?;
+    if opts.no_launch {
+        return Ok(ExitCode::SUCCESS);
+    }
+    let mut cmd = distro::run_command(RunOpts {
+        name: Some(name),
+        ..RunOpts::default()
+    })?;
+    Err(anyhow::Error::from(cmd.exec()).context("failed to exec `container exec`"))
+}
+
+/// Derive a default distro name from a rootfs filename: drop the
+/// archive suffixes (`rocky-9.wsl` → `rocky-9`, `fs.tar.gz` → `fs`).
+fn file_default_name(file: &std::path::Path) -> String {
+    let Some(mut stem) = file.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+        return "distro".to_string();
+    };
+    for ext in [".tar.gz", ".tgz", ".tar.xz", ".wsl", ".tar"] {
+        if stem.len() > ext.len() && stem.to_lowercase().ends_with(ext) {
+            stem.truncate(stem.len() - ext.len());
+            break;
+        }
+    }
+    stem
 }
 
 /// The IPv4 address of a running machine, booting it if needed.

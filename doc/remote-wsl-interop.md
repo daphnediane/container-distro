@@ -158,7 +158,7 @@ Checked against a running `alpine` machine (`container` 1.5.x):
 | `-l -v` WSL-format output          | absent -- `-v` ignored today; see [verbose-list]                                                                                               |
 | UTF-16LE list output               | absent -- only relevant on the Windows side anyway                                                                                             |
 | `-d`, `-s`, `-t`, `--unregister`   | all present and compatible                                                                                                                     |
-| `--list --online`                  | no equivalent (no distro store); can return a curated image list                                                                               |
+| `--list --online`                  | **present** -- `cm -l -o` prints the curated catalog (`NAME FRIENDLY NAME` table)                                                              |
 
 Details in [gaps/exec-stdio] -- the headline for this use case: stdout
 attaches late and the **first write on either stream is dropped**, so

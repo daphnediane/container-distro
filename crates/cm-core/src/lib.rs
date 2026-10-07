@@ -6,8 +6,10 @@
 
 //! Shared plumbing for `cm` and `container-distro`: wrappers around the
 //! `container` CLI, the serde types for its JSON output, and small
-//! utilities (OCI layout writer, port forwarder, table helpers).
+//! utilities (distro catalog, OCI layout writer, port forwarder, table
+//! helpers).
 
+pub mod catalog;
 pub mod completions;
 pub mod container;
 pub mod forward;
@@ -15,3 +17,4 @@ pub mod man;
 pub mod naming;
 pub mod oci;
 pub mod table;
+pub mod wsl;

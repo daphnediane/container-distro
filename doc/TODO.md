@@ -31,6 +31,11 @@ source of truth. "Rung" references are the integration levels in
 
 ## Interop
 
+- [x] **Distro catalog (`--list --online`)** -- curated image list,
+  `--install` catalog-name/default resolution plus `--from-image` and
+  `--from-file` (`.wsl` package import), `--catalog` override; covers
+  the `wsl.exe --list --online` call surface in [remote-wsl-interop]
+
 - [ ] **Remote-WSL editor extensions** -- decide between the
   fake-`wsl.exe` shim, a forked `open-remote-wsl` resolver, and in-guest
   `sshd`; open questions are in [remote-wsl-interop] ([#8])

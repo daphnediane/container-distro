@@ -154,9 +154,12 @@ on never-booted distros -- there is no `rootfs.ext4` yet.
 
 ### `import NAME FILE [OPTIONS]`
 
-Create a distro from a rootfs `tar`/`tar.gz` (`-` = stdin); accepts all
-`create` options including `--restricted`. Importing an image is
-trusting it with your identity -- see security.md.
+Create a distro from a rootfs `tar`/`tar.gz` (`-` = stdin) — a `.wsl`
+distribution package works too (it's a rootfs tar; its
+`wsl-distribution.conf` lands in the guest but is only honored by
+`cm --install --from-file`'s name suggestion). Accepts all `create`
+options including `--restricted`. Importing an image is trusting it
+with your identity -- see security.md.
 
 ### `migrate MACHINE [-n NAME] [--keep] [OPTIONS]`
 
