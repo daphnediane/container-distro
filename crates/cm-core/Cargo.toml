@@ -16,3 +16,6 @@ sha2 = "0.10"
 tar = "0.4"
 tempfile.workspace = true
 ureq.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

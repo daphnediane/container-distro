@@ -16,7 +16,9 @@ publish step (`cargo install --path` is the only install path; see
 
 ## Cutting a minor release (from `main`)
 
-1. Confirm `main` is green: `cargo test --workspace` passes, the
+1. Confirm `main` is green: `cargo test --workspace` passes (the
+   proptest parser-fuzz targets run inside it; for a deeper release-time
+   pass use `PROPTEST_CASES=100000 cargo test --workspace`), the
    supply-chain gate is clean (`cargo audit` + `cargo deny check` --
    advisory DB needs network; license policy lives in `deny.toml`),
    `THIRD-PARTY-NOTICES.yaml` is regenerated if deps changed

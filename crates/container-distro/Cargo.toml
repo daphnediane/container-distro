@@ -24,3 +24,6 @@ libc = "0.2"
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

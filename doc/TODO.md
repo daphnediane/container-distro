@@ -100,8 +100,9 @@ From [security.md's checklist]:
 
 - [ ] `cargo audit` / `cargo deny` release gate -- manual runs per
   `release.md` step 1 until CI exists ([#16])
-- [ ] Fuzz the `FromStr` parsers (`MountSpec`, `PublishSpec`,
-  `PortMapping`) -- targets plus manual release runs until CI exists
+- [x] Fuzz the `FromStr` parsers (`MountSpec`, `PublishSpec`,
+  `PortMapping`) -- proptest targets in `crates/*/tests/*_props.rs` run
+  inside `cargo test`; `PROPTEST_CASES` deepens the release-gate run
   ([#17])
 - [x] Decide init-assets location vs. guest-writable shared home (T6)
   -- `install-plugin` writes `sbin.distro*/` next to the plugin binary
