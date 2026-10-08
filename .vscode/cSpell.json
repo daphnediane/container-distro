@@ -1,0 +1,47 @@
+{
+    "version": "0.2",
+    "language": "en",
+    "languageSettings": [
+        {
+            "languageId": "rust",
+            "words": []
+        }
+    ],
+    "words": [
+        "APFS",
+        "apiserver",
+        "automount",
+        "automounts",
+        "bootable",
+        "chflags",
+        "clonefile",
+        "cpus",
+        "distros",
+        "doas",
+        "ELOOP",
+        "EPERM",
+        "ERANGE",
+        "fclonefileat",
+        "fcopyfile",
+        "getgid",
+        "getpwuid",
+        "getuid",
+        "hijackable",
+        "journaled",
+        "lchmod",
+        "libexec",
+        "libtest",
+        "LOGNAME",
+        "memsize",
+        "O_CREAT",
+        "O_NOFOLLOW",
+        "O_TRUNC",
+        "O_WRONLY",
+        "passwordless",
+        "Pfister",
+        "relock",
+        "rootfs",
+        "sysctlbyname",
+        "virtiofs"
+    ]
+}
