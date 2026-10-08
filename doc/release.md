@@ -60,8 +60,12 @@ publish step (`cargo install --path` is the only install path; see
    unavailable, the manual equivalent is:
 
    ```bash
-   gh release create vX.Y.Z --verify-tag --notes-file <(sed -n '/^## X.Y.Z/,/^## /p' CHANGELOG.md | head -n -1)
+   gh release create vX.Y.Z --verify-tag --notes-file \
+     <(awk -v hdr="## X.Y.Z " 'f && /^## / {exit} index($0, hdr) == 1 {f = 1} f' CHANGELOG.md)
    ```
+
+   (`awk`, not `sed | head -n -1` — BSD `head` has no negative counts,
+   and macOS is the dev and CI platform.)
 
    Prebuilt binaries are optional --
    `gh release upload v0.2.0 target/release/cm

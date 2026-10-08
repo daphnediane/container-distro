@@ -6,7 +6,7 @@ name: release
 # install is source-only (#14 owns packaging).
 on:
   push:
-    tags: ['v*']
+    tags: ["v*"]
 
 permissions:
   contents: write
@@ -37,9 +37,15 @@ jobs:
       - name: Extract CHANGELOG notes
         env:
           TAG: ${{ github.ref_name }}
+        # Literal-prefix match on `## X.Y.Z `, stop at the next `## `
+        # header — the section header line itself is included.
+        # (Portable: BSD `head` has no `-n -1`.)
         run: |
-          pat=$(printf '%s' "${TAG#v}" | sed 's/\./\\./g')
-          sed -n "/^## $pat /,/^## /p" CHANGELOG.md | head -n -1 > notes.md
+          awk -v hdr="## ${TAG#v} " '
+            f && /^## / { exit }
+            index($0, hdr) == 1 { f = 1 }
+            f
+          ' CHANGELOG.md > notes.md
           if [ ! -s notes.md ]; then
             echo "no CHANGELOG.md section for ${TAG#v}" >&2
             exit 1

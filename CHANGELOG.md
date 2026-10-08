@@ -4,7 +4,20 @@ User-facing changes per release, newest first. Written at release time
 from the commit log and the TODO items completed since the previous
 tag -- see doc/release.md.
 
+## 0.4.1 -- 2026-10-08
+
+### Fixed
+
+- Release automation: the tag-triggered draft release extracts the
+  changelog notes with `awk` instead of `sed | head -n -1` — negative
+  `head` counts are GNU-only and the workflow runs on macOS (BSD
+  tools). No functional changes to `cm`/`container-distro`.
+
 ## 0.4.0 -- 2026-10-08
+
+> Tag exists but no GitHub Release was published — the release
+> workflow's notes extraction failed on the GNU-only `head` flag
+> (fixed in 0.4.1). Everything listed below is in 0.4.1.
 
 ### Added
 
