@@ -37,8 +37,18 @@ pub fn host_arch() -> &'static str {
     }
 }
 
+fn hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push(HEX[(b >> 4) as usize] as char);
+        s.push(HEX[(b & 0xf) as usize] as char);
+    }
+    s
+}
+
 fn sha256_hex(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    hex(&Sha256::digest(bytes))
 }
 
 /// `io::Write` sink that only hashes and counts.
@@ -58,13 +68,14 @@ impl Write for HashWriter {
     }
 }
 
-fn hash_reader(r: impl Read) -> io::Result<(String, u64)> {
+/// SHA-256 of `r` as lowercase hex plus the byte count.
+pub(crate) fn hash_reader(r: impl Read) -> io::Result<(String, u64)> {
     let mut w = HashWriter {
         hasher: Sha256::new(),
         len: 0,
     };
     io::copy(&mut BufReader::new(r), &mut w)?;
-    Ok((format!("{:x}", w.hasher.finalize()), w.len))
+    Ok((hex(&w.hasher.finalize()), w.len))
 }
 
 fn is_gzip(file: &mut File) -> io::Result<bool> {
