@@ -10,9 +10,6 @@ source of truth. "Rung" references are the integration levels in
 
 ### For 1.0 — distros
 
-- [x] **Distro → machine migration** -- `migrate --out` clones the
-  distro's rootfs into a newly created `container machine`; `--in`
-  selects the default direction explicitly ([#1])
 - [ ] **Make distros the `cm` default; add `--machine`** -- flip
   `--install`/create to build a distro unless `--machine` is given
   (today `--distro` opts in). Distro-first is also the safer default:
@@ -26,11 +23,6 @@ source of truth. "Rung" references are the integration levels in
 
 ### For 1.0 — machines
 
-- [x] **`cm --export` / `--import` workarounds** -- machine export
-  clones the rootfs into a scratch regular container for
-  `container export`; import OCI-wraps the tar and `machine create`s
-  it, retrying the generic first-boot flake. `--distro` imports a
-  distro ([#2]; [gaps/export-import])
 - [ ] **Configuration files** -- host-side `cm` config (L0); guest
   `wsl.conf` subset is harder and has a confused-deputy trap to design
   around ([#6]; [gaps/configuration-files], security.md)
@@ -54,25 +46,6 @@ source of truth. "Rung" references are the integration levels in
   ([#7]; [gaps/gui-apps], security notes there)
 
 ## Interop
-
-### For 1.0 — interop
-
-- [x] **Distro catalog (`--list --online`)** -- curated catalog in a
-  `DistributionInfo.json` superset (Microsoft's manifest parses via
-  `--catalog`), `--install` catalog-name/default resolution plus
-  `--from-image` and `--from-file` (`.wsl` package import); `.wsl`
-  catalog entries download (ureq + platform trust store, SHA-256
-  verified) into the OS-managed content-addressed cache with per-hash
-  flocking and provenance sidecars, listable via `--list --cache` and
-  clearable via `--purge-cache`; covers the `wsl.exe --list --online`
-  call surface in [remote-wsl-interop]
-- [x] **`cm --list --online --verbose`** -- `-l -o -v` appends `LOCAL`
-  (`pulled` image / `cached` `.wsl` / `downloading`) and `INSTANCES`
-  (machines and distros installed from the entry, running marked);
-  `-v -v` adds `SOURCE`/`REF`. Probes are best-effort and never
-  block: cache state is read without flocking (in-flight fetches
-  detected via `try_lock` on the `.lock` sidecar) and `container` is
-  queried only when already running
 
 ### Post-1.0 — interop
 
@@ -98,25 +71,6 @@ From [security.md's checklist]:
 
 ### For 1.0 — security
 
-- [x] `cargo audit` / `cargo deny` release gate --
-  `scripts/release-gate.sh` runs the step-1 gate (fmt, clippy, tests,
-  audit, deny, notices freshness) in one command ([#16])
-- [x] Fuzz the `FromStr` parsers (`MountSpec`, `PublishSpec`,
-  `PortMapping`) -- proptest targets in `crates/*/tests/*_props.rs` run
-  inside `cargo test`; `PROPTEST_CASES` deepens the release-gate run
-  ([#17])
-- [x] Decide init-assets location vs. guest-writable shared home (T6)
-  -- `install-plugin` writes `sbin.distro*/` next to the plugin binary
-  (outside `$HOME`, root-owned for standard installs); `assets_dir`
-  prefers that copy when byte-identical to the running build, else
-  falls back ([#13])
-- [x] `uchg` on guest-reachable state (beyond the init assets) -- the
-  per-user fallback `sbin.distro*/` dirs and files, `default-distro`,
-  and `preserved/` staged rootfs+journal are immutable-flagged
-  (virtiofs exposes no flag ops, so guests get EPERM they can't undo);
-  `preserved/` stays locked at rest so nothing can be planted for
-  `recover_interrupted` to trust; refreshes write via `O_NOFOLLOW`
-  ([#13], security.md T6)
 - [ ] Nudge semi-trusted workloads off rw home shares -- an rw-home
   guest can tamper with runtime-managed state that *other* containers
   rely on, not just its own files (security.md T1). Options: a
@@ -136,13 +90,6 @@ From [security.md's checklist]:
   distro (mounts, resources, ssh/sudo posture) and warning on drift
   at `boot`/`start` -- turns silent tampering into a loud diff
   ([#20])
-
-### Post-1.0 — security
-
-- [x] `cargo audit` / `cargo deny` + parser fuzzing in CI --
-  `.github/workflows/ci.yml` runs the proptest targets inside `cargo
-  test`, `cargo deny check`, and `cargo audit` on push/PR plus a weekly
-  schedule ([#12])
 
 ## Docs & tooling
 

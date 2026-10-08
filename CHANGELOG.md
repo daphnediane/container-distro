@@ -4,6 +4,35 @@ User-facing changes per release, newest first. Written at release time
 from the commit log and the TODO items completed since the previous
 tag -- see doc/release.md.
 
+## 0.4.0 -- 2026-10-08
+
+### Added
+
+- Distro catalog: `cm --list --online` shows a curated catalog in a
+  `DistributionInfo.json` superset (Microsoft's own manifest parses via
+  `--catalog`). `--install` resolves catalog names, and `--from-image`
+  / `--from-file` import `.wsl` packages; catalog `.wsl` downloads are
+  SHA-256-verified into a content-addressed cache managed via
+  `--list --cache` and `--purge-cache`.
+- `cm -l -o -v` annotates catalog entries with local state: `LOCAL`
+  (`pulled` image / `cached` `.wsl` / `downloading`) and `INSTANCES`
+  (machines and distros installed from the entry, running marked);
+  `-v -v` adds `SOURCE`/`REF`.
+- `cm --export` / `--import` cover `container machine`s: export clones
+  the rootfs via a scratch container, import wraps the tar as an OCI
+  image and retries the generic first-boot flake. `--import --distro`
+  imports a distro.
+- `container distro migrate --out` converts a distro into a
+  `container machine`; `--in` selects machine-to-distro explicitly
+  (still the default direction).
+
+### Fixed
+
+- Guest-reachable state hardened against tampering from a distro on an
+  rw home share (security.md T6): init assets now install next to the
+  plugin binary outside `$HOME`, and the per-user fallback `sbin.distro`
+  dirs, `default-distro`, and `preserved/` staging are `uchg`-locked.
+
 ## 0.3.0 -- 2026-10-06
 
 ### Added
