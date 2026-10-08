@@ -30,6 +30,7 @@
 
 # Keep some config files
 !/.devcontainer
+!/.github
 !.git*[^~]
 !.markdownlint.json
 

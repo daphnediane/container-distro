@@ -1,0 +1,51 @@
+name: ci
+
+on:
+  push:
+    branches: [main, "release/**"]
+  pull_request:
+  schedule:
+    # Weekly: catches new advisories/drift on unchanged deps between
+    # releases. GitHub disables schedules after 60 days of repo
+    # inactivity; the release gate (scripts/release-gate.sh) remains the
+    # authoritative pre-tag check.
+    - cron: "17 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  # macOS because the project is Apple-only. apple/container is NOT
+  # installed: it can't run VMs on GH runners (no nested
+  # Virtualization.framework), and the guest-side `container run` tests
+  # in ops.rs self-skip when the service is absent — CI covers
+  # everything else.
+  check:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # master
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # The init assets run as PID 1/root in the guest — syntax-gate
+      # them like the Rust.
+      - run: sh -n crates/container-distro/assets/*
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
+  supply-chain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+      - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}

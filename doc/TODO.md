@@ -138,8 +138,10 @@ From [security.md's checklist]:
 
 ### Post-1.0 — security
 
-- [ ] `cargo audit` / `cargo deny` + parser fuzzing in CI -- automates
-  the manual gates ([#16], [#17]) ([#12])
+- [x] `cargo audit` / `cargo deny` + parser fuzzing in CI --
+  `.github/workflows/ci.yml` runs the proptest targets inside `cargo
+  test`, `cargo deny check`, and `cargo audit` on push/PR plus a weekly
+  schedule ([#12])
 
 ## Docs & tooling
 

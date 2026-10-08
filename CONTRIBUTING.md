@@ -45,7 +45,8 @@ The workspace has three crates:
 
 ## Before opening a PR
 
-Run the CI-equivalent checks:
+CI (`.github/workflows/ci.yml`) runs these checks on push and PR --
+run them locally first:
 
 ```bash
 cargo fmt --all
