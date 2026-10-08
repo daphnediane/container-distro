@@ -22,7 +22,6 @@ use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow, bail};
 use flate2::read::GzDecoder;
-use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 
 use crate::naming::APP_NAME;
@@ -443,9 +442,7 @@ fn prune_cache() {
 
 fn file_sha256(path: &Path) -> Result<String> {
     let f = File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
-    let mut h = Sha256::new();
-    std::io::copy(&mut BufReader::new(f), &mut h)?;
-    Ok(format!("{:x}", h.finalize()))
+    Ok(crate::oci::hash_reader(f)?.0)
 }
 
 #[cfg(test)]
