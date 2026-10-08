@@ -10,6 +10,14 @@ source of truth. "Rung" references are the integration levels in
 - [x] **Distro → machine migration** -- `migrate --out` clones the
   distro's rootfs into a newly created `container machine`; `--in`
   selects the default direction explicitly ([#1])
+- [ ] **Make distros the `cm` default; add `--machine`** -- flip
+  `--install`/create to build a distro unless `--machine` is given
+  (today `--distro` opts in). Distro-first is also the safer default:
+  only distros support `--restricted`, and it's the path we control.
+  Keep `--machine` for WSL-parity testing and upstream comparisons.
+  Gated on adopting the machine model's anti-persistence defenses for
+  distros (Security & hardening below) -- don't make the
+  less-regenerated backend the default until it matches
 
 ## Machines (WSL parity, mostly upstream-blocked)
 
@@ -94,6 +102,17 @@ From [security.md's checklist]:
   create-time hint when registering non-`--restricted` distros, docs
   recommending `home-mount ro` as the default posture for generated or
   imported images, or a scoped-subdir share instead of all of `$HOME`
+- [ ] **Adopt the machine model's anti-persistence defenses for
+  distros** -- `container machine` gives each boot a randomized
+  backing-container id and regenerates its runtime config, so guest
+  edits don't persist; distros use stable names. Consider randomized
+  backing-container names + recreate-per-boot, or regenerate/verify
+  the backing container's recorded config at `boot`/`start`, so
+  guest tampering can't outlive a restart
+- [ ] **Integrity-check distro-visible state at start** -- beyond the
+  uchg-locked assets, consider recording what `cm` last wrote for a
+  distro (mounts, resources, ssh/sudo posture) and warning on drift
+  at `boot`/`start` -- turns silent tampering into a loud diff
 
 ## Docs & tooling
 
