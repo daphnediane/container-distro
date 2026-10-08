@@ -128,22 +128,51 @@ hijacked `PATH` or `CONTAINER_CLI` runs an arbitrary binary as the user.
   not be -- no setuid, and `sudo cm` writes state under root's home;
   consider refusing euid 0 except for `install-plugin`).
 
-### T6. State directory lives inside the shared `$HOME`
+### T6. State directory lives inside the shared `$HOME` — closed ([#13])
 
 `~/Library/Application Support/container-distro/` holds
 `sbin.distro/init` and `create-user.sh` -- executed as PID 1 and as root
-in every distro -- plus `default-distro`. With `home-mount=rw` all of it
-is guest-writable.
+in every distro -- plus `default-distro` and the `preserved/` staging
+area. With `home-mount=rw` all of it was guest-writable: TCC does not
+protect `Application Support`, and virtiofs writes are made by the
+daemon as the user, so no macOS layer intervened (verified on a running
+distro). There is no standard per-user location outside `$HOME`, so the
+answer was to take the files out of reach rather than move them:
 
-- **Accepted because:** there is no standard per-user location outside
-  `$HOME` on macOS; anything user-writable is inside the share anyway,
-  so T1 already covers it. `assets_dir()` rewrites the init assets on
-  every boot if they differ, which breaks naive tampering but is a
-  mitigation of convenience, not a boundary.
-- **Re-evaluate if:** T1 changes, or the plugin install path could own
-  root-owned assets (installed alongside the plugin under
-  `/usr/local/libexec`) with the state-dir copy only as a fallback for
-  `cm`-only installs.
+- `install-plugin` writes both asset flavors next to the plugin binary
+  (`<prefix>/libexec/container-plugins/distro/sbin.distro*`) -- outside
+  `$HOME`, root-owned for the standard `/usr/local` install, so no share
+  can reach them unless a user mounts that path on purpose.
+- `assets_dir()` uses the installed copies only when byte-identical to
+  this build's; a stale plugin copy warns once and falls back, so a
+  newer binary never runs an older init.
+- The per-user fallback (what `cm`-only installs use) is locked with the
+  macOS user-immutable flag `uchg`, directory and files: guests get
+  EPERM on write/unlink/rename, and virtiofs exposes no flag operations
+  to clear it (verified on a running distro). Refresh unlocks, writes,
+  re-locks; writes use `O_NOFOLLOW`, so a planted symlink can't turn a
+  refresh into a clobber of an arbitrary user file.
+- The same flag covers `preserved/<name>.ext4`/`.json` while staged --
+  a guest could otherwise rewrite the spec `recover_interrupted`
+  recreates from, or the filesystem it puts back -- `preserved/` stays
+  locked at rest so nothing can be planted there, and `default-distro`
+  is locked on write/refresh.
+- `boot` refreshes whichever directory the container actually mounts:
+  per-user copies upgrade (and lock) in place; installed copies warn
+  once on drift.
+
+Residuals, deliberately accepted: a bare `container start` skips the
+refresh (contents can only be stale, never tampered -- the lock makes
+that cosmetic); the plant window for `preserved/` shrinks to the
+duration of a real `set`/`migrate`, when the dir is legitimately
+unlocked; and everything *else* in `$HOME` stays guest-writable --
+that's T1's model, unchanged.
+
+Alternatives considered and rejected: `container cp` into the rootfs
+(`cp` requires a running container, and `init` must exist before the
+first start), and masking the state dir behind an inner mount (guest
+root has `CAP_SYS_ADMIN` under `--cap-add ALL` and can simply `umount`
+it -- cosmetic, not a boundary).
 
 ### T7. Management acts on label-matched containers; no confirmations
 
@@ -258,7 +287,10 @@ Each open gap adds attack surface; flagging the traps up front.
    listening report at boot surfaces every published port)
 5. `cargo audit`/`cargo deny` in CI; fuzz the `FromStr` parsers
    (`MountSpec`, `PublishSpec`, `PortMapping`) -- **open** ([#12])
-6. Decide init-assets location vs. shared home (T6) -- **open** ([#13])
+6. Decide init-assets location vs. shared home (T6) -- **done**:
+   plugin-adjacent installed assets preferred, per-user fallback
+   `uchg`-locked; `preserved/` staging and `default-distro` covered by
+   the same flag ([#13])
 7. C8 (PID 1 zombie reaping), C11 (uninstall TOCTOU / prefix cleanup) --
    **done**; C10's rw-all-`/Volumes` surface stays an accepted opt-in
    trade-off

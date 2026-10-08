@@ -42,6 +42,7 @@
         "relock",
         "rootfs",
         "sysctlbyname",
+        "uchg",
         "virtiofs"
     ]
 }

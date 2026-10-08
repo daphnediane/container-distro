@@ -7,9 +7,12 @@
 //! `container distro` operations, composed from the `container` CLI.
 
 use std::env;
+use std::ffi::CString;
 use std::fs;
-use std::io::{self, IsTerminal};
+use std::io::{self, IsTerminal, Write};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::io::FromRawFd;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -22,6 +25,8 @@ use cm_core::container::{
 use cm_core::naming::{label_key, label_lookup, state_dir};
 use cm_core::oci;
 use serde::{Deserialize, Serialize};
+
+use crate::plugin;
 
 use crate::spec::{
     Automount, DistroSpec, HomeMount, HostUser, INIT_DIR, LABEL_DISTRO, LABEL_EXPORT_SCRATCH,
@@ -264,53 +269,219 @@ fn default_resources() -> (u64, String) {
     ((cpus / 2).max(1), mem)
 }
 
-/// Write the init assets into `dir`, refreshing them if this build's
-/// copies differ. `admin` selects the flavor: only admin distros get
+/// The init-assets flavor's directory name. The restricted flavor lacks
 /// `grant-admin.sh`, so restricted guests have no privilege-granting
 /// code at all.
-fn write_assets(dir: &Path, admin: bool) -> Result<()> {
-    fs::create_dir_all(dir).with_context(|| format!("failed to create {}", dir.display()))?;
+pub(crate) fn assets_flavor(admin: bool) -> &'static str {
+    if admin {
+        "sbin.distro"
+    } else {
+        "sbin.distro.restricted"
+    }
+}
+
+/// The files an `admin` flavor carries: `(name, embedded body)` pairs.
+fn asset_files(admin: bool) -> Vec<(&'static str, &'static str)> {
     let mut files = vec![
         ("init", INIT_SCRIPT),
         ("create-user.sh", CREATE_USER_SCRIPT),
     ];
     if admin {
         files.push(("grant-admin.sh", GRANT_ADMIN_SCRIPT));
+    }
+    files
+}
+
+/// Set or clear the macOS user-immutable flag on `path`.
+///
+/// virtiofs exposes no flag operations, so `uchg` is a real boundary
+/// against a guest rewriting these files through a rw-shared home:
+/// writes, unlinks, and renames all fail with EPERM until a host
+/// process clears the flag (verified against a running distro).
+fn set_locked(path: &Path, locked: bool) -> Result<()> {
+    let c = CString::new(path.as_os_str().as_bytes())?;
+    // SAFETY: `c` is a valid NUL-terminated path; chflags only reads it.
+    let rc = unsafe { libc::chflags(c.as_ptr(), if locked { libc::UF_IMMUTABLE } else { 0 }) };
+    if rc == 0 {
+        Ok(())
     } else {
+        Err(io::Error::last_os_error())
+            .with_context(|| format!("failed to update flags on {}", path.display()))
+    }
+}
+
+/// Clear the immutable flag on `path` if it exists — a no-op on
+/// symlinks (lchmod, which chflags maps to here, won't follow them) and
+/// anything already unlocked. Ignores errors: callers treat it as
+/// best-effort prep before a write or remove that will surface real
+/// failures itself.
+pub(crate) fn unlock(path: &Path) {
+    if fs::symlink_metadata(path).is_ok() {
+        let _ = set_locked(path, false);
+    }
+}
+
+/// Write `body` to `path` via `O_NOFOLLOW`, so a symlink planted
+/// through a shared-home mount is removed rather than followed — the
+/// alternative is a refresh clobbering an arbitrary file the user owns.
+fn write_nofollow(path: &Path, body: &[u8]) -> Result<()> {
+    let c = CString::new(path.as_os_str().as_bytes())?;
+    for _ in 0..2 {
+        // SAFETY: `c` is a valid NUL-terminated path.
+        let fd = unsafe {
+            libc::open(
+                c.as_ptr(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC | libc::O_NOFOLLOW,
+                0o755,
+            )
+        };
+        if fd >= 0 {
+            // SAFETY: fd is a live descriptor open() just returned.
+            let mut f = unsafe { fs::File::from_raw_fd(fd) };
+            return f
+                .write_all(body)
+                .with_context(|| format!("failed to write {}", path.display()));
+        }
+        let e = io::Error::last_os_error();
+        if e.raw_os_error() == Some(libc::ELOOP)
+            && fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
+        {
+            fs::remove_file(path)
+                .with_context(|| format!("failed to remove planted link {}", path.display()))?;
+            continue;
+        }
+        return Err(e).with_context(|| format!("failed to write {}", path.display()));
+    }
+    unreachable!("the ELOOP retry runs at most once")
+}
+
+/// Write the init assets into `dir`, refreshing them if this build's
+/// copies differ, then lock the directory and its files (`uchg`).
+/// `admin` selects the flavor: only admin distros get `grant-admin.sh`.
+///
+/// The lock is what keeps a guest from rewriting these files through a
+/// rw-shared home (`~/Library/Application Support` is inside it), so a
+/// re-run unlocks the dir and each file before writing and re-locks
+/// after. A failure mid-write leaves the dir unlocked — no worse than
+/// never locking.
+pub(crate) fn write_assets(dir: &Path, admin: bool) -> Result<()> {
+    fs::create_dir_all(dir).with_context(|| format!("failed to create {}", dir.display()))?;
+    unlock(dir);
+    if !admin {
         // No stray grant script may linger in the restricted flavor.
-        match fs::remove_file(dir.join("grant-admin.sh")) {
+        let stray = dir.join("grant-admin.sh");
+        unlock(&stray);
+        match fs::remove_file(&stray) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             r => r.with_context(|| format!("failed to clean {}", dir.display()))?,
         }
     }
-    for (name, body) in files {
+    for (name, body) in asset_files(admin) {
         let path = dir.join(name);
-        if fs::read_to_string(&path).ok().as_deref() != Some(body) {
-            fs::write(&path, body)
-                .with_context(|| format!("failed to write {}", path.display()))?;
+        if fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink()) {
+            fs::remove_file(&path)
+                .with_context(|| format!("failed to remove planted link {}", path.display()))?;
+        }
+        unlock(&path);
+        if fs::read(&path).ok().as_deref() != Some(body.as_bytes()) {
+            write_nofollow(&path, body.as_bytes())?;
         }
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755))?;
+        set_locked(&path, true)?;
+    }
+    set_locked(dir, true)
+}
+
+/// Refresh both init-assets flavors in the per-user state dir, and
+/// re-lock the default-distro marker if one exists (it's only locked
+/// when written, so an older build may have left it open).
+fn refresh_assets() -> Result<()> {
+    let state = state_dir()?;
+    write_assets(&state.join(assets_flavor(true)), true)?;
+    write_assets(&state.join(assets_flavor(false)), false)?;
+    let default = state.join("default-distro");
+    if default.exists() {
+        set_locked(&default, true)?;
     }
     Ok(())
 }
 
-/// Refresh both init-assets flavors (called on every boot).
-fn refresh_assets() -> Result<()> {
-    let state = state_dir()?;
-    write_assets(&state.join("sbin.distro"), true)?;
-    write_assets(&state.join("sbin.distro.restricted"), false)
+/// Whether `dir` holds exactly this build's assets — installed copies
+/// are only trusted when they match what this binary would write.
+fn assets_match(dir: &Path, admin: bool) -> bool {
+    dir.is_dir()
+        && asset_files(admin)
+            .iter()
+            .all(|(n, b)| fs::read(dir.join(n)).ok().as_deref() == Some(b.as_bytes()))
+        && (admin || !dir.join("grant-admin.sh").exists())
 }
 
-/// The host directory a distro mounts at `/sbin.distro`, refreshed to
-/// this build's copies.
+/// The init assets `install-plugin` wrote next to the plugin binary
+/// (`<prefix>/libexec/container-plugins/distro/`), if they match this
+/// build byte-for-byte. They live outside `$HOME` — root-owned for a
+/// standard install — so no home share can reach them. A stale copy
+/// warns once and falls back to the per-user assets: a newer build's
+/// fixes should land rather than keep running an old init.
+fn installed_assets(admin: bool) -> Option<PathBuf> {
+    let dir = plugin::plugin_dir(None).ok()?.join(assets_flavor(admin));
+    if !dir.is_dir() {
+        return None;
+    }
+    if assets_match(&dir, admin) {
+        return Some(dir);
+    }
+    static WARN: std::sync::Once = std::sync::Once::new();
+    WARN.call_once(|| {
+        eprintln!(
+            "container-distro: warning: the installed init assets differ from this build — \
+             using per-user copies; re-run `container-distro install-plugin` to update"
+        );
+    });
+    None
+}
+
+/// The host directory a distro mounts at `/sbin.distro`: the installed
+/// copy when it is current, else the refreshed per-user copy.
 fn assets_dir(admin: bool) -> Result<PathBuf> {
+    if let Some(dir) = installed_assets(admin) {
+        return Ok(dir);
+    }
     refresh_assets()?;
-    let flavor = if admin {
-        "sbin.distro"
-    } else {
-        "sbin.distro.restricted"
-    };
-    Ok(state_dir()?.join(flavor))
+    Ok(state_dir()?.join(assets_flavor(admin)))
+}
+
+/// Refresh the init assets the distro will actually mount at boot.
+///
+/// A per-user mount source is rewritten in place (upgrading to this
+/// build and re-locking). An installed mount source can't be rewritten
+/// from here — it is only ever stale, so a drifted `init` warns once;
+/// `set` recreates onto per-user assets, or `install-plugin` refreshes
+/// the installed copy.
+fn refresh_mounted_assets(name: &str) -> Result<()> {
+    ensure_preserved_locked()?;
+    let mounted = find(name).ok().and_then(|info| {
+        info.configuration
+            .mounts
+            .iter()
+            .find(|m| m.destination == INIT_DIR)
+            .map(|m| PathBuf::from(&m.source))
+    });
+    match mounted {
+        Some(src) if !src.starts_with(state_dir()?) => {
+            if fs::read(src.join("init")).ok().as_deref() != Some(INIT_SCRIPT.as_bytes()) {
+                static WARN: std::sync::Once = std::sync::Once::new();
+                WARN.call_once(|| {
+                    eprintln!(
+                        "container-distro: warning: `{name}`'s init assets differ from this build \
+                         ({}) — re-run install-plugin or `set` the distro",
+                        src.display()
+                    );
+                });
+            }
+            Ok(())
+        }
+        _ => refresh_assets(),
+    }
 }
 
 fn default_file() -> Result<PathBuf> {
@@ -329,9 +500,14 @@ fn write_default(name: Option<&str>) -> Result<()> {
     match name {
         Some(n) => {
             fs::create_dir_all(state_dir()?)?;
-            fs::write(&path, format!("{n}\n"))?;
+            // Locked at rest like the init assets: this file picks which
+            // distro a bare `cm` enters, so it shouldn't be guest-writable.
+            unlock(&path);
+            write_nofollow(&path, format!("{n}\n").as_bytes())?;
+            set_locked(&path, true)?;
         }
         None => {
+            unlock(&path);
             if path.exists() {
                 fs::remove_file(&path)?;
             }
@@ -505,7 +681,7 @@ fn create_container(spec: &DistroSpec) -> Result<()> {
 
 /// Boot a distro and (idempotently) provision the user account.
 fn boot(name: &str, _lock: &DistroLock) -> Result<()> {
-    refresh_assets()?;
+    refresh_mounted_assets(name)?;
     run_container_quiet(&["start", name])?;
     let init = format!("{INIT_DIR}/init");
     run_container(&["exec", "--user", "0:0", name, &init, "-u"])
@@ -683,13 +859,20 @@ pub fn stop(names: &[String]) -> Result<()> {
 
 /// Remove anything `set` staged for `name`; true when something was.
 fn cleanup_preserved(name: &str, _lock: &DistroLock) -> bool {
-    let mut removed = false;
-    for p in [preserved_rootfs(name), preserved_journal(name)]
-        .into_iter()
-        .flatten()
-    {
-        removed |= fs::remove_file(p).is_ok();
+    if preserved_dir().is_err() {
+        return false;
     }
+    let mut removed = false;
+    let _ = with_preserved_unlocked(|| {
+        for p in [preserved_rootfs(name), preserved_journal(name)]
+            .into_iter()
+            .flatten()
+        {
+            unlock(&p);
+            removed |= fs::remove_file(&p).is_ok();
+        }
+        Ok(())
+    });
     removed
 }
 
@@ -883,6 +1066,30 @@ fn preserved_journal(name: &str) -> Result<PathBuf> {
     Ok(preserved_dir()?.join(format!("{name}.json")))
 }
 
+/// Keep `preserved/` present and `uchg`-locked. Through a rw-shared
+/// home a guest could otherwise plant a staged filesystem + journal
+/// pair that `recover_interrupted` would then trust and recreate from
+/// — a confused-deputy path to mounts nobody asked for. Staging and
+/// restore ops unlock the dir briefly around their file ops instead.
+fn ensure_preserved_locked() -> Result<()> {
+    let dir = preserved_dir()?;
+    fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
+    set_locked(&dir, true)
+}
+
+/// Run `f` with `preserved/` unlocked, re-locking it afterwards — even
+/// on error, where the operation's own failure is the one reported.
+fn with_preserved_unlocked<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
+    let dir = preserved_dir()?;
+    unlock(&dir);
+    let r = f();
+    let relock = set_locked(&dir, true);
+    match r {
+        Err(e) => Err(e),
+        Ok(v) => relock.map(|_| v),
+    }
+}
+
 /// Proof the per-distro `flock` is held. Only obtainable via
 /// [`DistroLock::acquire`], so functions that must run under the lock
 /// take `&DistroLock` — the compiler enforces it. The lock releases
@@ -920,11 +1127,13 @@ fn distro_busy(name: &str) -> bool {
 /// into a fresh container.
 ///
 /// The journal is written before the filesystem so a staged filesystem
-/// is never left without the spec needed to recreate its distro.
+/// is never left without the spec needed to recreate its distro. Both
+/// are `uchg`-locked once written — through a shared home, a guest
+/// could otherwise rewrite the spec `recover_interrupted` recreates
+/// from or the filesystem it puts back.
 fn stage_rootfs(id: &str, spec: &DistroSpec, src: &Path, _lock: &DistroLock) -> Result<PathBuf> {
     let dir = preserved_dir()?;
     fs::create_dir_all(&dir)?;
-    fs::write(dir.join(format!("{id}.json")), serde_json::to_vec(spec)?)?;
     let staged = dir.join(format!("{id}.ext4"));
     if staged.exists() {
         bail!(
@@ -932,10 +1141,17 @@ fn stage_rootfs(id: &str, spec: &DistroSpec, src: &Path, _lock: &DistroLock) -> 
             staged.display()
         );
     }
-    // Copy (`fs::copy` uses clonefile on APFS) rather than move: the
-    // original stays in place, so an interruption leaves a bootable
-    // source plus a spare.
-    fs::copy(src, &staged).with_context(|| format!("failed to preserve {}", src.display()))?;
+    let journal = dir.join(format!("{id}.json"));
+    with_preserved_unlocked(|| {
+        unlock(&journal);
+        write_nofollow(&journal, &serde_json::to_vec(spec)?)?;
+        set_locked(&journal, true)?;
+        // Copy (`fs::copy` uses clonefile on APFS) rather than move: the
+        // original stays in place, so an interruption leaves a bootable
+        // source plus a spare.
+        fs::copy(src, &staged).with_context(|| format!("failed to preserve {}", src.display()))?;
+        set_locked(&staged, true)
+    })?;
     Ok(staged)
 }
 
@@ -980,15 +1196,21 @@ fn restore_rootfs(id: &str, staged: Option<&Path>, _lock: &DistroLock) -> Result
     let Some(staged) = staged else { return Ok(()) };
     let dir = container_dir(id)?;
     let rootfs = dir.join("rootfs.ext4");
-    fs::rename(staged, &rootfs).with_context(|| {
-        format!(
-            "failed to restore {} — the preserved copy is at {}",
-            rootfs.display(),
-            staged.display()
-        )
+    let journal = preserved_journal(id)?;
+    with_preserved_unlocked(|| {
+        unlock(staged);
+        fs::rename(staged, &rootfs).with_context(|| {
+            format!(
+                "failed to restore {} — the preserved copy is at {}",
+                rootfs.display(),
+                staged.display()
+            )
+        })?;
+        unlock(&journal);
+        let _ = fs::remove_file(&journal);
+        Ok(())
     })?;
     set_rootfs_override(&dir, &rootfs)?;
-    let _ = fs::remove_file(preserved_journal(id)?);
     Ok(())
 }
 
@@ -998,11 +1220,15 @@ fn restore_rootfs(id: &str, staged: Option<&Path>, _lock: &DistroLock) -> Result
 /// present just needs its rootfs back — unless it already has one, in
 /// which case the staged copy is kept (it may be someone's only data).
 fn recover_interrupted(name: &str, _lock: &DistroLock) -> Result<()> {
+    ensure_preserved_locked()?;
     let staged = preserved_rootfs(name)?;
     let journal = preserved_journal(name)?;
     if !staged.exists() {
         // A journal with no filesystem is a stale marker.
-        let _ = fs::remove_file(&journal);
+        let _ = with_preserved_unlocked(|| {
+            unlock(&journal);
+            fs::remove_file(&journal).map_err(Into::into)
+        });
         return Ok(());
     }
     eprintln!(
@@ -1017,6 +1243,12 @@ fn recover_interrupted(name: &str, _lock: &DistroLock) -> Result<()> {
             )
         })?)
         .context("invalid `set` journal")?;
+        if spec.name != name {
+            bail!(
+                "`set` journal for `{name}` names `{}` — refusing to recreate",
+                spec.name
+            );
+        }
         create_container(&spec)
             .with_context(|| format!("failed to recreate `{name}` from its `set` journal"))?;
     }
@@ -1031,10 +1263,15 @@ fn recover_interrupted(name: &str, _lock: &DistroLock) -> Result<()> {
             staged.display()
         );
     } else {
-        fs::rename(&staged, &rootfs)
-            .with_context(|| format!("failed to restore {}", staged.display()))?;
+        with_preserved_unlocked(|| {
+            unlock(&staged);
+            fs::rename(&staged, &rootfs)
+                .with_context(|| format!("failed to restore {}", staged.display()))?;
+            unlock(&journal);
+            let _ = fs::remove_file(&journal);
+            Ok(())
+        })?;
         set_rootfs_override(&dir, &rootfs)?;
-        let _ = fs::remove_file(&journal);
     }
     Ok(())
 }
@@ -1941,6 +2178,33 @@ mod tests {
         for bad in ["", "-evil", ".hidden", "a b", "x:y", "a/b", "u$", "u!"] {
             assert!(!safe_user_name(bad), "{bad}");
         }
+    }
+
+    #[test]
+    fn locked_assets_resist_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path().join("sbin.distro");
+        write_assets(&d, true).unwrap();
+        let init = d.join("init");
+        // The boundary a guest sees through virtiofs, applied to the
+        // owner too: no write, no unlink, no dir-entry churn, no rename
+        // of the locked dir itself.
+        assert!(fs::write(&init, "tampered").is_err());
+        assert!(fs::remove_file(&init).is_err());
+        assert!(fs::write(d.join("planted"), "x").is_err());
+        assert!(fs::rename(&d, dir.path().join("moved")).is_err());
+        assert!(fs::read_to_string(&init).unwrap() == INIT_SCRIPT);
+        // Re-refreshing works through the lock, and the restricted
+        // flavor drops grant-admin.sh even though it is locked.
+        write_assets(&d, false).unwrap();
+        assert!(!d.join("grant-admin.sh").exists());
+        write_assets(&d, true).unwrap();
+        assert!(d.join("grant-admin.sh").is_file());
+        // Unlock so tempdir cleanup can remove the tree.
+        for n in ["init", "create-user.sh", "grant-admin.sh"] {
+            unlock(&d.join(n));
+        }
+        unlock(&d);
     }
 
     // ---- guest-side script tests: real `container run` invocations ----

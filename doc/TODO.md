@@ -76,8 +76,18 @@ From [security.md's checklist]:
 
 - [ ] `cargo audit` / `cargo deny` in CI; fuzz the `FromStr` parsers
   (`MountSpec`, `PublishSpec`, `PortMapping`) ([#12])
-- [ ] Decide init-assets location vs. guest-writable shared home (T6)
-  ([#13])
+- [x] Decide init-assets location vs. guest-writable shared home (T6)
+  -- `install-plugin` writes `sbin.distro*/` next to the plugin binary
+  (outside `$HOME`, root-owned for standard installs); `assets_dir`
+  prefers that copy when byte-identical to the running build, else
+  falls back ([#13])
+- [x] `uchg` on guest-reachable state (beyond the init assets) -- the
+  per-user fallback `sbin.distro*/` dirs and files, `default-distro`,
+  and `preserved/` staged rootfs+journal are immutable-flagged
+  (virtiofs exposes no flag ops, so guests get EPERM they can't undo);
+  `preserved/` stays locked at rest so nothing can be planted for
+  `recover_interrupted` to trust; refreshes write via `O_NOFOLLOW`
+  ([#13], security.md T6)
 
 ## Docs & tooling
 

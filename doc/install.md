@@ -63,8 +63,12 @@ sudo container-distro install-plugin    # -> /usr/local/libexec/container-plugin
 `/usr/local/bin/container`, then `PATH`), derives
 `<prefix>/libexec/container-plugins/` from it, and **copies** the binary
 there -- a symlink would let your user account replace what other users'
-`container distro` invocations exec. `uninstall-plugin` removes the
-registration.
+`container distro` invocations exec. It also installs the distro init
+assets (`sbin.distro*/`) alongside the binary: outside the shared home
+and root-owned for a standard install, so guests can't rewrite what
+runs as PID 1 (T6). `cm`-only installs use per-user copies kept
+immutable with `uchg`. `uninstall-plugin` removes the registration and
+the assets.
 
 The plugin is optional: `cm` links the `container_distro` library
 directly, and the standalone `container-distro` binary exposes the same
