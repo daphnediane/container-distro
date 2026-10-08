@@ -100,7 +100,14 @@ remains.
   release until the next release bumps it. Don't bump "just in case."
 - Man pages are generated from the clap definitions at build time, so a
   release has no generated artifacts to regenerate or commit.
+- The supply-chain gate (`cargo audit` + `cargo deny check`) is a
+  manual release step until CI exists ([#16]); the `FromStr` parser
+  fuzz targets and their release-time runs are tracked by [#17], and
+  CI automation for both by [#12].
 
+[#12]: https://github.com/daphnediane/container-distro/issues/12
+[#16]: https://github.com/daphnediane/container-distro/issues/16
+[#17]: https://github.com/daphnediane/container-distro/issues/17
 [Changelog]: #changelog
 [install]: install.md
 [SemVer]: https://semver.org

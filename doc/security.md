@@ -291,8 +291,10 @@ Each open gap adds attack surface; flagging the traps up front.
    partial, C12)
 4. Non-loopback `--publish` warning -- **done** (warn at create/set; a
    listening report at boot surfaces every published port)
-5. `cargo audit`/`cargo deny` in CI; fuzz the `FromStr` parsers
-   (`MountSpec`, `PublishSpec`, `PortMapping`) -- **open** ([#12])
+5. `cargo audit`/`cargo deny`; fuzz the `FromStr` parsers
+   (`MountSpec`, `PublishSpec`, `PortMapping`) -- **open**, split into
+   a manual audit/deny release gate ([#16]), fuzz targets + manual
+   release runs ([#17]); CI automation ([#12]) is post-1.0
 6. Decide init-assets location vs. shared home (T6) -- **done**:
    plugin-adjacent installed assets preferred, per-user fallback
    `uchg`-locked; `preserved/` staging and `default-distro` covered by
@@ -300,9 +302,20 @@ Each open gap adds attack surface; flagging the traps up front.
 7. C8 (PID 1 zombie reaping), C11 (uninstall TOCTOU / prefix cleanup) --
    **done**; C10's rw-all-`/Volumes` surface stays an accepted opt-in
    trade-off
+8. Nudge semi-trusted workloads off rw home shares (T1) -- **open**
+   ([#19])
+9. Adopt the machine model's anti-persistence defenses for distros --
+   **open** ([#18])
+10. Integrity-check distro-visible state at `boot`/`start` -- **open**
+    ([#20])
 
 [#12]: https://github.com/daphnediane/container-distro/issues/12
 [#13]: https://github.com/daphnediane/container-distro/issues/13
+[#16]: https://github.com/daphnediane/container-distro/issues/16
+[#17]: https://github.com/daphnediane/container-distro/issues/17
+[#18]: https://github.com/daphnediane/container-distro/issues/18
+[#19]: https://github.com/daphnediane/container-distro/issues/19
+[#20]: https://github.com/daphnediane/container-distro/issues/20
 [apple/container#2325]: https://github.com/apple/container/issues/2325
 [configuration-files]: gaps/configuration-files.md
 [gui-apps]: gaps/gui-apps.md
