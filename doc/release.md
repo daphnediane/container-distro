@@ -16,17 +16,18 @@ publish step (`cargo install --path` is the only install path; see
 
 ## Cutting a minor release (from `main`)
 
-1. Confirm `main` is green: `cargo test --workspace` passes (the
-   proptest parser-fuzz targets run inside it; for a deeper release-time
-   pass use `PROPTEST_CASES=100000 cargo test --workspace`), the
-   supply-chain gate is clean (`cargo audit` + `cargo deny check` --
-   advisory DB needs network; license policy lives in `deny.toml`),
-   `THIRD-PARTY-NOTICES.yaml` is regenerated if deps changed
-   (`cargo bundle-licenses -f yaml -o THIRD-PARTY-NOTICES.yaml`), and
-   [TODO] plus the user-facing docs reflect what actually shipped. If
-   `container`'s minor version changed since the last release, first
-   re-verify the appRoot internals we depend on ([Version gating]) and
-   extend `VERIFIED_CONTAINER_MINOR` once verified.
+1. Run the green gate: `scripts/release-gate.sh` covers fmt, clippy,
+   `cargo test --workspace` (the proptest parser-fuzz targets run
+   inside it; `PROPTEST_CASES=100000` deepens the pass), the
+   supply-chain gate (`cargo audit` + `cargo deny check` -- advisory DB
+   needs network; license policy lives in `deny.toml`), and a
+   `THIRD-PARTY-NOTICES.yaml` freshness check (regenerate with
+   `cargo bundle-licenses -f yaml -o THIRD-PARTY-NOTICES.yaml` if
+   stale). Then confirm [TODO] plus the user-facing docs reflect what
+   actually shipped. If `container`'s minor version changed since the
+   last release, first re-verify the appRoot internals we depend on
+   ([Version gating]) and extend `VERIFIED_CONTAINER_MINOR` once
+   verified.
 2. Update `CHANGELOG.md` (see [Changelog]): prepend a
    `## X.Y.Z -- YYYY-MM-DD` section drafted from the commit log since
    the previous tag (`git log --oneline v<prev>..HEAD`) and the
@@ -50,23 +51,26 @@ publish step (`cargo install --path` is the only install path; see
    git push origin main release/X.Y vX.Y.Z
    ```
 
-7. Create the GitHub Release on the pushed tag (`gh` is authenticated;
-   `--verify-tag` refuses to mint a lightweight tag if the annotated one
-   didn't push). The new `CHANGELOG.md` section doubles as the notes:
+7. Pushing the tag runs `.github/workflows/release.yml`, which verifies
+   the tag matches the workspace version, re-runs the tests, and
+   creates a **draft** GitHub Release using the new `CHANGELOG.md`
+   section as notes (`--prerelease` when the tag carries a `-` suffix
+   like `v0.4.0-rc.1`). Review the draft and publish it -- in the web
+   UI, or `gh release edit vX.Y.Z --draft=false`. If the workflow is
+   unavailable, the manual equivalent is:
 
    ```bash
    gh release create vX.Y.Z --verify-tag --notes-file <(sed -n '/^## X.Y.Z/,/^## /p' CHANGELOG.md | head -n -1)
    ```
 
-   Or `--generate-notes` and edit in the web UI. For a real prerelease
-   (`vX.Y.Z-rc.1`) add `--prerelease`. Prebuilt binaries are optional --
+   Prebuilt binaries are optional --
    `gh release upload v0.2.0 target/release/cm
    target/release/container-distro` -- since install is source-only
-   today. If binaries ever ship, attach `THIRD-PARTY-NOTICES.yaml` too
-   -- it carries every dep's copyright + license text
-   (MIT/BSD/Apache/Unicode all require reproducing them in distributed
-   copies). `cargo install` alone doesn't trigger that -- users compile
-   the deps themselves.
+   today ([#14] owns packaging). If binaries ever ship, attach
+   `THIRD-PARTY-NOTICES.yaml` too -- it carries every dep's copyright +
+   license text (MIT/BSD/Apache/Unicode all require reproducing them in
+   distributed copies). `cargo install` alone doesn't trigger that --
+   users compile the deps themselves.
 
 8. Sanity-check the tag:
 
@@ -102,12 +106,13 @@ remains.
   release until the next release bumps it. Don't bump "just in case."
 - Man pages are generated from the clap definitions at build time, so a
   release has no generated artifacts to regenerate or commit.
-- The supply-chain gate (`cargo audit` + `cargo deny check`) is a
-  manual release step until CI exists ([#16]); the `FromStr` parser
-  fuzz targets and their release-time runs are tracked by [#17], and
-  CI automation for both by [#12].
+- `cargo audit` + `cargo deny check` run in CI on every push/PR and
+  weekly ([#12]); `scripts/release-gate.sh` bundles them with the rest
+  of the step-1 gate ([#16]). The `FromStr` parser fuzz targets are
+  proptest properties that run inside `cargo test` ([#17]).
 
 [#12]: https://github.com/daphnediane/container-distro/issues/12
+[#14]: https://github.com/daphnediane/container-distro/issues/14
 [#16]: https://github.com/daphnediane/container-distro/issues/16
 [#17]: https://github.com/daphnediane/container-distro/issues/17
 [Changelog]: #changelog

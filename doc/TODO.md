@@ -98,8 +98,9 @@ From [security.md's checklist]:
 
 ### For 1.0 — security
 
-- [ ] `cargo audit` / `cargo deny` release gate -- manual runs per
-  `release.md` step 1 until CI exists ([#16])
+- [x] `cargo audit` / `cargo deny` release gate --
+  `scripts/release-gate.sh` runs the step-1 gate (fmt, clippy, tests,
+  audit, deny, notices freshness) in one command ([#16])
 - [x] Fuzz the `FromStr` parsers (`MountSpec`, `PublishSpec`,
   `PortMapping`) -- proptest targets in `crates/*/tests/*_props.rs` run
   inside `cargo test`; `PROPTEST_CASES` deepens the release-gate run

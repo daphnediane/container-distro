@@ -292,9 +292,10 @@ Each open gap adds attack surface; flagging the traps up front.
 4. Non-loopback `--publish` warning -- **done** (warn at create/set; a
    listening report at boot surfaces every published port)
 5. `cargo audit`/`cargo deny`; fuzz the `FromStr` parsers
-   (`MountSpec`, `PublishSpec`, `PortMapping`) -- **open**, split into
-   a manual audit/deny release gate ([#16]), fuzz targets + manual
-   release runs ([#17]); CI automation ([#12]) is post-1.0
+   (`MountSpec`, `PublishSpec`, `PortMapping`) -- **done**: proptest
+   targets run inside `cargo test` ([#17]), the audit/deny gate is
+   scripted in `scripts/release-gate.sh` ([#16]), and CI automates
+   both on push/PR plus a weekly advisory scan ([#12])
 6. Decide init-assets location vs. shared home (T6) -- **done**:
    plugin-adjacent installed assets preferred, per-user fallback
    `uchg`-locked; `preserved/` staging and `default-distro` covered by
