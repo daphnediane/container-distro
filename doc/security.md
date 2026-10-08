@@ -32,13 +32,19 @@ the tool is actually used.
 same path. Guest code can write `~/.zshrc`, `~/.ssh/authorized_keys`,
 `~/.gitconfig` (`core.hooksPath`), `~/Library/LaunchAgents` -- host code
 execution on next login/shell, plus direct access to everything in home.
+That includes `container`'s own app support directory: a guest with an
+rw share can tamper with runtime-managed state and the shared image
+store that other containers and machines depend on, so an rw-home guest
+is a cross-container integrity risk, not just a same-guest one.
 
 - **Accepted because:** it is `container machine`'s own model and what
   makes the WSL-style "edit on host, build in guest" flow work. WSL has
   the same property in the other direction (guest reads/writes all of
   `C:\Users`).
 - **Mitigations that exist:** `--home-mount ro|none` at create;
-  `container machine set home-mount=` for machines.
+  `container machine set home-mount=` for machines. `ro`/`none` also
+  cuts off tampering with runtime state under the share -- it is the
+  actual boundary, not just privacy for your files.
 - **Re-evaluate if:** users start running semi-trusted workloads
   (AI-generated code, random images, `import`ed rootfses) in distros and
   expect sandboxing. Options: default `ro`, scoped subdir shares instead

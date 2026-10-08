@@ -88,6 +88,12 @@ From [security.md's checklist]:
   `preserved/` stays locked at rest so nothing can be planted for
   `recover_interrupted` to trust; refreshes write via `O_NOFOLLOW`
   ([#13], security.md T6)
+- [ ] Nudge semi-trusted workloads off rw home shares -- an rw-home
+  guest can tamper with runtime-managed state that *other* containers
+  rely on, not just its own files (security.md T1). Options: a
+  create-time hint when registering non-`--restricted` distros, docs
+  recommending `home-mount ro` as the default posture for generated or
+  imported images, or a scoped-subdir share instead of all of `$HOME`
 
 ## Docs & tooling
 
