@@ -189,7 +189,7 @@ dependencies = [
 
 [[package]]
 name = "cm"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -203,7 +203,7 @@ dependencies = [
 
 [[package]]
 name = "cm-core"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "flate2",
@@ -241,7 +241,7 @@ checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
 
 [[package]]
 name = "container-distro"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "clap",
