@@ -19,7 +19,7 @@ use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use cm_core::man;
+use container_distro::man;
 
 /// The canonicalized `cm` executable we're aliasing.
 fn our_exe() -> Result<PathBuf> {

@@ -15,10 +15,10 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser};
-use cm_core::table::{columns, human_bytes, local_datetime};
 use container_distro::ops::{self, DistroSummary, RunOpts};
 use container_distro::plugin;
 use container_distro::spec::{Automount, SpecChanges};
+use container_distro::table::{columns, human_bytes, local_datetime};
 
 use cli::{Cli, Command, Format};
 
@@ -71,8 +71,8 @@ fn render_man(cmd: &clap::Command, base: &str, pages: &mut Vec<(String, String)>
 
 /// Write the man pages into `dir`, or the binary-relative default.
 fn install_man(dir: Option<PathBuf>) -> Result<()> {
-    let dir = dir.map_or_else(cm_core::man::default_man_dir, Ok)?;
-    for path in cm_core::man::write_pages(&dir, &man_pages()?)? {
+    let dir = dir.map_or_else(container_distro::man::default_man_dir, Ok)?;
+    for path in container_distro::man::write_pages(&dir, &man_pages()?)? {
         println!("Installed {}", path.display());
     }
     Ok(())
@@ -81,9 +81,9 @@ fn install_man(dir: Option<PathBuf>) -> Result<()> {
 /// The completion scripts, generated from the clap definition so they
 /// can't drift from `--help`. The command is renamed so scripts
 /// complete `container-distro`, not `container distro`.
-fn completions() -> Vec<(cm_core::completions::Shell, String)> {
+fn completions() -> Vec<(container_distro::completions::Shell, String)> {
     use clap_complete::shells::{Bash, Fish, Zsh};
-    use cm_core::completions::Shell;
+    use container_distro::completions::Shell;
     let mut cmd = Cli::command().name("container-distro");
     Shell::ALL
         .iter()
@@ -104,8 +104,10 @@ fn completions() -> Vec<(cm_core::completions::Shell, String)> {
 }
 
 fn install_completions(dir: Option<PathBuf>) -> Result<()> {
-    let dir = dir.map_or_else(cm_core::completions::default_share_dir, Ok)?;
-    for path in cm_core::completions::write_files(&dir, "container-distro", &completions())? {
+    let dir = dir.map_or_else(container_distro::completions::default_share_dir, Ok)?;
+    for path in
+        container_distro::completions::write_files(&dir, "container-distro", &completions())?
+    {
         println!("Installed {}", path.display());
     }
     Ok(())
@@ -162,7 +164,7 @@ fn run(cli: Cli) -> Result<()> {
             running,
             format,
         } => {
-            cm_core::container::ensure_started()?;
+            container_distro::container::ensure_started()?;
             let rows = ops::summaries(running)?;
             if quiet {
                 rows.iter().for_each(|r| println!("{}", r.id));
@@ -270,13 +272,13 @@ fn run(cli: Cli) -> Result<()> {
         }
         Command::InstallMan { dir } => install_man(dir)?,
         Command::UninstallMan { dir } => {
-            let dir = dir.map_or_else(cm_core::man::default_man_dir, Ok)?;
-            cm_core::man::remove_pages(&dir, &man_pages()?)?;
+            let dir = dir.map_or_else(container_distro::man::default_man_dir, Ok)?;
+            container_distro::man::remove_pages(&dir, &man_pages()?)?;
         }
         Command::InstallCompletions { dir } => install_completions(dir)?,
         Command::UninstallCompletions { dir } => {
-            let dir = dir.map_or_else(cm_core::completions::default_share_dir, Ok)?;
-            cm_core::completions::remove_files(&dir, "container-distro", &completions())?;
+            let dir = dir.map_or_else(container_distro::completions::default_share_dir, Ok)?;
+            container_distro::completions::remove_files(&dir, "container-distro", &completions())?;
         }
         Command::UninstallPlugin { plugin_dir } => plugin::uninstall(plugin_dir)?,
     }

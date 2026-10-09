@@ -27,7 +27,7 @@ covering machines and distros in one namespace:
   container, runs `container export` on that, deletes the scratch
   container, and restarts the machine. `FILE -` writes stdout.
 - `--import` wraps the tar in an OCI image layout
-  (`cm_core::oci::build_layout`), `container image load`s it, and
+  (`container_distro::oci::build_layout`), `container image load`s it, and
   `machine create`s it — then probes with `machine run -- true` and
   leaves the machine stopped, like `wsl --import`. With `--distro` it
   is `container distro import` instead. `FILE -` reads stdin;

@@ -24,13 +24,14 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-The workspace has three crates:
+The repository is a single crate:
 
-| Crate                     | Contents                                                         |
-| ------------------------- | ---------------------------------------------------------------- |
-| `crates/cm`               | the `cm` binary (WSL-compatible CLI)                             |
-| `crates/container-distro` | the `container-distro` binary + the `container_distro` library   |
-| `crates/cm-core`          | shared `container` CLI plumbing (naming, OCI, forwarder, tables) |
+| Path                        | Contents                                                            |
+| --------------------------- | ------------------------------------------------------------------- |
+| `src/`                      | `container_distro` library: shared `container` CLI plumbing         |
+|                             | (naming, OCI, forwarder, …) plus distro spec/ops/plugin logic       |
+| `src/bin/cm/`               | the `cm` binary (WSL-compatible CLI)                                |
+| `src/bin/container-distro/` | the `container-distro` binary (`container distro` plugin front end) |
 
 ## Install
 
@@ -40,8 +41,7 @@ self-installs what it owns. No brew/nix/pkg packages exist yet
 ([#14]) -- this is the only install path.
 
 ```bash
-cargo install --path crates/cm
-cargo install --path crates/container-distro   # also provides cm's distro support
+cargo install --path .   # one package, both binaries
 
 # man pages + shell completions (self-generated from the CLI
 # definitions -- never stale)
@@ -167,7 +167,7 @@ container-distro uninstall-plugin   # only removes our registration
 cm --uninstall-alias wsl            # if you installed one
 cm --uninstall-man && container-distro uninstall-man
 cm --uninstall-completions && container-distro uninstall-completions
-cargo uninstall cm container-distro
+cargo uninstall container-distro   # removes both binaries
 ```
 
 Distro state (`~/Library/Application Support/container-distro/`) and any

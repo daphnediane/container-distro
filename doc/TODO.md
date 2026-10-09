@@ -98,8 +98,6 @@ From [security.md's checklist]:
 - [ ] Packages -- no brew/nix/pkg installers; `cargo install` +
   `install-plugin` is the only path ([#14]; [install])
 
-[#1]: https://github.com/daphnediane/container-distro/issues/1
-[#2]: https://github.com/daphnediane/container-distro/issues/2
 [#3]: https://github.com/daphnediane/container-distro/issues/3
 [#4]: https://github.com/daphnediane/container-distro/issues/4
 [#5]: https://github.com/daphnediane/container-distro/issues/5
@@ -108,12 +106,8 @@ From [security.md's checklist]:
 [#8]: https://github.com/daphnediane/container-distro/issues/8
 [#9]: https://github.com/daphnediane/container-distro/issues/9
 [#11]: https://github.com/daphnediane/container-distro/issues/11
-[#12]: https://github.com/daphnediane/container-distro/issues/12
-[#13]: https://github.com/daphnediane/container-distro/issues/13
 [#14]: https://github.com/daphnediane/container-distro/issues/14
 [#15]: https://github.com/daphnediane/container-distro/issues/15
-[#16]: https://github.com/daphnediane/container-distro/issues/16
-[#17]: https://github.com/daphnediane/container-distro/issues/17
 [#18]: https://github.com/daphnediane/container-distro/issues/18
 [#19]: https://github.com/daphnediane/container-distro/issues/19
 [#20]: https://github.com/daphnediane/container-distro/issues/20

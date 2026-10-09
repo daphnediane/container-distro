@@ -35,13 +35,14 @@ version:
 cargo build --workspace        # binaries land in target/debug/
 ```
 
-The workspace has three crates:
+The repository is a single crate:
 
-| Crate                     | Contents                                                       |
-| ------------------------- | -------------------------------------------------------------- |
-| `crates/cm`               | the `cm` binary (WSL-compatible CLI)                           |
-| `crates/container-distro` | the `container-distro` binary + `container_distro` library     |
-| `crates/cm-core`          | shared `container` CLI plumbing (naming, OCI, forwarder, etc.) |
+| Path                        | Contents                                                            |
+| --------------------------- | ------------------------------------------------------------------- |
+| `src/`                      | `container_distro` library: shared `container` CLI plumbing         |
+|                             | (naming, OCI, forwarder, …) plus distro spec/ops/plugin logic       |
+| `src/bin/cm/`               | the `cm` binary (WSL-compatible CLI)                                |
+| `src/bin/container-distro/` | the `container-distro` binary (`container distro` plugin front end) |
 
 ## Before opening a PR
 

@@ -14,13 +14,13 @@ use std::fmt;
 use std::path::Path;
 use std::str::FromStr;
 
+use crate::container::ContainerInfo;
+use crate::naming::{label_key, label_lookup};
 use anyhow::{Context, Result, bail};
 use clap::ValueEnum;
-use cm_core::container::ContainerInfo;
-use cm_core::naming::{label_key, label_lookup};
 use serde::{Deserialize, Serialize};
 
-/// Label suffixes (full keys come from [`cm_core::naming::label_key`]).
+/// Label suffixes (full keys come from [`crate::naming::label_key`]).
 ///
 /// Marks a container as a distro; the value is the distro name.
 pub const LABEL_DISTRO: &str = "distro";

@@ -11,9 +11,9 @@
 //!   `wsl.exe -l -v` (editor extensions regex-match it)
 //! - `cm -l -v -v` — the same table with extra columns appended
 
-use cm_core::container::{Machine, MachineDetail};
-use cm_core::table::{columns, human_bytes, title_case};
+use container_distro::container::{Machine, MachineDetail};
 use container_distro::ops::DistroSummary;
+use container_distro::table::{columns, human_bytes, title_case};
 
 /// Header printed by `cm -l` (WSL: "Windows Subsystem for Linux Distributions:").
 pub const LIST_HEADER: &str = "Container Machines:";

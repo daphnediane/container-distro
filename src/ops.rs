@@ -17,13 +17,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result, bail};
-use cm_core::container::{
+use crate::container::{
     self, ArgvMode, ContainerInfo, Machine, MachineDetail, container_cmd, default_machine_name,
     ensure_started, validate_name,
 };
-use cm_core::naming::{label_key, label_lookup, state_dir};
-use cm_core::oci;
+use crate::naming::{label_key, label_lookup, state_dir};
+use crate::oci;
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::plugin;

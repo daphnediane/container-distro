@@ -1,6 +1,6 @@
 name: release
 
-# Pushing an annotated v* tag verifies it against the workspace version,
+# Pushing an annotated v* tag verifies it against the package version,
 # re-runs the tests, and drafts the GitHub Release from the CHANGELOG
 # section — the maintainer reviews and publishes the draft. No binaries:
 # install is source-only (#14 owns packaging).
@@ -21,14 +21,14 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
-      - name: Verify tag matches workspace version
+      - name: Verify tag matches package version
         env:
           TAG: ${{ github.ref_name }}
         run: |
           tag="${TAG#v}"
           version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
           if [ "$tag" != "$version" ]; then
-            echo "tag $TAG != Cargo.toml workspace version $version" >&2
+            echo "tag $TAG != Cargo.toml package version $version" >&2
             exit 1
           fi
 

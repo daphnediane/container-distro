@@ -16,8 +16,8 @@ use std::io::ErrorKind;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
+use crate::naming::APP_NAME;
 use anyhow::{Context, Result, bail};
-use cm_core::naming::APP_NAME;
 
 use crate::ops;
 
@@ -63,7 +63,7 @@ fn container_bin() -> Result<PathBuf> {
             find_on_path(&name)
         }
     } else {
-        let installed = Path::new(cm_core::container::INSTALLED_CONTAINER_PATH);
+        let installed = Path::new(crate::container::INSTALLED_CONTAINER_PATH);
         if installed.is_file() {
             Some(installed.to_path_buf())
         } else {

@@ -22,10 +22,10 @@ use anyhow::{Context, Result, bail};
 use backend::Target;
 use clap::{CommandFactory, Parser};
 use cli::{Action, Args, InstallOpts, InstallSource, ShellType};
-use cm_core::container::{self, ArgvMode};
-use cm_core::forward::PortMapping;
-use cm_core::{catalog, naming, oci, table, wsl};
+use container_distro::container::{self, ArgvMode};
+use container_distro::forward::PortMapping;
 use container_distro::ops::{self as distro, CreateOptions, RunOpts};
+use container_distro::{catalog, naming, oci, table, wsl};
 use list::Entry;
 
 fn main() -> ExitCode {
@@ -845,7 +845,7 @@ fn forward(name: Option<&str>, mappings: &[PortMapping]) -> Result<ExitCode> {
         Target::Distro(d) => distro_ip(&d)?,
     };
     eprintln!("Forwarding to `{id}` (Ctrl-C to stop)");
-    cm_core::forward::forward(IpAddr::V4(Ipv4Addr::LOCALHOST), ip, mappings)?;
+    container_distro::forward::forward(IpAddr::V4(Ipv4Addr::LOCALHOST), ip, mappings)?;
     Ok(ExitCode::SUCCESS)
 }
 
@@ -868,8 +868,8 @@ fn man_pages() -> Result<Vec<(String, String)>> {
 }
 
 fn install_man(dir: Option<PathBuf>) -> Result<ExitCode> {
-    let dir = dir.map_or_else(cm_core::man::default_man_dir, Ok)?;
-    for path in cm_core::man::write_pages(&dir, &man_pages()?)? {
+    let dir = dir.map_or_else(container_distro::man::default_man_dir, Ok)?;
+    for path in container_distro::man::write_pages(&dir, &man_pages()?)? {
         println!("Installed {}", path.display());
     }
     Ok(ExitCode::SUCCESS)
@@ -877,16 +877,16 @@ fn install_man(dir: Option<PathBuf>) -> Result<ExitCode> {
 
 /// Removes only files that still look like our generated pages.
 fn uninstall_man(dir: Option<PathBuf>) -> Result<ExitCode> {
-    let dir = dir.map_or_else(cm_core::man::default_man_dir, Ok)?;
-    cm_core::man::remove_pages(&dir, &man_pages()?)?;
+    let dir = dir.map_or_else(container_distro::man::default_man_dir, Ok)?;
+    container_distro::man::remove_pages(&dir, &man_pages()?)?;
     Ok(ExitCode::SUCCESS)
 }
 
 /// The completion scripts, generated from the clap definition so they
 /// can't drift from `--help`.
-fn completions() -> Vec<(cm_core::completions::Shell, String)> {
+fn completions() -> Vec<(container_distro::completions::Shell, String)> {
     use clap_complete::shells::{Bash, Fish, Zsh};
-    use cm_core::completions::Shell;
+    use container_distro::completions::Shell;
     let mut cmd = cli::Args::command();
     Shell::ALL
         .iter()
@@ -903,8 +903,8 @@ fn completions() -> Vec<(cm_core::completions::Shell, String)> {
 }
 
 fn install_completions(dir: Option<PathBuf>) -> Result<ExitCode> {
-    let dir = dir.map_or_else(cm_core::completions::default_share_dir, Ok)?;
-    for path in cm_core::completions::write_files(&dir, "cm", &completions())? {
+    let dir = dir.map_or_else(container_distro::completions::default_share_dir, Ok)?;
+    for path in container_distro::completions::write_files(&dir, "cm", &completions())? {
         println!("Installed {}", path.display());
     }
     Ok(ExitCode::SUCCESS)
@@ -912,7 +912,7 @@ fn install_completions(dir: Option<PathBuf>) -> Result<ExitCode> {
 
 /// Removes only files that still look like generated scripts.
 fn uninstall_completions(dir: Option<PathBuf>) -> Result<ExitCode> {
-    let dir = dir.map_or_else(cm_core::completions::default_share_dir, Ok)?;
-    cm_core::completions::remove_files(&dir, "cm", &completions())?;
+    let dir = dir.map_or_else(container_distro::completions::default_share_dir, Ok)?;
+    container_distro::completions::remove_files(&dir, "cm", &completions())?;
     Ok(ExitCode::SUCCESS)
 }

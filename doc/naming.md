@@ -9,7 +9,7 @@ installs would migrate.
 ## Single source of truth
 
 Persistent, externally visible names come from
-[`crates/cm-core/src/naming.rs`]:
+[`src/naming.rs`]:
 
 | Constant                | Current value                            | Used for                                         |
 | ----------------------- | ---------------------------------------- | ------------------------------------------------ |
@@ -45,8 +45,7 @@ larger decision than renaming the project.
 
 ## Names that are _not_ persistent (rename freely)
 
-- Cargo package names (`cm`, `cm-core`, `container-distro`) and the
-  repository name
+- The Cargo package name (`container-distro`) and the repository name
 - Prose in `README.md`, `doc/`, and `--help` text
 - Temp-file prefixes (`cm-import-`, `distro-set-`, …)
 
@@ -77,4 +76,4 @@ larger decision than renaming the project.
 Before there are real users, the cheaper path is fine: change the
 constants and recreate any test distros.
 
-[`crates/cm-core/src/naming.rs`]: ../crates/cm-core/src/naming.rs
+[`src/naming.rs`]: ../src/naming.rs

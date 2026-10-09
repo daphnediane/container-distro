@@ -14,7 +14,7 @@ use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 use clap::{ArgAction, Parser, ValueEnum};
-use cm_core::forward::PortMapping;
+use container_distro::forward::PortMapping;
 pub use container_distro::spec::HomeMount;
 use container_distro::spec::{MountSpec, PublishSpec};
 

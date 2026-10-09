@@ -6,9 +6,9 @@ publish step (`cargo install --path` is the only install path; see
 
 ## Versioning
 
-- One version for the whole workspace, in the root `Cargo.toml`
-  (`[workspace.package].version`); `cm`, `cm-core`, and
-  `container-distro` all inherit it via `version.workspace = true`.
+- One version for the package, in the root `Cargo.toml`
+  (`[package].version`); the `cm` and `container-distro` binaries
+  share it.
 - [SemVer]: `MAJOR.MINOR.PATCH`. Pre-1.0, minor bumps (`0.x.0`) may
   break CLI behavior; patch bumps (`0.x.y`) are fixes only.
 - Tags are `v<version>` (`v0.2.0`), annotated. Maintenance branches are
@@ -33,7 +33,7 @@ publish step (`cargo install --path` is the only install path; see
    the previous tag (`git log --oneline v<prev>..HEAD`) and the
    `TODO.md` items those commits completed -- then delete the completed
    `[x]` entries so the changelog is their permanent record.
-3. Bump `[workspace.package].version` in `Cargo.toml` to the release
+3. Bump `[package].version` in `Cargo.toml` to the release
    version, then run `cargo check` so `Cargo.lock` (committed) picks it
    up.
 4. Commit: `chore: release X.Y.Z` (message format per
@@ -52,7 +52,7 @@ publish step (`cargo install --path` is the only install path; see
    ```
 
 7. Pushing the tag runs `.github/workflows/release.yml`, which verifies
-   the tag matches the workspace version, re-runs the tests, and
+   the tag matches the package version, re-runs the tests, and
    creates a **draft** GitHub Release using the new `CHANGELOG.md`
    section as notes (`--prerelease` when the tag carries a `-` suffix
    like `v0.4.0-rc.1`). Review the draft and publish it -- in the web

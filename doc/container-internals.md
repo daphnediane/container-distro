@@ -51,7 +51,7 @@ Risk tiers used below:
 
 ## JSON shapes parsed (tier: JSON)
 
-Parsed in `crates/cm-core/src/container.rs`; unknown fields are ignored,
+Parsed in `src/container.rs`; unknown fields are ignored,
 missing ones fall back to defaults.
 
 - `system status --format json`: `status` (compared against
@@ -252,7 +252,7 @@ storage -- not a promised interface. Call sites are marked with
 
 ## Version gating
 
-`VERIFIED_CONTAINER_MINOR = ["1.5"]` (cm-core/container.rs) records the
+`VERIFIED_CONTAINER_MINOR = ["1.5"]` (`src/container.rs`) records the
 `major.minor` versions whose appRoot internals we've verified. Any code
 that reads or writes `appRoot` contents -- `container_disk_usage`,
 `container_dir`/`preserve_rootfs`/`restore_rootfs`/`set_rootfs_override`,

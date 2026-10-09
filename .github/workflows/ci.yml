@@ -36,7 +36,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       # The init assets run as PID 1/root in the guest — syntax-gate
       # them like the Rust.
-      - run: sh -n crates/container-distro/assets/*
+      - run: sh -n assets/*
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace

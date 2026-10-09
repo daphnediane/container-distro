@@ -17,7 +17,7 @@ step "cargo test --workspace (PROPTEST_CASES=${PROPTEST_CASES:-default})"
 cargo test --workspace
 
 step "init assets syntax"
-sh -n crates/container-distro/assets/*
+sh -n assets/*
 
 step "cargo audit"
 cargo audit

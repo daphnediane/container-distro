@@ -5,21 +5,24 @@ description: How `cm` (WSL-compatible wrapper) and the `container distro` plugin
 
 # container-distro (`cm` + `container distro`)
 
-A Cargo workspace with three crates:
+A single-crate Cargo repository (`container-distro`) shipping both
+binaries:
 
-- `crates/cm` — the `cm` binary: `wsl.exe` argument semantics on top of
-  Apple's `container` CLI. Optionally symlinked to `wsl`.
-- `crates/container-distro` — a library plus the `container-distro`
-  binary. It registers as the `container distro` CLI plugin and creates
+- `src/bin/cm/` — the `cm` binary: `wsl.exe` argument semantics on top
+  of Apple's `container` CLI. Optionally symlinked to `wsl`.
+- `src/bin/container-distro/` — the `container-distro` binary. It
+  registers as the `container distro` CLI plugin and creates
   machine-like containers ("distros") with what `container machine`
   lacks: mounts outside `$HOME`, published ports, export/import, `set`.
-- `crates/cm-core` — shared plumbing: `container` CLI wrappers and serde
-  types, `naming` (persistent names/labels), `oci` (rootfs tar → OCI
-  layout), `forward` (TCP forwarder), `table`.
+- `src/` — the `container_distro` library: shared `container` CLI
+  wrappers and serde types, `naming` (persistent names/labels), `oci`
+  (rootfs tar → OCI layout), `forward` (TCP forwarder), `table`, plus
+  the distro `spec`/`ops`/`plugin` logic used by both binaries.
 
 Persistent names (labels `io.github.daphnediane.container-distro.*`, the
 state dir `~/Library/Application Support/container-distro/`) all come
-from `cm_core::naming`; see `doc/naming.md` before changing any of them.
+from `container_distro::naming`; see `doc/naming.md` before changing
+any of them.
 
 ## `cm` argument mapping (machines)
 
@@ -114,7 +117,7 @@ lacks `grant-admin.sh`; the `admin` label records `true`/`false`/`never`
 explicit `--sudo` does). `set` accepts `--network`, `--ssh`/`--no-ssh`,
 `--sudo`/`--no-sudo`.
 
-`cm` treats machines and distros as one namespace (`crates/cm/src/backend.rs`),
+`cm` treats machines and distros as one namespace (`src/bin/cm/backend.rs`),
 linking the library rather than exec'ing the plugin: `-d NAME` resolves a
 distro first, then a machine; a default distro overrides the default
 machine; `-l` merges both (KIND column at `-v -v`); `--install --distro`
@@ -151,7 +154,7 @@ $D rm -f d1
 
 Test machine: `container machine create --name alpine --set-default alpine:latest`.
 Installing the plugin needs root:
-`sudo container-distro install-plugin` (after `cargo install --path crates/container-distro`).
+`sudo container-distro install-plugin` (after `cargo install --path .`).
 Man pages are generated from the clap definitions by `clap_mangen`:
 `cm --install-man` / `container-distro install-man` write to
 `<bin>/../share/man/man1` for the invoking binary (`--dir` overrides).

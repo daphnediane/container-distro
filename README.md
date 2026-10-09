@@ -21,8 +21,7 @@ cm                # container machine run
 ## Install
 
 ```bash
-cargo install --path crates/cm
-cargo install --path crates/container-distro   # also provides cm's distro support
+cargo install --path .   # one package, both binaries
 cm --install-man && container-distro install-man   # man pages
 
 # optionally alias `cm` to `wsl` (symlink + man page link):

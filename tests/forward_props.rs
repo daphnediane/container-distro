@@ -11,7 +11,7 @@
 //! regression corpus. `PROPTEST_CASES=<n>` raises the case count for
 //! the deeper release-gate run.
 
-use cm_core::forward::PortMapping;
+use container_distro::forward::PortMapping;
 use proptest::prelude::*;
 use proptest::string::string_regex;
 use std::str::FromStr;

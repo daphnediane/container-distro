@@ -125,7 +125,7 @@ fully-qualified ref always bypasses the catalog, and `--from-image`
 skips name resolution entirely. A bare `cm --install` installs the
 catalog default, Ubuntu, matching `wsl --install`.
 
-The catalog is a compiled-in list (`crates/cm-core/src/catalog.json`)
+The catalog is a compiled-in list (`src/catalog.json`)
 whose schema is Microsoft's `DistributionInfo.json` — the file behind
 `wsl --list --online`, in the `microsoft/WSL` repo — extended with an
 `Image` field. Each `ModernDistributions` vendor group holds entries

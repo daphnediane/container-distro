@@ -12,9 +12,21 @@
 //! `$HOME`, published ports, export/import, and changing settings after
 //! creation. Everything is composed from the `container` CLI.
 //!
-//! Used by both the `container distro` CLI plugin and `cm`, so `cm` gets
-//! distro support without the plugin being installed.
+//! The remaining modules are shared plumbing for the `cm` and
+//! `container distro` binaries: wrappers around the `container` CLI, the
+//! serde types for its JSON output, and small utilities (distro catalog,
+//! OCI layout writer, port forwarder, table helpers). Distro support in
+//! `cm` comes from here too, so it works without the plugin installed.
 
+pub mod catalog;
+pub mod completions;
+pub mod container;
+pub mod forward;
+pub mod man;
+pub mod naming;
+pub mod oci;
 pub mod ops;
 pub mod plugin;
 pub mod spec;
+pub mod table;
+pub mod wsl;

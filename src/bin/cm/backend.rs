@@ -14,7 +14,7 @@
 use std::env;
 
 use anyhow::Result;
-use cm_core::container::{self, Machine};
+use container_distro::container::{self, Machine};
 use container_distro::ops::{self as distro, DistroSummary};
 
 /// What a `-d NAME` (or the default) refers to.

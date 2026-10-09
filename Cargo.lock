@@ -188,36 +188,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cm"
-version = "0.4.1"
-dependencies = [
- "anyhow",
- "clap",
- "clap_complete",
- "clap_mangen",
- "cm-core",
- "container-distro",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
-name = "cm-core"
-version = "0.4.1"
-dependencies = [
- "anyhow",
- "flate2",
- "libc",
- "proptest",
- "serde",
- "serde_json",
- "sha2",
- "tar",
- "tempfile",
- "ureq",
-]
-
-[[package]]
 name = "colorchoice"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -247,12 +217,15 @@ dependencies = [
  "clap",
  "clap_complete",
  "clap_mangen",
- "cm-core",
+ "flate2",
  "libc",
  "proptest",
  "serde",
  "serde_json",
+ "sha2",
+ "tar",
  "tempfile",
+ "ureq",
 ]
 
 [[package]]

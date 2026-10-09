@@ -254,7 +254,7 @@ envelope, at the cost of one Swift-or-C-ABI XPC daemon we control. It is
 also the only option where `container` remains fully responsible for VM
 security boundaries.
 
-**Implemented (CLI-plugin form).** `crates/container-distro` takes the
+**Implemented (CLI-plugin form).** The crate takes the
 "CLI plugin alone" shortcut: no daemon. It composes `container create`
 (our init as entrypoint, cap ALL, no masked paths, `--ssh`,
 `CONTAINER_*` env), `exec`, `export` and `image load`. It ships as a
