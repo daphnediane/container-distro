@@ -4,6 +4,29 @@ User-facing changes per release, newest first. Written at release time
 from the commit log and the TODO items completed since the previous
 tag -- see doc/release.md.
 
+## 0.4.2 -- 2026-10-08
+
+### Changed
+
+- Packaging: the repository is now a single crate at the root —
+  `cargo install --path .` installs **both** `cm` and
+  `container-distro` (previously `cargo install --path crates/cm` plus
+  `cargo install --path crates/container-distro`). The crate now
+  carries crates.io publish metadata (repository, homepage,
+  `rust-version`); no functional changes to either command.
+- **Upgrading:** `cargo` refuses to overwrite a binary owned by
+  another package, so a plain `cargo install --path .` will fail on
+  the existing `cm` binary from the retired `cm` package. Use
+  `--force` or uninstall it first:
+
+  ```bash
+  cargo install --force --path .
+  # or: cargo uninstall cm && cargo install --path .
+  ```
+
+  If the `container distro` plugin was registered, re-run
+  `sudo container-distro install-plugin` to refresh its copied binary.
+
 ## 0.4.1 -- 2026-10-08
 
 ### Fixed
