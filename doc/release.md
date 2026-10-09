@@ -13,6 +13,33 @@ container-distro` (`--path .` builds a checkout; see [install]).
   break CLI behavior; patch bumps (`0.x.y`) are fixes only.
 - Tags are `v<version>` (`v0.2.0`), annotated. Maintenance branches are
   `release/<major>.<minor>` (`release/0.2`).
+- **Only tagged commits carry a clean `X.Y.Z` version.** Every other
+  commit carries a prerelease suffix: `main` sits at
+  `<next-minor>.0-dev` (`0.5.0-dev`), and `release/X.Y` sits at
+  `<next-patch>-dev` (`0.5.1-dev`) between patches. Consequences:
+  `cm --version` on a dev build can't be mistaken for a release, and a
+  mistaken `cargo publish` lands as a crates.io *prerelease* (never
+  selected by default installs) instead of colliding with a real
+  release.
+
+## Tooling: `cargo release`
+
+The mechanical bits are driven by [cargo-release] (`cargo install
+--locked cargo-release`), configured in `[package.metadata.release]` in
+`Cargo.toml`:
+
+- `cargo release release` is the release command: it strips the
+  `-dev` suffix, refreshes `Cargo.lock`, commits
+  `chore: release X.Y.Z`, and creates the annotated tag `vX.Y.Z`
+  (`container-distro X.Y.Z`). A **dry run by default**; `-x`
+  executes.
+- `publish = false` / `push = false`: crates.io publish and git push
+  stay manual steps below -- nothing escapes before the tag is pushed
+  and `cargo publish` runs from it.
+- `allow-branch = ["main", "release/*"]`: releases can only be cut
+  from `main` or a release branch.
+- `cargo release version X.Y.Z-dev -x` sets an explicit dev version
+  (the post-release bump step) without tagging.
 
 ## Cutting a minor release (from `main`)
 
@@ -32,26 +59,34 @@ container-distro` (`--path .` builds a checkout; see [install]).
    `## X.Y.Z -- YYYY-MM-DD` section drafted from the commit log since
    the previous tag (`git log --oneline v<prev>..HEAD`) and the
    `TODO.md` items those commits completed -- then delete the completed
-   `[x]` entries so the changelog is their permanent record.
-3. Bump `[package].version` in `Cargo.toml` to the release
-   version, then run `cargo check` so `Cargo.lock` (committed) picks it
-   up.
-4. Commit: `chore: release X.Y.Z` (message format per
-   `.devin/rules/comment-file.md`).
-5. Tag and branch:
+   `[x]` entries so the changelog is their permanent record. Commit
+   this *before* releasing: `cargo release` requires a clean tree.
+3. Preview then cut the release:
 
    ```bash
-   git tag -a vX.Y.Z -m "container-distro X.Y.Z"
+   cargo release release      # dry run: 0.5.0-dev -> 0.5.0, commit, tag
+   cargo release release -x   # bumps, commits "chore: release 0.5.0",
+                              # tags v0.5.0
+   ```
+
+   (Always pass `release` explicitly: it strips the prerelease suffix,
+   while bare `cargo release` releases the manifest version unchanged
+   and would tag `v0.5.0-dev`. `cargo release minor` would bump
+   `0.5.0-dev` to `0.6.0` -- only use a level when the dev version
+   isn't already the intended release.)
+4. Create the maintenance branch on the tag:
+
+   ```bash
    git branch release/X.Y vX.Y.Z
    ```
 
-6. Push everything:
+5. Push everything (`push = false` keeps this manual):
 
    ```bash
    git push origin main release/X.Y vX.Y.Z
    ```
 
-7. Pushing the tag runs `.github/workflows/release.yml`, which verifies
+6. Pushing the tag runs `.github/workflows/release.yml`, which verifies
    the tag matches the package version, re-runs the tests, and
    creates a **draft** GitHub Release using the new `CHANGELOG.md`
    section as notes (`--prerelease` when the tag carries a `-` suffix
@@ -76,11 +111,19 @@ container-distro` (`--path .` builds a checkout; see [install]).
    distributed copies). `cargo install` alone doesn't trigger that --
    users compile the deps themselves.
 
-8. Publish to crates.io: `cargo publish` (one-time `cargo login`
-   first). The first publish claims the `container-distro` name;
-   `cargo publish --dry-run` packages and verify-builds without
-   uploading.
+7. Publish to crates.io **from the tagged commit**: `cargo publish`
+   (one-time `cargo login` first). `cargo publish --dry-run` packages
+   and verify-builds without uploading. Never publish from a `-dev`
+   version -- it would land as a prerelease.
+8. Open the next development cycle on `main`:
 
+   ```bash
+   cargo release version X.Y.0-dev -x   # next minor, e.g. 0.6.0-dev
+   git commit -am "chore: start X.Y development"
+   git push
+   ```
+
+   (message format per `.devin/rules/comment-file.md`)
 9. Sanity-check the tag:
 
    ```bash
@@ -91,13 +134,39 @@ container-distro` (`--path .` builds a checkout; see [install]).
 
 ## Patch releases (on `release/X.Y`)
 
-1. Cherry-pick (or land directly) the fixes onto `release/X.Y`.
-2. Bump the patch component in `Cargo.toml`, refresh `Cargo.lock`, and
-   prepend the `CHANGELOG.md` section the same way; commit
-   `chore: release X.Y.Z`.
-3. `git tag -a vX.Y.Z -m "container-distro X.Y.Z"` on the release
-   branch; push the branch and tag, then `cargo publish` from the
-   tagged commit. The branch head is always the latest `X.Y.*` tag.
+The `release/X.Y` branch is created at minor-release time (step 4), so
+it already exists when a backport is needed. If it doesn't (e.g. a
+patch for an old line), create it from the tag:
+
+```bash
+git branch release/X.Y vX.Y.0
+```
+
+1. Check out `release/X.Y`. If the branch head is still the last tag
+   (clean `X.Y.Z` version), first open the patch's dev cycle so
+   in-flight builds report a prerelease:
+
+   ```bash
+   cargo release version X.Y.Z-dev -x   # e.g. 0.5.1-dev
+   git commit -am "chore: start X.Y.Z development"
+   ```
+
+2. Cherry-pick the fixes (`git cherry-pick -x <sha>` records the
+   source commit) or land them directly on the branch.
+3. Prepend the `CHANGELOG.md` section the same way as a minor release;
+   commit.
+4. Cut the patch release: `cargo release release` then
+   `cargo release release -x` -- strips `-dev`, commits
+   `chore: release X.Y.Z`, tags `vX.Y.Z`.
+5. Push the branch and tag, publish the draft GitHub Release the
+   workflow creates, then `cargo publish` from the tag.
+6. Re-open the branch's dev cycle:
+
+   ```bash
+   cargo release version X.Y.Z-dev -x   # e.g. 0.5.2-dev
+   git commit -am "chore: start X.Y.Z development"
+   git push origin release/X.Y
+   ```
 
 ## Changelog
 
@@ -111,8 +180,9 @@ remains.
 
 ## Notes
 
-- `main` is the development branch; its version stays at the last
-  release until the next release bumps it. Don't bump "just in case."
+- `main` is the development branch; its version is always
+  `<next-minor>.0-dev` except inside the release commit itself, so
+  building from `main` never masquerades as a released version.
 - Man pages are generated from the clap definitions at build time, so a
   release has no generated artifacts to regenerate or commit.
 - `cargo audit` + `cargo deny check` run in CI on every push/PR and
@@ -124,6 +194,7 @@ remains.
 [#14]: https://github.com/daphnediane/container-distro/issues/14
 [#16]: https://github.com/daphnediane/container-distro/issues/16
 [#17]: https://github.com/daphnediane/container-distro/issues/17
+[cargo-release]: https://github.com/crate-ci/cargo-release
 [Changelog]: #changelog
 [install]: install.md
 [SemVer]: https://semver.org
