@@ -16,6 +16,7 @@ exclude = [
     "/.github/",
     "/.templates/",
     "/.vscode/",
+    "/.markdownlint.json",
     "/doc/",
     "/scripts/",
     "/deny.toml",

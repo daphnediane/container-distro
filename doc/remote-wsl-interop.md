@@ -42,7 +42,7 @@ scheme.
      fix.
   3. **Fork `open-remote-wsl` into an Apple `container`-native
      extension** -- same fork, but the extension talks to
-     `container machine` directly instead of `cm`'s WSL façade. Strictly
+     `container machine` directly instead of `cm`'s WSL facade. Strictly
      better if you're forking anyway.
   4. **Fake `wsl.exe` on Windows** proxying `ssh mac cm ...`. Works with
      *unmodified* proprietary extensions, but you own UTF-16LE encoding,
@@ -249,7 +249,7 @@ macOS rather than an emulated Windows feature.
 ### B2 -- same fork, but Apple `container`-native (drop the `cm` layer)
 
 A variant worth separating out: if you're already forking the extension,
-there's no reason to route it through `cm`'s WSL façade at all. Speak to
+there's no reason to route it through `cm`'s WSL facade at all. Speak to
 `container` directly:
 
 - `wslManager` becomes a `container` spawner:
