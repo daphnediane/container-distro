@@ -1,8 +1,8 @@
 # Release process
 
-Releases are git tags plus a maintenance branch -- there is no crates.io
-publish step (`cargo install --path` is the only install path; see
-[install]).
+Releases are git tags plus a maintenance branch; `cargo publish` after
+tagging makes the release installable via `cargo install
+container-distro` (`--path .` builds a checkout; see [install]).
 
 ## Versioning
 
@@ -76,7 +76,12 @@ publish step (`cargo install --path` is the only install path; see
    distributed copies). `cargo install` alone doesn't trigger that --
    users compile the deps themselves.
 
-8. Sanity-check the tag:
+8. Publish to crates.io: `cargo publish` (one-time `cargo login`
+   first). The first publish claims the `container-distro` name;
+   `cargo publish --dry-run` packages and verify-builds without
+   uploading.
+
+9. Sanity-check the tag:
 
    ```bash
    git checkout vX.Y.Z && cargo test --workspace
@@ -91,8 +96,8 @@ publish step (`cargo install --path` is the only install path; see
    prepend the `CHANGELOG.md` section the same way; commit
    `chore: release X.Y.Z`.
 3. `git tag -a vX.Y.Z -m "container-distro X.Y.Z"` on the release
-   branch; push the branch and tag. The branch head is always the latest
-   `X.Y.*` tag.
+   branch; push the branch and tag, then `cargo publish` from the
+   tagged commit. The branch head is always the latest `X.Y.*` tag.
 
 ## Changelog
 

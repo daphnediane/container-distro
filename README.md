@@ -21,7 +21,7 @@ cm                # container machine run
 ## Install
 
 ```bash
-cargo install --path .   # one package, both binaries
+cargo install --locked container-distro   # one crate, both binaries
 cm --install-man && container-distro install-man   # man pages
 
 # optionally alias `cm` to `wsl` (symlink + man page link):
@@ -31,7 +31,10 @@ cm --install-alias wsl
 sudo container-distro install-plugin   # -> /usr/local/libexec/container-plugins/distro
 ```
 
-Full build/install/uninstall details: doc/install.md.
+Building a checkout instead: `cargo install --path .`
+Upgrading from ≤0.4.1: use `cargo install --force` (the `cm` binary
+was owned by a separate `cm` package then) or `cargo uninstall cm`
+first. Full build/install/uninstall details: doc/install.md.
 
 ## Usage
 

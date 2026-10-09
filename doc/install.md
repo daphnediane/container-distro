@@ -38,10 +38,12 @@ The repository is a single crate:
 `cargo install` only copies binaries, so installing is cargo plus two
 small post-steps (plugin registration, man pages) -- each binary
 self-installs what it owns. No brew/nix/pkg packages exist yet
-([#14]) -- this is the only install path.
+([#14]) -- crates.io is the only packaged install path.
 
 ```bash
-cargo install --path .   # one package, both binaries
+cargo install --locked container-distro   # one crate, both binaries
+# or from a checkout:
+cargo install --path .
 
 # man pages + shell completions (self-generated from the CLI
 # definitions -- never stale)
@@ -159,6 +161,10 @@ scripts (they're rendered from the new binary, so they're always
 current), and `install-plugin` refreshes the registered copy (or
 `container-distro install-plugin --from <installed>` from a newer
 build).
+
+Upgrading from ≤0.4.1 needs `--force` once: the `cm` binary was owned
+by a separate `cm` package then, and cargo won't overwrite a binary
+owned by another package (`cargo uninstall cm` first works too).
 
 ## Uninstall
 
