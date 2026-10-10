@@ -245,6 +245,20 @@ pub enum Command {
         opts: CreateOptions,
     },
 
+    /// Rename a distro — its filesystem, settings, and default marker
+    /// move to the new name; a running distro is restarted under it
+    Rename {
+        /// Current distro name
+        old: String,
+        /// New distro name
+        new: String,
+        /// Allow naming the distro after an existing `container
+        /// machine` — `cm` resolves a shared name to the distro,
+        /// shadowing the machine
+        #[arg(long)]
+        force: bool,
+    },
+
     /// Migrate between a `container machine` and a distro, carrying the
     /// root filesystem across; the source is removed unless `--keep`.
     /// Naming a pre-journal distro container adopts it instead — its
@@ -491,6 +505,20 @@ mod tests {
     #[test]
     fn bad_volume_rejected() {
         assert!(parse(&["distro", "create", "-v", "relative:/x", "alpine"]).is_err());
+    }
+
+    #[test]
+    fn rename_old_new_force() {
+        let cli = parse(&["distro", "rename", "old", "new"]).unwrap();
+        let Command::Rename { old, new, force } = cli.command else {
+            panic!("expected rename");
+        };
+        assert_eq!((old.as_str(), new.as_str(), force), ("old", "new", false));
+        let cli = parse(&["distro", "rename", "old", "new", "--force"]).unwrap();
+        let Command::Rename { force, .. } = cli.command else {
+            panic!("expected rename");
+        };
+        assert!(force);
     }
 
     #[test]

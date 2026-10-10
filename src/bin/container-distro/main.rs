@@ -312,6 +312,10 @@ fn run(cli: Cli) -> Result<()> {
                 ops::import(&name, &file, &opts, ops::ImportSource::Local)?
             );
         }
+        Command::Rename { old, new, force } => {
+            ops::rename(&old, &new, force)?;
+            println!("`{old}` renamed to `{new}`");
+        }
         Command::Migrate {
             name,
             out,

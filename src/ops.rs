@@ -196,6 +196,13 @@ pub struct CreateOptions {
     /// Make this the default distro (automatic when nothing is the default)
     #[arg(long)]
     pub set_default: bool,
+
+    /// Create even when the name is taken in the other namespace — a
+    /// same-named `container machine`, or a same-named distro when
+    /// creating a machine. `cm` resolves a shared name to the distro,
+    /// shadowing the machine, so the collision is refused without this
+    #[arg(long)]
+    pub force: bool,
 }
 
 const INIT_SCRIPT: &str = include_str!("../assets/init");
@@ -800,7 +807,7 @@ fn no_default(
     !distro_set && !machines.iter().any(|m| m.default)
 }
 
-fn create_from_spec(spec: &DistroSpec, no_boot: bool, set_default: bool) -> Result<String> {
+fn create_from_spec(spec: &DistroSpec, opts: &CreateOptions) -> Result<String> {
     check_sources(spec)?;
     container::warn_unverified_version();
     ensure_state()?;
@@ -820,13 +827,14 @@ fn create_from_spec(spec: &DistroSpec, no_boot: bool, set_default: bool) -> Resu
         );
     }
     bail_if_staged(&spec.name)?;
+    bail_machine_shadow(&spec.name, opts.force)?;
     write_journal(&spec.name, spec)?;
     let lock = DistroLock::acquire(&spec.name)?;
     let r = (|| -> Result<()> {
         // The create is validated now — `--no-boot` lands the same
         // resting state as a stopped distro: journal only.
         let id = materialize(&spec.name, spec, &lock)?;
-        if no_boot {
+        if opts.no_boot {
             dismantle(&spec.name, &id, &lock)?;
         } else {
             boot(&spec.name, &id, &lock)?;
@@ -847,7 +855,7 @@ fn create_from_spec(spec: &DistroSpec, no_boot: bool, set_default: bool) -> Resu
     // default. Otherwise leave it alone: under `cm`'s unified namespace a
     // distro default overrides the default machine. If machines can't be
     // listed, a distro is the only usable target anyway.
-    let set_default = set_default
+    let set_default = opts.set_default
         || no_default(
             default_name().as_deref(),
             &distros()?,
@@ -865,7 +873,7 @@ pub fn create(name: Option<String>, opts: &CreateOptions, image: &str) -> Result
     let name = name.unwrap_or_else(|| default_machine_name(image));
     let mut spec = build_spec(name, image.to_string(), opts)?;
     spec.origin = Some(stamped_origin(OriginSource::Image));
-    create_from_spec(&spec, opts.no_boot, opts.set_default)
+    create_from_spec(&spec, opts)
 }
 
 fn summarize(c: &ContainerInfo, default: Option<&str>, app_root: Option<&Path>) -> DistroSummary {
@@ -1408,6 +1416,48 @@ fn bail_if_staged(name: &str) -> Result<()> {
             name
         );
     }
+    Ok(())
+}
+
+/// Whether a `container machine` named `name` exists.
+fn machine_taken(name: &str) -> Result<bool> {
+    Ok(container::list_machines()?.iter().any(|m| m.id == name))
+}
+
+/// `cm` resolves a name that exists as both a machine and a distro to
+/// the distro — creating a distro on an existing machine name silently
+/// shadows it, so the collision is refused unless `force` opts in
+/// (and still warns: the shadow is real). Public for `catalog_ops`,
+/// which checks a resolved name before staging an import.
+pub fn bail_machine_shadow(name: &str, force: bool) -> Result<()> {
+    if !machine_taken(name)? {
+        return Ok(());
+    }
+    if !force {
+        bail!(
+            "a machine named `{name}` already exists — a same-named distro would \
+             shadow it in `cm` (pick another name, or use --force)"
+        );
+    }
+    eprintln!("container-distro: `{name}` is also a machine; `cm` resolves the name to the distro");
+    Ok(())
+}
+
+/// The other direction: a distro hides a same-named machine from every
+/// `cm` name lookup, so creating the machine is refused unless `force`
+/// opts in (and still warns). Public for `cm`'s argv-built
+/// `machine create` path, which never passes through `import_machine`.
+pub fn bail_distro_shadow(name: &str, force: bool) -> Result<()> {
+    if !distro_exists(name)? {
+        return Ok(());
+    }
+    if !force {
+        bail!(
+            "a distro named `{name}` already exists — `cm` resolves that name to \
+             the distro (pick another name, or use --force)"
+        );
+    }
+    eprintln!("container-distro: `{name}` is also a distro; `cm` resolves the name to the distro");
     Ok(())
 }
 
@@ -2324,7 +2374,24 @@ pub fn import(
             name: name.to_string(),
         },
     }));
-    create_from_spec(&spec, opts.no_boot, opts.set_default)
+    match create_from_spec(&spec, opts) {
+        Ok(name) => Ok(name),
+        Err(e) => {
+            // If the create refused the name (machine shadow, plain
+            // container, staged state) the distro never landed — don't
+            // orphan the image `load_rootfs` just made. When it did
+            // land (a stopped distro whose boot failed) the journal
+            // references the image, so it stays.
+            if !distro_exists(name).unwrap_or(false) {
+                let _ = container_cmd()
+                    .args(["image", "delete", &spec.image])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+            }
+            Err(e)
+        }
+    }
 }
 
 /// A scratch container created for a machine export — deleted on drop
@@ -2450,19 +2517,14 @@ pub fn export_machine(machine: &str, output: Option<&Path>) -> Result<()> {
 /// first `machine run` after `machine create` can lose a race while the
 /// VM restarts after provisioning, for stock and imported images alike
 /// — and leaves the machine stopped, like `wsl --import`.
-pub fn import_machine(name: &str, file: &Path) -> Result<()> {
+pub fn import_machine(name: &str, file: &Path, force: bool) -> Result<()> {
     validate_name(name)?;
     ensure_started()?;
     if container::list_machines()?.iter().any(|m| m.id == name) {
         bail!("a machine named `{name}` already exists");
     }
     // A same-named distro would shadow the machine everywhere in `cm`.
-    if distro_exists(name)? {
-        bail!(
-            "`{name}` is a distro — `cm` resolves that name to the distro; \
-             pick another name, or use `cm --import --distro`"
-        );
-    }
+    bail_distro_shadow(name, force)?;
     let stdin_copy;
     let rootfs = if file == Path::new("-") {
         stdin_copy = oci::stdin_to_tempfile()?;
@@ -2546,6 +2608,12 @@ pub fn migrate(
     opts: &CreateOptions,
 ) -> Result<String> {
     ensure_started()?;
+    // Keeping the source means the result can't take its name — the
+    // same-name machine+distro pair is exactly the shadow the create
+    // paths refuse.
+    if keep && target.is_none() {
+        bail!("`--keep` needs a target name (`-n NAME`) — the source keeps its name");
+    }
     // A journaled distro is already home; a journal-less labeled
     // container is pre-journal — adopted, not migrated. Naming it is
     // the explicit opt-in the journal gate asks for; `-n`/create
@@ -2715,6 +2783,15 @@ fn migrate_to_distro(
     bail_if_staged(name)?;
     if distro_exists(name)? {
         bail!("distro `{name}` already exists");
+    }
+    // The source machine's own name is taken over — a plain migration
+    // removes it. A *different* machine's name (or the source's, kept)
+    // is a shadow the distro would cast over it in `cm`.
+    if container::list_machines()?
+        .iter()
+        .any(|m| m.id == name && (m.id != machine || keep))
+    {
+        bail_machine_shadow(name, opts.force)?;
     }
     let detail = container::inspect_machine(machine)?;
     let mut spec = spec_from_machine(name, &detail, opts)?;
@@ -2915,10 +2992,22 @@ pub fn migrate_to_machine(
 ) -> Result<String> {
     ensure_started()?;
     reject_machine_opts(opts)?;
+    // Keeping the source means the result can't take its name — the
+    // same-name distro+machine pair is exactly the shadow the create
+    // paths refuse.
+    if keep && target.is_none() {
+        bail!("`--keep` needs a target name (`-n NAME`) — the source keeps its name");
+    }
     let name = target.unwrap_or_else(|| distro.to_string());
     validate_name(&name)?;
     if container::list_machines()?.iter().any(|m| m.id == name) {
         bail!("a machine named `{name}` already exists (use `-n` to pick another)");
+    }
+    // The source distro's own name is taken over — a plain migration
+    // removes it. A *different* distro's name (or the source's, kept)
+    // would hide the new machine behind it in `cm`.
+    if name != distro || keep {
+        bail_distro_shadow(&name, opts.force)?;
     }
     // A pre-journal distro named for `--out` is explicit opt-in —
     // adopt its live config first, then carry the disk out.
@@ -3031,6 +3120,213 @@ pub fn migrate_to_machine(
         run_container_quiet(&["machine", "set-default", &name])?;
     }
     Ok(name)
+}
+
+/// Rename a distro (`container distro rename`): the journal — spec,
+/// disk, and init assets — moves to `new`, and a distro that was
+/// running is rematerialized under the new name once the move lands.
+/// The ephemeral container is never renamed (the logical name lives in
+/// its label, not the runtime id); it's converged away before the move
+/// and recreated fresh after, so nothing container-side ever carries
+/// `old` past the journal swap.
+///
+/// A same-named *machine* is refused unless `force` — `cm` would
+/// resolve `new` to the distro, silently shadowing it.
+pub fn rename(old: &str, new: &str, force: bool) -> Result<()> {
+    ensure_started()?;
+    container::warn_unverified_version();
+    validate_name(new)?;
+    if old == new {
+        bail!("`{old}` is already the distro's name");
+    }
+    ensure_journal(old)?;
+    if distro_exists(new)? {
+        bail!("distro `{new}` already exists");
+    }
+    bail_if_staged(new)?;
+    bail_machine_shadow(new, force)?;
+    // Staged state under `old`'s name would be orphaned by the move —
+    // a rare interrupted-`set` leftover for the user to resolve first.
+    let staged = preserved_rootfs(old)?;
+    if staged.exists() {
+        bail!(
+            "`{old}` has a staged filesystem from an interrupted `set` — \
+             inspect or remove {} before renaming",
+            staged.display()
+        );
+    }
+    let lock = DistroLock::acquire(old)?;
+    let mut spec = lock.spec()?;
+    // Converge to the resting state first: the journal move then
+    // carries the disk, and no container is left naming `old`.
+    let was_running = if let Some(info) = find(old).ok().filter(|i| i.is_running()) {
+        run_container_quiet(&["stop", info.id()])?;
+        true
+    } else {
+        false
+    };
+    converge(old, &lock)?;
+    spec.name = new.to_string();
+    write_journal(new, &spec)?;
+    // Move the disk into the new journal: a rename, so an interruption
+    // leaves it whole under one name or the other, never a partial
+    // copy — the same swap `migrate` and `set` use.
+    if let Err(e) = with_journal_dir_unlocked(new, || {
+        with_journal_dir_unlocked(old, || {
+            let src = journal_fs_path(old)?;
+            if src.exists() {
+                unlock(&src);
+                fs::rename(&src, journal_fs_path(new)?)
+                    .with_context(|| format!("failed to move {}", src.display()))?;
+            }
+            Ok(())
+        })?;
+        let dst = journal_fs_path(new)?;
+        if dst.exists() {
+            set_locked(&dst, true)?;
+        }
+        Ok(())
+    }) {
+        // The disk never left `old`; drop the just-written journal so
+        // the rename can be retried.
+        let _ = remove_journal_dir(new);
+        return Err(e);
+    }
+    remove_journal_dir(old)?;
+    if default_name().as_deref() == Some(old) {
+        write_default(Some(new))?;
+    }
+    drop(lock);
+    // An imported distro's snapshot image keeps `old` in its reference
+    // and labels — cleanup keys off the new name, so `rm` won't find
+    // it later. Say so rather than leaking it silently then.
+    if spec.image.starts_with(&snapshot_repo(old)) {
+        eprintln!(
+            "container-distro: image `{}` is still labeled for `{old}` — \
+             `rm` won't remove it automatically",
+            spec.image
+        );
+    }
+    if was_running {
+        start(new)?;
+    }
+    Ok(())
+}
+
+/// Rename a `container machine` (`cm --rename --machine`). Upstream has
+/// no rename — the machine's id is its bundle path — so the machine is
+/// recreated: `machine create` under `new` with the same image and
+/// resources, then the old `rootfs.ext4` is cloned over the new one's
+/// (the same disk swap [`migrate_to_machine`] uses). The old machine
+/// is removed once the new one exists and its carried disk boots; a
+/// default marker is re-pointed at `new`.
+///
+/// A same-named *distro* is refused unless `force` — `cm` would
+/// resolve `new` to the distro, hiding the machine entirely.
+pub fn rename_machine(old: &str, new: &str, force: bool) -> Result<()> {
+    ensure_started()?;
+    container::warn_unverified_version();
+    validate_name(new)?;
+    if old == new {
+        bail!("`{old}` is already the machine's name");
+    }
+    let machines = container::list_machines()?;
+    if machines.iter().any(|m| m.id == new) {
+        bail!("a machine named `{new}` already exists");
+    }
+    bail_distro_shadow(new, force)?;
+    let detail = container::inspect_machine(old)?;
+    let src = machine_rootfs(&detail)?
+        .with_context(|| format!("machine `{old}` has no root filesystem to carry"))?;
+    let was_default = machines.iter().any(|m| m.id == old && m.default);
+    let was_running = detail.is_running();
+    if was_running {
+        run_container_quiet(&["machine", "stop", old])?;
+    }
+    // From here a failure tries to leave `old` as it was found.
+    let renamed = (|| -> Result<()> {
+        let image = detail
+            .image
+            .as_ref()
+            .map(|i| i.reference.clone())
+            .context("machine has no image reference")?;
+        // `machine create` boots the machine; its internal boot
+        // materializes the plugin-state disk the swap replaces below.
+        let mut a = vec![
+            "machine".to_string(),
+            "create".to_string(),
+            "--name".to_string(),
+            new.to_string(),
+        ];
+        if let Some(c) = detail.cpus {
+            a.extend(["--cpus".into(), c.to_string()]);
+        }
+        if let Some(m) = detail.memory {
+            a.extend(["--memory".into(), format!("{}M", m / (1024 * 1024))]);
+        }
+        if let Some(h) = &detail.home_mount {
+            a.extend(["--home-mount".into(), h.clone()]);
+        }
+        a.push(image);
+        run_container(&a.iter().map(String::as_str).collect::<Vec<_>>())?;
+        // Replace the machine's filesystem while it is stopped: clone
+        // to a sibling then rename over its disk, so an interruption
+        // leaves the old disk or the new one, never a partial file.
+        let swapped = (|| -> Result<()> {
+            run_container_quiet(&["machine", "stop", new])?;
+            let dst = machine_rootfs(&container::inspect_machine(new)?)?
+                .context("the new machine has no rootfs to replace")?;
+            let mut tmp = dst.clone().into_os_string();
+            tmp.push(".new");
+            let tmp = PathBuf::from(tmp);
+            let _ = fs::remove_file(&tmp);
+            // `fs::copy` is a clonefile on APFS — instant and copy-on-write.
+            fs::copy(&src, &tmp).with_context(|| format!("failed to clone {}", src.display()))?;
+            fs::rename(&tmp, &dst)
+                .with_context(|| format!("failed to install {}", dst.display()))?;
+            Ok(())
+        })();
+        if let Err(e) = swapped {
+            // `new` still holds only its image filesystem — remove it
+            // so a retry isn't blocked.
+            let _ = run_container_quiet(&["machine", "rm", new]);
+            return Err(e.context(format!(
+                "failed to move `{old}`'s filesystem into machine `{new}`"
+            )));
+        }
+        // `machine create`'s boot ran the image filesystem; the carried
+        // disk hasn't run yet. Verify it like `migrate --out` does —
+        // the first-boot flake is why it retries.
+        let booted = (0..3).any(|attempt| {
+            if attempt > 0 {
+                std::thread::sleep(std::time::Duration::from_secs(2));
+            }
+            boot_machine(new).is_ok()
+        });
+        if !booted {
+            bail!(
+                "machine `{new}` holds `{old}`'s filesystem but failed to boot; \
+                 `{old}` was left in place (see `container machine logs {new}`)"
+            );
+        }
+        if !was_running {
+            let _ = run_container_quiet(&["machine", "stop", new]);
+        }
+        Ok(())
+    })();
+    if let Err(e) = renamed {
+        if was_running {
+            let _ = boot_machine(old);
+        }
+        return Err(e);
+    }
+    if let Err(e) = run_container_quiet(&["machine", "rm", old]) {
+        eprintln!("container-distro: renamed, but removing machine `{old}` failed: {e:#}");
+    }
+    if was_default {
+        let _ = run_container_quiet(&["machine", "set-default", new]);
+    }
+    Ok(())
 }
 
 #[cfg(test)]

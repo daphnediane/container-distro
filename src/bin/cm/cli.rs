@@ -55,6 +55,9 @@ pub struct InstallOpts {
     /// Restricted defaults (no mounts, network, agent, sudo). Distro-only
     /// — machines can't be restricted.
     pub restricted: bool,
+    /// Allow the new machine or distro to share its name with one in
+    /// the other backend (`cm` resolves a shared name to the distro).
+    pub force: bool,
     pub shares: Vec<MountSpec>,
     pub publish: Vec<PublishSpec>,
 }
@@ -315,6 +318,19 @@ pub struct Args {
     )]
     pub import: Option<Vec<String>>,
 
+    /// Rename a machine or distro — its filesystem and settings carry
+    /// to the new name; a running target is restarted under it
+    /// (`--machine`/`--distro` selects which when the name is
+    /// ambiguous)
+    #[arg(long = "rename", num_args = 2, value_names = ["OLD", "NEW"])]
+    pub rename: Option<Vec<String>>,
+
+    /// Allow --install, --import, or --rename to create a machine or
+    /// distro whose name is already taken in the other backend — `cm`
+    /// resolves a shared name to the distro, shadowing the machine
+    #[arg(long = "force")]
+    pub force: bool,
+
     /// Install the `cm(1)` man page; writes to DIR, or the `share/man/man1`
     /// next to the binary's `bin` directory (e.g. $CARGO_HOME/share/man/man1
     /// after `cargo install`)
@@ -406,6 +422,15 @@ pub enum Action {
         install_location: Option<String>,
         file: String,
         backend: Backend,
+        force: bool,
+    },
+    /// Rename a distro or machine to a fresh name — the machine form
+    /// recreates it under the new name, carrying its filesystem.
+    Rename {
+        old: String,
+        new: String,
+        backend: Backend,
+        force: bool,
     },
     /// Forward localhost ports to a machine.
     Forward {
@@ -438,6 +463,11 @@ impl Args {
             && !(self.install.is_some() || (self.list && (self.online || self.cache)))
         {
             bail!("--catalog only applies to --install and --list --online/--cache");
+        }
+        // `--force` only has meaning where a name is created.
+        if self.force && !(self.install.is_some() || self.import.is_some() || self.rename.is_some())
+        {
+            bail!("--force only applies to --install, --import, and --rename");
         }
         // `--machine` can't satisfy distro-only install options.
         if self.machine
@@ -501,6 +531,7 @@ impl Args {
                 distro: self.distro,
                 machine: self.machine,
                 restricted: self.restricted,
+                force: self.force,
                 shares: self.shares.clone(),
                 publish: self.publish.clone(),
             })
@@ -517,6 +548,14 @@ impl Args {
                 install_location: (i.len() == 3).then(|| i[1].clone()),
                 file: i.last().unwrap().clone(),
                 backend: self.backend(),
+                force: self.force,
+            }
+        } else if let Some(r) = &self.rename {
+            Action::Rename {
+                old: r[0].clone(),
+                new: r[1].clone(),
+                backend: self.backend(),
+                force: self.force,
             }
         } else if !self.forward.is_empty() {
             let action = Action::Forward {
@@ -570,6 +609,7 @@ impl Args {
                     | Action::Forward { .. }
                     | Action::Export { .. }
                     | Action::Import { .. }
+                    | Action::Rename { .. }
                     | Action::Install(_)
                     | Action::SetDefault(_)
                     | Action::Terminate(_)
@@ -761,6 +801,7 @@ mod tests {
                 distro: false,
                 machine: false,
                 restricted: false,
+                force: false,
                 shares: vec![],
                 publish: vec![],
             })
@@ -1009,6 +1050,7 @@ mod tests {
                 install_location: Some("C:\\wsl".into()),
                 file: "in.tar".into(),
                 backend: Backend::Auto,
+                force: false,
             }
         );
         // Two values omit the ignored location.
@@ -1020,6 +1062,7 @@ mod tests {
                 install_location: None,
                 file: "in.tar".into(),
                 backend: Backend::Auto,
+                force: false,
             }
         );
         // `--distro` selects the distro import (the default anyway); `-`
@@ -1032,6 +1075,7 @@ mod tests {
                 install_location: None,
                 file: "-".into(),
                 backend: Backend::Distro,
+                force: false,
             }
         );
         // `--machine` selects the machine import.
@@ -1043,6 +1087,7 @@ mod tests {
                 install_location: None,
                 file: "in.tar".into(),
                 backend: Backend::Machine,
+                force: false,
             }
         );
         assert!(parse(&["cm", "--import", "u1"]).is_err());
@@ -1103,6 +1148,65 @@ mod tests {
                 "--publish",
                 "8080",
             ][..],
+        ] {
+            let args = parse(argv).unwrap();
+            assert!(args.action().is_err(), "{argv:?}");
+        }
+    }
+
+    #[test]
+    fn rename_takes_old_and_new() {
+        let args = parse(&["cm", "--rename", "old", "new"]).unwrap();
+        assert_eq!(
+            args.action().unwrap(),
+            Action::Rename {
+                old: "old".into(),
+                new: "new".into(),
+                backend: Backend::Auto,
+                force: false,
+            }
+        );
+        // Selectors disambiguate a name that's both a machine and a distro.
+        let args = parse(&["cm", "--rename", "old", "new", "--machine"]).unwrap();
+        assert!(matches!(
+            args.action().unwrap(),
+            Action::Rename {
+                backend: Backend::Machine,
+                ..
+            }
+        ));
+        // Both names are required; run-only options are rejected.
+        assert!(parse(&["cm", "--rename", "old"]).is_err());
+        let args = parse(&["cm", "--rename", "old", "new", "-d", "x"]).unwrap();
+        assert!(args.action().is_err());
+        let args = parse(&["cm", "--rename", "old", "new", "ls"]).unwrap();
+        assert!(args.action().is_err());
+    }
+
+    #[test]
+    fn force_pairs_with_name_creating_actions() {
+        // Valid on --install, --import, --rename.
+        let args = parse(&["cm", "--install", "alpine", "--force"]).unwrap();
+        assert!(matches!(
+            args.action().unwrap(),
+            Action::Install(InstallOpts { force: true, .. })
+        ));
+        let args = parse(&["cm", "--import", "u1", "in.tar", "--force"]).unwrap();
+        assert!(matches!(
+            args.action().unwrap(),
+            Action::Import { force: true, .. }
+        ));
+        let args = parse(&["cm", "--rename", "a", "b", "--force"]).unwrap();
+        assert!(matches!(
+            args.action().unwrap(),
+            Action::Rename { force: true, .. }
+        ));
+        // Meaningless elsewhere.
+        for argv in [
+            &["cm", "--force"][..],
+            &["cm", "-l", "--force"][..],
+            &["cm", "-t", "x", "--force"][..],
+            &["cm", "--export", "x", "f.tar", "--force"][..],
         ] {
             let args = parse(argv).unwrap();
             assert!(args.action().is_err(), "{argv:?}");

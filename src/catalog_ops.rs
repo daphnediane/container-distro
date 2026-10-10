@@ -169,6 +169,13 @@ pub fn import_file(
         )
     });
     container::validate_name(&name)?;
+    // Fail a refused name before `import` stages an image (the `.wsl`
+    // download is already cached, so retrying with another name skips
+    // the fetch). `import` re-checks — and issues the warning — for
+    // --force.
+    if !opts.force {
+        ops::bail_machine_shadow(&name, false)?;
+    }
     ops::import(&name, file, opts, source)
 }
 

@@ -78,7 +78,14 @@ fn run(args: Args) -> Result<ExitCode> {
             install_location,
             file,
             backend,
-        } => import(&name, install_location.as_deref(), &file, backend),
+            force,
+        } => import(&name, install_location.as_deref(), &file, backend, force),
+        Action::Rename {
+            old,
+            new,
+            backend,
+            force,
+        } => rename(&old, &new, backend, force),
         Action::Forward { machine, mappings } => forward(machine.as_deref(), &mappings, sel),
         Action::Run => run_in_target(&args),
     }
@@ -408,6 +415,7 @@ fn install(opts: &InstallOpts) -> Result<ExitCode> {
         memory: opts.memory.clone(),
         home_mount: opts.home_mount,
         restricted: opts.restricted,
+        force: opts.force,
         ..CreateOptions::default()
     };
     if let InstallSource::File(file) = &opts.source {
@@ -469,6 +477,9 @@ fn install(opts: &InstallOpts) -> Result<ExitCode> {
         .clone()
         .unwrap_or_else(|| container::default_machine_name(hint.unwrap_or(image)));
     container::validate_name(&name)?;
+    // A same-named distro hides the machine from every `cm` name
+    // lookup — refused unless --force opts in.
+    distro::bail_distro_shadow(&name, opts.force)?;
     let mut cmd = container::container_cmd();
     cmd.args(["machine", "create", "--name", &name]);
     if let Some(c) = opts.cpus {
@@ -540,6 +551,7 @@ fn import(
     install_location: Option<&str>,
     file: &str,
     sel: Backend,
+    force: bool,
 ) -> Result<ExitCode> {
     container::validate_name(name)?;
     if let Some(loc) = install_location.filter(|l| !l.is_empty() && *l != "-") {
@@ -547,26 +559,38 @@ fn import(
     }
     let file = Path::new(file);
     if sel == Backend::Machine {
-        distro::import_machine(name, file)?;
+        distro::import_machine(name, file, force)?;
     } else {
         if !backend::distros_enabled() {
             bail!(
                 "--import defaults to a distro; that needs distro support (unset CM_BACKEND=machine)"
             );
         }
-        container::ensure_started()?;
-        // The new distro would shadow a same-named machine for `cm` —
-        // warn, like `-d` resolution does.
-        if container::list_machines()?.iter().any(|m| m.id == name) {
-            eprintln!("cm: `{name}` is also a machine; `cm` resolves the name to the distro");
-        }
+        // A name shared with a machine shadows it for `cm` — refused
+        // inside `ops::import` unless --force opted in.
         distro::import(
             name,
             file,
-            &CreateOptions::default(),
+            &CreateOptions {
+                force,
+                ..CreateOptions::default()
+            },
             distro::ImportSource::Local,
         )?;
     }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `cm --rename OLD NEW`: a distro's journal — spec, disk, assets —
+/// moves wholesale; a machine is recreated under the new name with its
+/// filesystem carried across (`container machine` has no rename).
+fn rename(old: &str, new: &str, sel: Backend, force: bool) -> Result<ExitCode> {
+    container::validate_name(old)?;
+    match named_target(old, sel)? {
+        Target::Distro(d) => distro::rename(&d, new, force)?,
+        Target::Machine(_) => distro::rename_machine(old, new, force)?,
+    }
+    println!("`{old}` renamed to `{new}`");
     Ok(ExitCode::SUCCESS)
 }
 

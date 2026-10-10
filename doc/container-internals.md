@@ -31,23 +31,23 @@ Risk tiers used below:
 
 ## CLI commands consumed
 
-| Command                                               | Used by                                                          |
-| ----------------------------------------------------- | ---------------------------------------------------------------- |
-| `system status [--format json]`                       | `system_running`, `app_root`, `container_version`, `cm --status` |
-| `system start` / `system stop`                        | `ensure_started`, `cm --shutdown --system`                       |
-| `machine list --format json`                          | `list_machines` (`cm -l`, resolution, shutdown)                  |
-| `machine inspect [id]`                                | `inspect_machine*` (`cm -e`, `-l -v -v`)                         |
-| `machine run -i [-n -u -w -e …] [-- cmd]`             | interactive shells, `--` commands, `-e` fallback, boot probe     |
-| `machine create --name --cpus --memory --home-mount`  | `cm --install`                                                   |
-| `machine set-default` / `machine stop` / `machine rm` | `cm -s` / `-t` / `--unregister`, `distro migrate`                |
-| `create` (many flags -- see spec.rs `create_args`)    | distro create/set/import                                         |
-| `start` / `stop` / `delete`                           | distro boot/stop/rm/`set`                                        |
-| `exec -i [-t] --user --env --workdir ID cmd…`         | `cm -e` on machines, all distro `run`, `init -u` provisioning    |
-| `list --all --format json`, `inspect`                 | distro enumeration and `distro inspect`                          |
-| `export`                                              | `distro export`                                                  |
-| `image load -i`, `image list --quiet`, `image delete` | `import`, snapshot-image cleanup                                 |
-| `run --rm --entrypoint -v`                            | guest-script unit tests only                                     |
-| `--version`                                           | `cm --version` passthrough                                       |
+| Command                                               | Used by                                                           |
+| ----------------------------------------------------- | ----------------------------------------------------------------- |
+| `system status [--format json]`                       | `system_running`, `app_root`, `container_version`, `cm --status`  |
+| `system start` / `system stop`                        | `ensure_started`, `cm --shutdown --system`                        |
+| `machine list --format json`                          | `list_machines` (`cm -l`, resolution, shutdown)                   |
+| `machine inspect [id]`                                | `inspect_machine*` (`cm -e`, `-l -v -v`, `migrate`, `rename`)     |
+| `machine run -i [-n -u -w -e ...] [-- cmd]`           | interactive shells, `--` commands, `-e` fallback, boot probe      |
+| `machine create --name --cpus --memory --home-mount`  | `cm --install`, `migrate --out`, `cm --rename --machine`          |
+| `machine set-default` / `machine stop` / `machine rm` | `cm -s` / `-t` / `--unregister`, `distro migrate`, machine rename |
+| `create` (many flags -- see spec.rs `create_args`)    | distro create/set/import                                          |
+| `start` / `stop` / `delete`                           | distro boot/stop/rm/`set`                                         |
+| `exec -i [-t] --user --env --workdir ID cmd...`       | `cm -e` on machines, all distro `run`, `init -u` provisioning     |
+| `list --all --format json`, `inspect`                 | distro enumeration and `distro inspect`                           |
+| `export`                                              | `distro export`                                                   |
+| `image load -i`, `image list --quiet`, `image delete` | `import`, snapshot-image cleanup                                  |
+| `run --rm --entrypoint -v`                            | guest-script unit tests only                                      |
+| `--version`                                           | `cm --version` passthrough                                        |
 
 ## JSON shapes parsed (tier: JSON)
 

@@ -58,22 +58,49 @@ Full reference: doc/cm.md · man pages: `man cm`, `man container-distro`.
 
 ### Manage machines
 
-| Option               | Description                                                                                         |
-| -------------------- | --------------------------------------------------------------------------------------------------- |
-| `-l, --list`         | List machines and distros (`--all`, `--running`, `-q`, `-v`, `-v -v`; `-o`: installable catalog,    |
-|                      | `--cache`: `.wsl` download cache; `--purge-cache` empties it)                                       |
-| `-s, --set-default`  | Set the default machine or distro                                                                   |
-| `-t, --terminate`    | Stop a running machine or distro                                                                    |
-| `--shutdown`         | Stop all running machines and distros (`--system`: also stop services)                              |
-| `--status`           | Show container system status                                                                        |
-| `--unregister`       | Delete a machine or distro and its storage                                                          |
-| `--install [distro]` | Create + boot a distro (`--machine` for a machine; `--name`, `--no-launch`, `--cpus`, `--memory`,   |
-|                      | catalog default (Ubuntu). Names resolve via the catalog (`cm -l -o`, `--catalog FILE` overrides —   |
-|                      | Microsoft's `DistributionInfo.json` schema + `Image`; `.wsl` URL entries download+verify SHA-256),  |
-|                      | image refs pass through (`--from-image` forces), `--from-file` imports a tar/`.wsl` as a distro     |
-|                      | …or a distro with `--distro`, `--share SRC:DST[:ro]`, `--publish [IP:]HOST[:GUEST]`, `--restricted` |
-| `--forward <p[:g]>`  | (experimental) Forward localhost port `p` to port `g` of the machine or distro                      |
-| `--version`          | Show `cm` and `container` versions                                                                  |
+| Option               | Description                                                                      |
+| -------------------- | -------------------------------------------------------------------------------- |
+| `-l, --list`         | List machines and distros (`-v`, `-q`, `--all`, `--running`, `-o`, `--cache`)    |
+| `--purge-cache`      | Empty the `.wsl` download cache                                                  |
+| `-s, --set-default`  | Set the default machine or distro                                                |
+| `-t, --terminate`    | Stop a running machine or distro                                                 |
+| `--shutdown`         | Stop all running machines and distros (`--system`: also stop services)           |
+| `--status`           | Show container system status                                                     |
+| `--unregister`       | Delete a machine or distro and its storage                                       |
+| `--rename OLD NEW`   | Rename a machine or distro                                                       |
+| `--migrate NAME`     | Converge NAME to the selected backend (machine↔distro, adopt pre-journal distro) |
+| `--install [distro]` | Create + boot a distro (bare = the catalog default)                              |
+| `--export NAME FILE` | Write the root filesystem as a tar (`-` = stdout)                                |
+| `--import N [LOC] F` | Register a rootfs tar/tar.gz as a distro (`-` = stdin; LOC ignored)              |
+| `--forward <p[:g]>`  | (experimental) Forward localhost port `p` to port `g` of the machine or distro   |
+| `--version`          | Show `cm` and `container` versions                                               |
+
+Modifiers for `--install`, `--import`, and `--rename`:
+
+| Option              | Description                                                              |
+| ------------------- | ------------------------------------------------------------------------ |
+| `--distro`          | Select the distro backend (default for `--install`/`--import`)           |
+| `--machine`         | Select the machine backend (`--install`/`--import`, name resolution)     |
+| `--force`           | Permit a name already taken in the other backend                         |
+| `--name NAME`       | Name for the `--install` result (default: derived from the source)       |
+| `--no-launch`       | Skip the shell after `--install` (the machine/distro is still booted)    |
+| `--cpus N`          | Virtual CPUs at `--install`                                              |
+| `--memory SIZE`     | Memory at `--install` (e.g. `8G`)                                        |
+| `--home-mount MODE` | `rw` (default), `ro`, or `none` — how `$HOME` is shared at `--install`   |
+| `--share SRC:DST`   | Extra host dir mount for a distro at `--install` (`:ro` optional)        |
+| `--publish SPEC`    | Publish a port from a distro at `--install`                              |
+| `--restricted`      | Semi-trusted defaults preset for a distro at `--install` (not a sandbox) |
+| `--from-image IMG`  | Install from an image ref, skipping catalog name resolution              |
+| `--from-file FILE`  | Install from a rootfs tar/`.wsl` (distro only)                           |
+| `--catalog FILE`    | Substitute a catalog file for `-l -o`/`-l --cache`/`--install`           |
+
+`--install` names resolve through the catalog first (`cm -l -o` lists
+it — Microsoft's `DistributionInfo.json` schema + `Image`; `.wsl`
+entries download and verify SHA-256), and an image reference passes
+through. A name already taken in the other backend is refused unless
+`--force` opts in (see the namespace note below). `-o` lists the
+installable catalog, `--cache` the `.wsl` download cache. `cm --help`
+shows the rest: man-page, completion, and alias installers.
 
 If `container` services aren't running, `cm` runs
 `container system start` first.
@@ -114,25 +141,29 @@ machine:
 
 On top of that:
 
-| Feature                | How                                                                                                                                                                                                                                                      |
-| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Mounts outside `$HOME` | `-v /Volumes/Code:/mnt/code[:ro]`; `--automount` maps each `/Volumes/<X>` to `/mnt/<x>` (skips hidden, `com.apple.*`, and unreadable volumes; resolved once at create -- later-attached volumes need `set --add-volume`, ejected ones `set --rm-volume`) |
-| Published ports        | `-p 3000`, `-p 8080:80`, `-p 0.0.0.0:8080:80/udp` (host IP defaults to `127.0.0.1`)                                                                                                                                                                      |
-| Change settings later  | `container distro set NAME --cpus 4 --add-volume … --publish …` (recreates, keeps the filesystem)                                                                                                                                                        |
-| Export / import        | `container distro export NAME -o f.tar`, `container distro import NAME f.tar[.gz]`                                                                                                                                                                       |
-| Catalog installs       | `container distro catalog list`, `catalog info DISTRO`, `catalog install DISTRO` -- the `cm` catalog's image and verified `.wsl` entries; `catalog cache`/`purge` manage downloads                                                                       |
-| Migrate                | `container distro migrate MACHINE [-n NAME] [--keep]` -- clones the machine's rootfs into a distro (cpus/memory/home-mount/user carry over); `--out DISTRO` is the reverse, into a new `container machine`. The source is removed unless `--keep`        |
-| Exact argv             | `run` uses `container exec`, so arguments are never re-split                                                                                                                                                                                             |
-| Restricted mode        | `--restricted` (`--untrusted`): no mounts, no network, no agent, no sudo -- see below                                                                                                                                                                    |
+| Feature                | How                                                                                                                                                                                                                                                       |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Mounts outside `$HOME` | `-v /Volumes/Code:/mnt/code[:ro]`; `--automount` maps each `/Volumes/<X>` to `/mnt/<x>` (skips hidden, `com.apple.*`, and unreadable volumes; resolved once at create -- later-attached volumes need `set --add-volume`, ejected ones `set --rm-volume`)  |
+| Published ports        | `-p 3000`, `-p 8080:80`, `-p 0.0.0.0:8080:80/udp` (host IP defaults to `127.0.0.1`)                                                                                                                                                                       |
+| Change settings later  | `container distro set NAME --cpus 4 --add-volume … --publish …` (recreates, keeps the filesystem)                                                                                                                                                         |
+| Export / import        | `container distro export NAME -o f.tar`, `container distro import NAME f.tar[.gz]`                                                                                                                                                                        |
+| Catalog installs       | `container distro catalog list`, `catalog info DISTRO`, `catalog install DISTRO` -- the `cm` catalog's image and verified `.wsl` entries; `catalog cache`/`purge` manage downloads                                                                        |
+| Migrate                | `container distro migrate MACHINE [-n NAME] [--keep]` -- clones the machine's rootfs into a distro (cpus/memory/home-mount/user carry over); `--out DISTRO` is the reverse, into a new `container machine`. The source is removed unless `--keep -n NAME` |
+| Rename                 | `container distro rename OLD NEW` -- the journal (spec, disk, assets) moves and a running distro restarts under the new name; `cm --rename` covers machines too (recreate + rootfs clone)                                                                 |
+| Exact argv             | `run` uses `container exec`, so arguments are never re-split                                                                                                                                                                                              |
+| Restricted mode        | `--restricted` (`--untrusted`): no mounts, no network, no agent, no sudo -- see below                                                                                                                                                                     |
 
 `cm` sees distros and machines as one set of WSL distributions:
 `cm -d NAME` resolves a distro first, then a machine. A default distro
 (`cm -s NAME`) wins over the default machine; setting a machine as
 default clears it. A new distro becomes the default when no machine or
-distro is. When the cwd is under a shared path, sessions start at its
-guest path (`/Volumes/Code/x` → `/mnt/code/x`). `cm` links the distro
-library directly, so the plugin install is optional.
-`CM_BACKEND=machine` makes `cm` ignore distros.
+distro is. Since a distro shadows a same-named machine, creating such
+a pair (`--install`, `--import`, `--rename`, `container distro
+create`/`import`/`catalog install`/`migrate`/`rename`) is refused
+unless `--force` opts in. When the cwd is under a shared path,
+sessions start at its guest path (`/Volumes/Code/x` → `/mnt/code/x`).
+`cm` links the distro library directly, so the plugin install is
+optional. `CM_BACKEND=machine` makes `cm` ignore distros.
 
 ```bash
 container distro create -n dev -v /Volumes/Code:/mnt/code -p 3000 alpine:latest

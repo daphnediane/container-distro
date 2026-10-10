@@ -22,6 +22,12 @@ suffixing the ambiguous name with `(machine)` / `(distro)`. The
 default is likewise operational: a default distro wins over the
 default machine, and `cm -s <machine>` clears any default distro.
 
+Because a shared name shadows, **creating** one is refused:
+`--install`, `--import`, and `--rename` bail when the name is taken in
+the other backend, as do `container distro create`/`import`/
+`catalog install`/`migrate`/`rename`. `--force` permits the collision
+deliberately (and still warns).
+
 Distros are the default: `cm --install` and `cm --import` build them
 unless `--machine` is given. `container distro create` makes them
 directly. See container-distro.md.
@@ -104,19 +110,27 @@ materializes a fresh one (see [container-distro.md]).
 
 ## Managing
 
-| Option                | Description                                                          |
-| --------------------- | -------------------------------------------------------------------- |
-| `-s, --set-default`   | Set the default distro or machine                                    |
-| `-t, --terminate`     | Stop a running distro or machine                                     |
-| `--shutdown`          | Stop all running machines and distros; services stay up              |
-| `--shutdown --system` | Also `container system stop` (stops *all* containers, not just ours) |
-| `--status`            | `container system status`                                            |
-| `--unregister`        | Delete a distro or machine and its storage                           |
-| `--migrate NAME`      | Make NAME an instance of the selected backend (see below)            |
-| `--version`           | Print `cm` and `container` versions                                  |
+| Option                | Description                                                           |
+| --------------------- | --------------------------------------------------------------------- |
+| `-s, --set-default`   | Set the default distro or machine                                     |
+| `-t, --terminate`     | Stop a running distro or machine                                      |
+| `--shutdown`          | Stop all running machines and distros; services stay up               |
+| `--shutdown --system` | Also `container system stop` (stops *all* containers, not just ours)  |
+| `--status`            | `container system status`                                             |
+| `--unregister`        | Delete a distro or machine and its storage                            |
+| `--rename OLD NEW`    | Rename a machine or distro; `--machine`/`--distro` selects on a clash |
+| `--migrate NAME`      | Make NAME an instance of the selected backend (see below)             |
+| `--version`           | Print `cm` and `container` versions                                   |
 
 `--unregister` and `-t` resolve distros first, like `-d` -- so they act
 on a distro when a same-named machine exists.
+
+`--rename OLD NEW` moves a distro's journal (spec, disk, init assets)
+to the new name and restarts it under it; a machine is recreated
+(`container machine` has no rename) with its rootfs cloned across,
+boot-verified, and the old machine removed -- a default machine or
+distro keeps its default. `NEW` must be free in both backends unless
+`--force` opts into the shadow.
 
 `--migrate` converges NAME onto the selected backend: a machine
 becomes a distro (carrying its rootfs; the machine is removed), a
@@ -130,7 +144,7 @@ way: the distro's disk carries into a new `container machine`.
 ```text
 cm --install [DISTRO|IMAGE] [--name NAME] [--no-launch]
                   [--cpus N] [--memory SIZE] [--home-mount rw|ro|none]
-                  [--machine] [--restricted]
+                  [--machine] [--restricted] [--force]
                   [--share SRC:DST[:ro]]... [--publish SPEC]...
 cm --install --from-image IMAGE ...
 cm --install --from-file ROOTFS.tar|.wsl ...

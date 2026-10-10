@@ -63,6 +63,16 @@ any of them.
   `machine run` races the boot and fails every time; create's internal
   boot absorbs it) plus a retrying `run -- true` boot probe; `--distro`
   → `distro import` instead
+- `--rename OLD NEW` → distro: `ops::rename` (journal dir + spec.name
+  move, converge/re-materialize; default marker follows). Machine:
+  `ops::rename_machine` — recreate under the new name (image + cpus/
+  memory/home-mount from `machine inspect`), clone `rootfs.ext4` over
+  its plugin-state disk (sibling temp + rename), boot-probe, remove
+  the old machine, re-point default. `container machine` has no native
+  rename — the machine id is its bundle dir
+- `--force` (with `--install`/`--import`/`--rename`) permits a name
+  taken in the other backend — otherwise refused, since `cm` resolves
+  a shared name to the distro
 
 Before any machine operation `cm` runs `container system start` if
 services are down.
@@ -117,8 +127,10 @@ the machine's cpus/memory/home-mount/user. `migrate --out DISTRO` is
 the reverse: it `machine create`s from the distro's image (the internal
 boot materializes the plugin-state disk — never `--no-boot`), stops it,
 and clonefile-copies the distro's `rootfs.ext4` over the machine's via
-a sibling temp + rename, then boot-probes. `--keep` retains the source;
-`-n` renames the target. `--out` rejects `create` options `machine
+a sibling temp + rename, then boot-probes. `--keep` retains the source
+(and requires `-n NAME` — a kept source holds its name, so the result
+must take another); `-n` renames the target. `--out` rejects `create`
+options `machine
 create` can't honor (only cpus/memory/home-mount/no-boot/set-default
 apply).
 
@@ -138,7 +150,12 @@ machine; `-l` merges both — same-named pairs stay as two rows annotated
 `(machine)`/`(distro)` (KIND column at `-v -v`); shadowing applies only
 to operational resolution; `--install --distro`
 / `--share` / `--publish` create distros. `CM_BACKEND=machine` disables
-distros.
+distros. Creating a shared name is refused everywhere —
+`ops::bail_machine_shadow` (create/import/catalog install/migrate-in/
+distro rename targets) and `ops::bail_distro_shadow` (`import_machine`,
+`migrate --out`, `rename_machine`, `cm --install --machine`) — unless
+`--force` opts in (`CreateOptions.force`; it warns anyway). `migrate
+--keep` requires `-n NAME` for the same reason.
 
 ## Host filesystem (machines)
 

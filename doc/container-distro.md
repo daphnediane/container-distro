@@ -67,6 +67,15 @@ from the image.
 | `--restricted`         | Defaults preset: `--home-mount none --network none --no-ssh --no-sudo` (alias `--untrusted`)                               |
 | `--no-boot`            | Create without booting                                                                                                     |
 | `--set-default`        | Make this the default distro (automatic when nothing is)                                                                   |
+| `--force`              | Allow the name of an existing `container machine` — see below                                                              |
+
+Creating a distro named after an existing `container machine` is
+**refused** without `--force`: `cm` resolves a shared name to the
+distro, silently shadowing the machine everywhere `cm` operates. The
+same refusal applies to `import`, `catalog install`, `migrate`, and
+`rename` — and in reverse to `cm --install --machine` /
+`cm --import --machine` when a distro holds the name. `--force` makes
+the collision deliberate (it still warns).
 
 `--automount` is live, not create-once: the `/Volumes` scan reruns on
 `set` and whenever a stopped distro starts, so attaching a volume adds
@@ -226,12 +235,28 @@ distribution package works too (it's a rootfs tar; its
 options including `--restricted`. Importing an image is trusting it
 with your identity -- see security.md.
 
+### `rename OLD NEW [--force]`
+
+Rename a distro: the journal — `spec.json`, `rootfs.ext4`, and
+`sbin.distro/` — moves to `NEW`, the default marker follows, and a
+running distro restarts under the new name. The runtime container is
+never renamed; it's dismantled before the move and materialized fresh
+after, so nothing `container`-side ever carries the old name. `NEW`
+must be free of distros, staged state, and — unless `--force` —
+machines (the same shadow rule `create` enforces). An imported
+distro's `local/distro-OLD` snapshot image keeps its name and labels,
+so `rm` won't remove it automatically afterward.
+
 ### `migrate [--in] MACHINE | --out DISTRO [-n NAME] [--keep] [OPTIONS]`
 
 Migrate between a `container machine` and a distro without an
 export/import round-trip: the source's `rootfs.ext4` is cloned onto the
 target — the journaled disk going in, written over the new machine's
-plugin-state disk going out. The source is removed unless `--keep`.
+plugin-state disk going out. The source is removed unless `--keep`;
+`--keep` requires `-n NAME`, since a kept source holds its name and a
+result sharing it would shadow it for `cm` (`--force` permits even
+that, deliberately). Any target name that's taken in the other
+namespace is refused unless `--force`.
 
 `--in` (the default) turns a machine into a distro carrying the
 machine's cpus/memory/home-mount/user; it accepts `create` options as
