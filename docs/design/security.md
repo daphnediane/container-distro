@@ -9,8 +9,12 @@ on purpose rather than by inertia.
 ## Threat model
 
 `cm` and `container-distro` are local, single-host developer tools.
-Everything runs as the invoking user; there is no remote surface, no
-setuid, and no daemon of ours (`container`'s services are upstream's).
+Everything runs as the invoking user; nothing listens on the network
+unless you publish a port (`cm --forward` binds loopback only, and a
+non-loopback `--publish` warns but is honored), there is no setuid,
+and no daemon of ours (`container`'s services are upstream's).
+Outbound fetches do happen on your behalf: OCI image pulls, catalog
+`.wsl` downloads, and the optional `container` installer.
 Guests are lightweight VMs via Apple Containerization, so the VM
 boundary does real work -- but virtiofs shares, published ports, and the
 forwarded SSH agent are deliberate holes punched through it.
