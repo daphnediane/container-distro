@@ -21,7 +21,7 @@ use std::process::{ExitCode, ExitStatus, Stdio};
 use anyhow::{Context, Result, bail};
 use backend::Target;
 use clap::{CommandFactory, Parser};
-use cli::{Action, Args, InstallOpts, InstallSource, ShellType};
+use cli::{Action, Args, Backend, InstallOpts, InstallSource, ShellType};
 use container_distro::container::{self, ArgvMode};
 use container_distro::forward::PortMapping;
 use container_distro::ops::{self as distro, CreateOptions, RunOpts};
@@ -40,6 +40,7 @@ fn main() -> ExitCode {
 }
 
 fn run(args: Args) -> Result<ExitCode> {
+    let sel = args.backend();
     match args.action()? {
         Action::Version => version(),
         Action::InstallMan(dir) => install_man(dir),
@@ -66,18 +67,19 @@ fn run(args: Args) -> Result<ExitCode> {
             );
             Ok(ExitCode::SUCCESS)
         }
-        Action::SetDefault(m) => set_default(&m),
-        Action::Terminate(m) => terminate(&m),
-        Action::Unregister(m) => unregister(&m),
+        Action::SetDefault(m) => set_default(&m, sel),
+        Action::Terminate(m) => terminate(&m, sel),
+        Action::Unregister(m) => unregister(&m, sel),
+        Action::Migrate(m) => migrate(&m, sel),
         Action::Install(opts) => install(&opts),
-        Action::Export { name, file } => export(&name, &file),
+        Action::Export { name, file } => export(&name, &file, sel),
         Action::Import {
             name,
             install_location,
             file,
-            distro,
-        } => import(&name, install_location.as_deref(), &file, distro),
-        Action::Forward { machine, mappings } => forward(machine.as_deref(), &mappings),
+            backend,
+        } => import(&name, install_location.as_deref(), &file, backend),
+        Action::Forward { machine, mappings } => forward(machine.as_deref(), &mappings, sel),
         Action::Run => run_in_target(&args),
     }
 }
@@ -98,17 +100,17 @@ fn exit_code(status: ExitStatus) -> ExitCode {
 /// Resolve `-d` (or the default), starting services first. Names are
 /// validated before they're passed to any `container` subcommand so a
 /// flag-shaped value can't smuggle options into the inner CLI.
-fn target(name: Option<&str>) -> Result<Target> {
+fn target(name: Option<&str>, sel: Backend) -> Result<Target> {
     if let Some(n) = name {
         container::validate_name(n)?;
     }
     container::ensure_started()?;
-    backend::resolve(name)
+    backend::resolve(name, sel)
 }
 
 /// Resolve a name that must exist as a machine or a distro.
-fn named_target(name: &str) -> Result<Target> {
-    target(Some(name))
+fn named_target(name: &str, sel: Backend) -> Result<Target> {
+    target(Some(name), sel)
 }
 
 /// Replace this process with the machine's or distro's command, for TTY
@@ -117,7 +119,7 @@ fn run_in_target(args: &Args) -> Result<ExitCode> {
     if let Some(u) = args.user.as_deref() {
         container::validate_user(u)?;
     }
-    match target(args.distribution.as_deref())? {
+    match target(args.distribution.as_deref(), args.backend())? {
         Target::Machine(m) => run_in_machine(args, m.as_deref()),
         Target::Distro(d) => run_in_distro(args, d),
     }
@@ -338,14 +340,8 @@ impl OnlineProbe {
                 instances.insert(m.id.clone(), (m.is_running(), image));
             }
             if backend::distros_enabled() {
-                for c in distro::distros().unwrap_or_default() {
-                    instances.insert(
-                        c.id().to_string(),
-                        (
-                            c.is_running(),
-                            c.configuration.image.as_ref().map(|i| i.reference.clone()),
-                        ),
-                    );
+                for s in distro::summaries(false).unwrap_or_default() {
+                    instances.insert(s.id.clone(), (s.is_running(), s.image.clone()));
                 }
             }
         }
@@ -488,8 +484,8 @@ fn list_cache(catalog_file: Option<&std::path::Path>) -> Result<ExitCode> {
 
 /// WSL `-s`: a distro becomes the default; a machine becomes the default
 /// and any default distro is cleared so the machine takes effect.
-fn set_default(name: &str) -> Result<ExitCode> {
-    match named_target(name)? {
+fn set_default(name: &str, sel: Backend) -> Result<ExitCode> {
+    match named_target(name, sel)? {
         Target::Distro(d) => {
             distro::set_default(Some(&d))?;
             Ok(ExitCode::SUCCESS)
@@ -504,8 +500,8 @@ fn set_default(name: &str) -> Result<ExitCode> {
     }
 }
 
-fn terminate(name: &str) -> Result<ExitCode> {
-    match named_target(name)? {
+fn terminate(name: &str, sel: Backend) -> Result<ExitCode> {
+    match named_target(name, sel)? {
         Target::Distro(d) => {
             distro::stop(&[d])?;
             Ok(ExitCode::SUCCESS)
@@ -514,14 +510,31 @@ fn terminate(name: &str) -> Result<ExitCode> {
     }
 }
 
-fn unregister(name: &str) -> Result<ExitCode> {
-    match named_target(name)? {
+fn unregister(name: &str, sel: Backend) -> Result<ExitCode> {
+    match named_target(name, sel)? {
         Target::Distro(d) => {
             distro::delete(true, &[d])?;
             Ok(ExitCode::SUCCESS)
         }
         Target::Machine(_) => passthru(&["machine", "rm", name]),
     }
+}
+
+/// `cm --migrate NAME`: converge NAME to the selected backend — a
+/// machine migrates in, a pre-journal distro is adopted, a journaled
+/// distro is already home. With `--machine`, a distro migrates out.
+fn migrate(name: &str, sel: Backend) -> Result<ExitCode> {
+    container::validate_name(name)?;
+    if sel != Backend::Machine && !backend::distros_enabled() {
+        bail!("distros are disabled (CM_BACKEND=machine) — nothing to migrate to");
+    }
+    let opts = CreateOptions::default();
+    let msg = match sel {
+        Backend::Machine => distro::migrate_to_machine(name, None, false, &opts)?,
+        _ => distro::migrate(name, None, false, &opts)?,
+    };
+    println!("{msg}");
+    Ok(ExitCode::SUCCESS)
 }
 
 /// WSL `--shutdown`: stop every running machine and distro. Services stay
@@ -605,7 +618,7 @@ fn resolve(cat: &catalog::Catalog, source: &InstallSource) -> Result<Resolved> {
     }
 }
 
-/// WSL `--install`: create a machine (or, with distro options, a distro)
+/// WSL `--install`: create a distro (or, with `--machine`, a machine)
 /// from an image, then open a shell in it.
 fn install(opts: &InstallOpts) -> Result<ExitCode> {
     container::ensure_started()?;
@@ -625,6 +638,13 @@ fn install(opts: &InstallOpts) -> Result<ExitCode> {
     let image = match resolve(&cat, &opts.source)? {
         Resolved::Image(i) => i,
         Resolved::Wsl { url, sha256, name } => {
+            // Machines boot from images — a catalog entry that only
+            // ships a rootfs download can't satisfy `--machine`.
+            if opts.machine {
+                bail!(
+                    "`{name}` ships as a rootfs archive, which only distros boot (drop --machine)"
+                );
+            }
             // `fetched` holds a shared lock on the cache entry — purge
             // and prune wait for the import below instead of deleting
             // the file mid-flight.
@@ -646,9 +666,9 @@ fn install(opts: &InstallOpts) -> Result<ExitCode> {
         .clone()
         .unwrap_or_else(|| container::default_machine_name(&image));
     container::validate_name(&name)?;
-    if opts.wants_distro() {
+    if !opts.wants_machine() {
         if !backend::distros_enabled() {
-            bail!("distro options need distro support (unset CM_BACKEND=machine)");
+            bail!("a distro install needs distro support (unset CM_BACKEND=machine)");
         }
         let name = distro::create(Some(name), &create, &image)?;
         if opts.no_launch {
@@ -730,31 +750,34 @@ fn install_from_file(
 /// machines through the scratch-container workaround (`container
 /// export` can't snapshot a machine's plugin-state rootfs — see
 /// doc/gaps/export-import.md). FILE `-` writes the tar to stdout.
-fn export(name: &str, file: &str) -> Result<ExitCode> {
+fn export(name: &str, file: &str, sel: Backend) -> Result<ExitCode> {
     let output = (file != "-").then_some(Path::new(file));
-    match named_target(name)? {
+    match named_target(name, sel)? {
         Target::Distro(d) => distro::export(&d, output)?,
         Target::Machine(_) => distro::export_machine(name, output)?,
     }
     Ok(ExitCode::SUCCESS)
 }
 
-/// WSL `--import`: wrap the rootfs tar as an OCI image, load it, and
-/// create a machine — or, with `--distro`, import it as a distro.
+/// WSL `--import`: wrap a rootfs tar as an OCI image and create a
+/// machine — or, with `--distro`, import it as a distro. (The
+/// distro-default flip lands separately.)
 fn import(
     name: &str,
     install_location: Option<&str>,
     file: &str,
-    as_distro: bool,
+    sel: Backend,
 ) -> Result<ExitCode> {
     container::validate_name(name)?;
     if let Some(loc) = install_location.filter(|l| !l.is_empty() && *l != "-") {
         eprintln!("cm: ignoring install location `{loc}` — storage is managed by `container`");
     }
     let file = Path::new(file);
-    if as_distro {
+    if sel != Backend::Distro {
+        distro::import_machine(name, file)?;
+    } else {
         if !backend::distros_enabled() {
-            bail!("--distro needs distro support (unset CM_BACKEND=machine)");
+            bail!("a distro import needs distro support (unset CM_BACKEND=machine)");
         }
         container::ensure_started()?;
         // The new distro would shadow a same-named machine for `cm` —
@@ -768,8 +791,6 @@ fn import(
             &CreateOptions::default(),
             distro::ImportSource::Local,
         )?;
-    } else {
-        distro::import_machine(name, file)?;
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -839,8 +860,8 @@ fn parse_ip(addr: Option<&str>, id: &str) -> Result<IpAddr> {
 }
 
 /// Forward localhost ports to a machine's or distro's IP.
-fn forward(name: Option<&str>, mappings: &[PortMapping]) -> Result<ExitCode> {
-    let (id, ip) = match target(name)? {
+fn forward(name: Option<&str>, mappings: &[PortMapping], sel: Backend) -> Result<ExitCode> {
+    let (id, ip) = match target(name, sel)? {
         Target::Machine(m) => machine_ip(m.as_deref())?,
         Target::Distro(d) => distro_ip(&d)?,
     };

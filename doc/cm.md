@@ -20,9 +20,18 @@ exists as both shadows the machine (and `cm -l` warns). The default is
 likewise: a default distro wins over the default machine, and
 `cm -s <machine>` clears any default distro.
 
-Distros are created by `cm --install --distro` (implied by `--share`,
-`--publish`, or `--restricted`) or by `container distro create`. See
-container-distro.md.
+`cm --install` and `cm --import` default to `container machine` —
+`--distro` opts into a distro. `container distro create` makes them
+directly. See container-distro.md.
+
+`--distro` and `--machine` are backend selectors, not just creation
+flags: they apply anywhere `cm` resolves a distro-or-machine name
+(`-d`, `-t`, `-s`, `--unregister`, `--export`, `--forward`,
+`--install`, `--import`, `--migrate`). Bare `cm --distro` targets the
+default distro, `cm --machine` the default machine; an explicit
+selector never falls through to the other kind — `-d x --distro` on a
+machine-only name is an error, and `-d x --machine` picks the machine
+even when a same-named distro exists.
 
 `CM_BACKEND=machine` makes `cm` ignore distros entirely.
 
@@ -87,9 +96,9 @@ guest's very first write; see [gaps/exec-stdio].
 | `-l --cache`       | The `.wsl` download cache: SHA-256, size, catalog entry, and the image it loaded   |
 | `--purge-cache`    | Empty the `.wsl` download cache                                                    |
 
-Listing covers both kinds; an `interrupted`/`recreating` distro row
-means a `distro set` was cut off mid-recreate -- see
-[container-distro.md].
+Listing covers both kinds. A stopped distro is just its journal — the
+row has no CREATED time because there is no container; starting
+materializes a fresh one (see [container-distro.md]).
 
 ## Managing
 
@@ -101,17 +110,25 @@ means a `distro set` was cut off mid-recreate -- see
 | `--shutdown --system` | Also `container system stop` (stops *all* containers, not just ours) |
 | `--status`            | `container system status`                                            |
 | `--unregister`        | Delete a distro or machine and its storage                           |
+| `--migrate NAME`      | Make NAME an instance of the selected backend (see below)            |
 | `--version`           | Print `cm` and `container` versions                                  |
 
 `--unregister` and `-t` resolve distros first, like `-d` -- so they act
 on a distro when a same-named machine exists.
+
+`--migrate` converges NAME onto the selected backend: a machine
+becomes a distro (carrying its rootfs; the machine is removed), a
+pre-journal distro container is adopted -- its live config becomes the
+journal, the only opt-in past the one-time migration -- and a journaled
+distro is already home. `cm --migrate --machine NAME` goes the other
+way: the distro's disk carries into a new `container machine`.
 
 ## Installing (`--install`)
 
 ```text
 cm --install [DISTRO|IMAGE] [--name NAME] [--no-launch]
                   [--cpus N] [--memory SIZE] [--home-mount rw|ro|none]
-                  [--distro] [--restricted]
+                  [--machine] [--restricted]
                   [--share SRC:DST[:ro]]... [--publish SPEC]...
 cm --install --from-image IMAGE ...
 cm --install --from-file ROOTFS.tar|.wsl ...
@@ -168,36 +185,36 @@ the listing.
 
 `--from-file` imports a local rootfs tar or a `.wsl` distribution
 package (WSL 2.4.4+ tar format) as a **distro** — machines can't boot a
-bare rootfs, so it implies `--distro`. The name comes from `--name`,
-then the package's `etc/wsl-distribution.conf` `oobe.defaultName`, then
-the file stem. Other manifest keys are ignored: distros provision the
-host user rather than honoring `oobe.defaultUid`, and `oobe.command`
-never runs (security.md T4).
+bare rootfs, so it's rejected with `--machine`. The name comes from
+`--name`, then the package's `etc/wsl-distribution.conf`
+`oobe.defaultName`, then the file stem. Other manifest keys are
+ignored: distros provision the host user rather than honoring
+`oobe.defaultUid`, and `oobe.command` never runs (security.md T4).
 
-Without distro options, `--install` runs `container machine create` then
-opens a shell in the new machine (`--no-launch` skips the shell). With
-`--distro` -- or implied by
-`--share`/`--publish`/`--restricted`/`--from-file` -- it creates a
-distro instead; those options have no machine equivalent.
-`--restricted` (alias `--untrusted`) is a defaults preset for
-semi-trusted images: no home share, no network, no SSH-agent forward,
-no sudo -- explicit flags still apply, and it is *not* a sandbox (see
-security.md).
+`--install` creates a **distro** (`container distro create`), then
+opens a shell in it (`--no-launch` skips the shell). `--machine` runs
+`container machine create` instead — for WSL-parity testing and
+upstream comparisons — and is rejected alongside the distro-only
+options `--share`/`--publish`/`--restricted`/`--from-file`, which have
+no machine equivalent. `--restricted` (alias `--untrusted`) is a
+defaults preset for semi-trusted images: no home share, no network, no
+SSH-agent forward, no sudo -- explicit flags still apply, and it is
+*not* a sandbox (see security.md).
 
 ## Exporting and importing
 
-| Option                     | Description                                                                              |
-| -------------------------- | ---------------------------------------------------------------------------------------- |
-| `--export NAME FILE`       | Write the distro's or machine's root filesystem as a tar (`-` = stdout)                  |
-| `--import NAME [LOC] FILE` | Register a rootfs `tar`/`tar.gz` as a machine (`-` = stdin; `--distro` imports a distro) |
+| Option                     | Description                                                                               |
+| -------------------------- | ----------------------------------------------------------------------------------------- |
+| `--export NAME FILE`       | Write the distro's or machine's root filesystem as a tar (`-` = stdout)                   |
+| `--import NAME [LOC] FILE` | Register a rootfs `tar`/`tar.gz` as a distro (`-` = stdin; `--machine` imports a machine) |
 
 `--export` briefly stops a running machine while its filesystem is
 snapshotted, then restarts it -- `container export` can't read a
 machine's rootfs directly, so `cm` exports a clone (see
 [gaps/export-import]).
 
-`--import` registers the tar as a machine -- or as a distro with
-`--distro` (`container distro import`). `LOC` is WSL's
+`--import` registers the tar as a distro (`container distro import`) --
+or as a machine with `--machine`. `LOC` is WSL's
 install-location argument: accepted for compatibility and ignored,
 since storage is managed by `container`; the two-value form
 `--import NAME FILE` omits it. Names are lowercase DNS-style, as

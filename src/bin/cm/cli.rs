@@ -45,24 +45,47 @@ pub struct InstallOpts {
     pub cpus: Option<u32>,
     pub memory: Option<String>,
     pub home_mount: Option<HomeMount>,
-    /// Create a `container distro` instead of a machine.
+    /// `--distro`/`--machine` selectors — the install/import default
+    /// flip lands separately; for now a distro still requires opt-in.
+    /// Distro-only options (`--restricted`, `--from-file`, `--share`,
+    /// `--publish`) are rejected alongside `--machine` at parse time.
     pub distro: bool,
-    /// Restricted defaults (no mounts, network, agent, sudo). Implies
-    /// `--distro` — machines can't be restricted.
+    /// Create a `container machine` instead of a distro.
+    pub machine: bool,
+    /// Restricted defaults (no mounts, network, agent, sudo). Distro-only
+    /// — machines can't be restricted.
     pub restricted: bool,
     pub shares: Vec<MountSpec>,
     pub publish: Vec<PublishSpec>,
 }
 
 impl InstallOpts {
-    /// `--distro`, or any distro-only option, selects a distro.
-    pub fn wants_distro(&self) -> bool {
-        self.distro
+    /// `--machine` opts out of the distro default.
+    /// A machine unless a distro is opted into — `--distro` or any
+    /// distro-only option. (`--machine` can't coexist with them, so it
+    /// needn't appear here.) The distro-default flip lands separately.
+    pub fn wants_machine(&self) -> bool {
+        !(self.distro
             || self.restricted
             || matches!(self.source, InstallSource::File(_))
             || !self.shares.is_empty()
-            || !self.publish.is_empty()
+            || !self.publish.is_empty())
     }
+}
+
+/// Which backend a name or a creator resolves to — `--distro`/`--machine`
+/// are selectors, not creators: they apply anywhere `cm` resolves a
+/// distro-or-machine name.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Backend {
+    /// Distro-first: a distro shadows a same-named machine, and the
+    /// default distro beats the default machine.
+    #[default]
+    Auto,
+    /// `--distro`: require a distro — a name that isn't one is an error.
+    Distro,
+    /// `--machine`: require a machine — even a same-named distro loses.
+    Machine,
 }
 
 /// Which shell flavor to start for an interactive session.
@@ -198,6 +221,12 @@ pub struct Args {
     #[arg(long = "unregister", value_name = "MACHINE")]
     pub unregister: Option<String>,
 
+    /// Make NAME an instance of the selected backend: a machine becomes
+    /// a distro (or vice versa with --machine), a pre-journal distro is
+    /// adopted — its live config becomes the journal
+    #[arg(long = "migrate", value_name = "NAME")]
+    pub migrate: Option<String>,
+
     /// Create a machine from a catalog name or container image and boot
     /// it (`cm -l -o` lists the catalog); bare installs the default
     /// distribution
@@ -244,14 +273,20 @@ pub struct Args {
     )]
     pub home_mount: Option<HomeMount>,
 
-    /// Create a distro (`container distro`) instead of a machine with
-    /// --install; with --import, import as a distro instead of a machine
-    #[arg(long = "distro")]
+    /// Select a distro (`container distro`): the target for -d and the
+    /// default, and the kind created by --install/--import — though
+    /// those default to distros already
+    #[arg(long = "distro", conflicts_with = "machine")]
     pub distro: bool,
 
+    /// Select a machine (`container machine`): the target for -d and the
+    /// default, and the kind created by --install/--import
+    #[arg(long = "machine")]
+    pub machine: bool,
+
     /// Restricted defaults for a distro created by --install: no home or
-    /// extra mounts, no network, no SSH agent, no sudo/doas (implies
-    /// --distro). A convenience preset, not a sandbox.
+    /// extra mounts, no network, no SSH agent, no sudo/doas. A
+    /// convenience preset, not a sandbox.
     #[arg(long = "restricted", visible_alias = "untrusted", requires = "install")]
     pub restricted: bool,
 
@@ -362,18 +397,21 @@ pub enum Action {
     Terminate(String),
     /// `container machine rm`.
     Unregister(String),
+    /// `container distro migrate` — converge NAME to the selected
+    /// backend (machine↔distro, or adopt a pre-journal distro).
+    Migrate(String),
     /// `container machine create`, then optionally open a shell.
     Install(InstallOpts),
     /// `container export` for a distro; the scratch-container workaround
     /// for a machine. `file` is `-` for stdout.
     Export { name: String, file: String },
-    /// `machine create` from an OCI-wrapped rootfs tar — or `distro
-    /// import` with `--distro`.
+    /// `distro import` — or `machine create` from an OCI-wrapped rootfs
+    /// tar with `--machine`.
     Import {
         name: String,
         install_location: Option<String>,
         file: String,
-        distro: bool,
+        backend: Backend,
     },
     /// Forward localhost ports to a machine.
     Forward {
@@ -407,9 +445,16 @@ impl Args {
         {
             bail!("--catalog only applies to --install and --list --online/--cache");
         }
-        // `--distro` selects the distro backend for both creators.
-        if self.distro && self.install.is_none() && self.import.is_none() {
-            bail!("--distro only applies to --install and --import");
+        // `--machine` can't satisfy distro-only install options.
+        if self.machine
+            && (self.restricted
+                || self.from_file.is_some()
+                || !self.shares.is_empty()
+                || !self.publish.is_empty())
+        {
+            bail!(
+                "--restricted, --from-file, --share, and --publish need a distro (drop --machine)"
+            );
         }
         let action = if self.version {
             Action::Version
@@ -433,6 +478,8 @@ impl Args {
             Action::Terminate(m.clone())
         } else if let Some(m) = &self.unregister {
             Action::Unregister(m.clone())
+        } else if let Some(m) = &self.migrate {
+            Action::Migrate(m.clone())
         } else if let Some(i) = &self.install {
             let sources = self.from_file.is_some() as u8
                 + self.from_image.is_some() as u8
@@ -458,6 +505,7 @@ impl Args {
                 memory: self.memory.clone(),
                 home_mount: self.home_mount,
                 distro: self.distro,
+                machine: self.machine,
                 restricted: self.restricted,
                 shares: self.shares.clone(),
                 publish: self.publish.clone(),
@@ -474,7 +522,7 @@ impl Args {
                 name: i[0].clone(),
                 install_location: (i.len() == 3).then(|| i[1].clone()),
                 file: i.last().unwrap().clone(),
-                distro: self.distro,
+                backend: self.backend(),
             }
         } else if !self.forward.is_empty() {
             let action = Action::Forward {
@@ -482,6 +530,7 @@ impl Args {
                 mappings: self.forward.clone(),
             };
             self.check_no_run_args_except_distribution()?;
+            self.check_selector(&action)?;
             return Ok(action);
         } else if self.shutdown {
             Action::Shutdown {
@@ -502,7 +551,41 @@ impl Args {
             return self.validate_run();
         };
         self.check_no_run_args()?;
+        self.check_selector(&action)?;
         Ok(action)
+    }
+
+    /// The `--distro`/`--machine` selector the arguments ask for.
+    pub fn backend(&self) -> Backend {
+        if self.machine {
+            Backend::Machine
+        } else if self.distro {
+            Backend::Distro
+        } else {
+            Backend::Auto
+        }
+    }
+
+    /// `--distro`/`--machine` select a backend — meaningful only where
+    /// a distro-or-machine name is resolved or a kind is created.
+    fn check_selector(&self, action: &Action) -> Result<()> {
+        if self.backend() != Backend::Auto
+            && !matches!(
+                action,
+                Action::Run
+                    | Action::Forward { .. }
+                    | Action::Export { .. }
+                    | Action::Import { .. }
+                    | Action::Install(_)
+                    | Action::SetDefault(_)
+                    | Action::Terminate(_)
+                    | Action::Unregister(_)
+                    | Action::Migrate(_)
+            )
+        {
+            bail!("--distro/--machine only apply to actions that name a machine or distro");
+        }
+        Ok(())
     }
 
     fn check_no_run_args(&self) -> Result<()> {
@@ -682,6 +765,7 @@ mod tests {
                 memory: None,
                 home_mount: None,
                 distro: false,
+                machine: false,
                 restricted: false,
                 shares: vec![],
                 publish: vec![],
@@ -696,7 +780,7 @@ mod tests {
             panic!("expected install");
         };
         assert_eq!(opts.source, InstallSource::Default);
-        assert!(!opts.wants_distro());
+        assert!(opts.wants_machine());
     }
 
     #[test]
@@ -706,7 +790,7 @@ mod tests {
             panic!("expected install");
         };
         assert_eq!(opts.source, InstallSource::Image("ghcr.io/x/y:1".into()));
-        assert!(!opts.wants_distro());
+        assert!(opts.wants_machine());
 
         let args = parse(&["cm", "--install", "--from-file", "rocky-9.wsl"]).unwrap();
         let Action::Install(opts) = args.action().unwrap() else {
@@ -716,7 +800,7 @@ mod tests {
             opts.source,
             InstallSource::File(PathBuf::from("rocky-9.wsl"))
         );
-        assert!(opts.wants_distro());
+        assert!(!opts.wants_machine());
 
         // At most one source per --install.
         for extra in [
@@ -822,7 +906,7 @@ mod tests {
         assert_eq!(opts.cpus, Some(2));
         assert_eq!(opts.memory.as_deref(), Some("4G"));
         assert_eq!(opts.home_mount, Some(HomeMount::Ro));
-        assert!(!opts.wants_distro());
+        assert!(opts.wants_machine());
         assert!(parse(&["cm", "--cpus", "2"]).is_err());
     }
 
@@ -865,18 +949,18 @@ mod tests {
         let Action::Install(opts) = args.action().unwrap() else {
             panic!("expected install");
         };
-        assert!(opts.wants_distro());
+        assert!(!opts.wants_machine());
         let args = parse(&["cm", "--install", "alpine", "--distro"]).unwrap();
         let Action::Install(opts) = args.action().unwrap() else {
             panic!("expected install");
         };
-        assert!(opts.wants_distro());
+        assert!(!opts.wants_machine());
         for flag in ["--restricted", "--untrusted"] {
             let args = parse(&["cm", "--install", "alpine", flag]).unwrap();
             let Action::Install(opts) = args.action().unwrap() else {
                 panic!("expected install");
             };
-            assert!(opts.restricted && opts.wants_distro(), "{flag}");
+            assert!(opts.restricted && !opts.wants_machine(), "{flag}");
         }
         assert!(parse(&["cm", "--publish", "8080"]).is_err());
         assert!(parse(&["cm", "--restricted"]).is_err());
@@ -930,7 +1014,7 @@ mod tests {
                 name: "u1".into(),
                 install_location: Some("C:\\wsl".into()),
                 file: "in.tar".into(),
-                distro: false,
+                backend: Backend::Auto,
             }
         );
         // Two values omit the ignored location.
@@ -941,10 +1025,11 @@ mod tests {
                 name: "u1".into(),
                 install_location: None,
                 file: "in.tar".into(),
-                distro: false,
+                backend: Backend::Auto,
             }
         );
-        // `--distro` selects the distro import; `-` means stdin.
+        // `--distro` selects the distro import (the default anyway); `-`
+        // means stdin.
         let args = parse(&["cm", "--import", "u1", "-", "--distro"]).unwrap();
         assert_eq!(
             args.action().unwrap(),
@@ -952,16 +1037,81 @@ mod tests {
                 name: "u1".into(),
                 install_location: None,
                 file: "-".into(),
-                distro: true,
+                backend: Backend::Distro,
+            }
+        );
+        // `--machine` selects the machine import.
+        let args = parse(&["cm", "--import", "u1", "in.tar", "--machine"]).unwrap();
+        assert_eq!(
+            args.action().unwrap(),
+            Action::Import {
+                name: "u1".into(),
+                install_location: None,
+                file: "in.tar".into(),
+                backend: Backend::Machine,
             }
         );
         assert!(parse(&["cm", "--import", "u1"]).is_err());
         let args = parse(&["cm", "--import", "u1", "loc", "f", "-u", "root"]).unwrap();
         assert!(args.action().is_err());
-        // `--distro` without a creator is meaningless.
-        let args = parse(&["cm", "--distro"]).unwrap();
-        assert!(args.action().is_err());
-        let args = parse(&["cm", "-l", "--distro"]).unwrap();
-        assert!(args.action().is_err());
+    }
+
+    #[test]
+    fn selectors_apply_to_name_resolving_actions() {
+        // Bare `cm --distro`/`cm --machine` are valid — they select the
+        // default of that kind.
+        assert_eq!(
+            parse(&["cm", "--distro"]).unwrap().backend(),
+            Backend::Distro
+        );
+        assert_eq!(
+            parse(&["cm", "--machine"]).unwrap().backend(),
+            Backend::Machine
+        );
+        assert_eq!(parse(&["cm"]).unwrap().backend(), Backend::Auto);
+        // The flags conflict.
+        assert!(parse(&["cm", "--distro", "--machine"]).is_err());
+        // They apply to name-resolving actions.
+        for argv in [
+            &["cm", "-d", "x", "--machine", "-e", "true"][..],
+            &["cm", "-t", "x", "--distro"][..],
+            &["cm", "-s", "x", "--machine"][..],
+            &["cm", "--unregister", "x", "--distro"][..],
+            &["cm", "--export", "x", "f.tar", "--machine"][..],
+            &["cm", "--forward", "8080", "--distro"][..],
+        ] {
+            let args = parse(argv).unwrap();
+            assert!(args.action().is_ok(), "{argv:?}");
+        }
+        // And are rejected where no name is resolved.
+        for argv in [
+            &["cm", "-l", "--distro"][..],
+            &["cm", "--shutdown", "--machine"][..],
+            &["cm", "--status", "--distro"][..],
+            &["cm", "--version", "--machine"][..],
+        ] {
+            let args = parse(argv).unwrap();
+            assert!(args.action().is_err(), "{argv:?}");
+        }
+    }
+
+    #[test]
+    fn machine_rejects_distro_only_install_options() {
+        for argv in [
+            &["cm", "--install", "alpine", "--machine", "--restricted"][..],
+            &["cm", "--install", "--machine", "--from-file", "x.wsl"][..],
+            &["cm", "--install", "alpine", "--machine", "--share", "/a:/b"][..],
+            &[
+                "cm",
+                "--install",
+                "alpine",
+                "--machine",
+                "--publish",
+                "8080",
+            ][..],
+        ] {
+            let args = parse(argv).unwrap();
+            assert!(args.action().is_err(), "{argv:?}");
+        }
     }
 }
