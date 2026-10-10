@@ -53,7 +53,8 @@ The mechanical bits are driven by [cargo-release] (`cargo install
    stale). Then confirm [TODO] plus the user-facing docs reflect what
    actually shipped. If `container`'s minor version changed since the
    last release, first re-verify the appRoot internals we depend on
-   ([Version gating]) and extend `VERIFIED_CONTAINER_MINOR` once
+   ([Version gating]) and extend `VERIFIED_CONTAINER_MINOR` plus the
+   install-offer pin (`PINNED_CONTAINER_VERSION`, `PKG_SHA256`) once
    verified.
 2. Update `CHANGELOG.md` (see [Changelog]): prepend a
    `## X.Y.Z -- YYYY-MM-DD` section drafted from the commit log since

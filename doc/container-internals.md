@@ -310,7 +310,11 @@ process on stderr when `server.version` isn't a verified release.
 8. Plugin discovery path and the argv[1] convention.
 9. `container export` semantics around `rootFsOverride` and existing
    output dirs.
-10. Then bump `VERIFIED_CONTAINER_MINOR`.
+10. Then bump `VERIFIED_CONTAINER_MINOR` *and* the install-offer pin:
+    `PINNED_CONTAINER_VERSION` in `src/container.rs` and `PKG_SHA256`
+    (the signed installer's `digest` on the GitHub release) in
+    `src/install.rs` — the offer only ever installs a release whose
+    internals we have verified.
 
 ## Related documents
 

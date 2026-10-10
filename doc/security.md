@@ -133,8 +133,16 @@ hijacked `PATH` or `CONTAINER_CLI` runs an arbitrary binary as the user.
   crate is the documented switch point -- see `default_resources` in
   ops.rs.
 - **Re-evaluate if:** `cm` is ever run in privileged contexts (it should
-  not be -- no setuid, and `sudo cm` writes state under root's home;
-  consider refusing euid 0 except for `install-plugin`).
+  not be -- no setuid, and `sudo cm` writes state under root's home).
+  `install-plugin`/`uninstall-plugin` are the deliberate exception:
+  when the plugin dir isn't user-writable they re-exec
+  `/usr/bin/sudo <self> … --plugin-dir <root>` so *only* the root-owned
+  file ops run as root -- `container` resolution, and the T8 install
+  offer, always run as the invoking user first (under `sudo` the offer
+  can't fire and `env_reset`/`secure_path` would resolve a different
+  `container`). The re-exec'd binary is the user-writable
+  cargo-installed one -- identical trust to the documented
+  `sudo container-distro install-plugin` it replaced.
 
 ### T6. State directory lives inside the shared `$HOME` — closed ([#13])
 
@@ -215,6 +223,37 @@ it -- self-affecting only, since only the user can create containers.
   label model is what makes distros discoverable at all.
 - **Re-evaluate if:** shared/multi-user machines matter, or container
   gains a stronger ownership model.
+
+### T8. `cm` can fetch and open Apple's `container` installer itself
+
+When `container` can't be resolved, an interactive non-root session
+offers to download the signed installer for the pinned release
+(`PINNED_CONTAINER_VERSION`) and `open` it in Installer.app -- a
+root-requiring installer is the largest trust step this codebase takes
+on the user's behalf.
+
+- **Accepted because:** `container` is a hard prerequisite (nothing
+  works without it), and the offer is strictly opt-in -- one y/N
+  prompt per invocation, never in a pipeline or as root.
+- **Mitigations that exist:** the release and its SHA-256 are pinned
+  in the binary (`PINNED_CONTAINER_VERSION`/`PKG_SHA256`), so a
+  tampered or replaced asset fails verification before anything runs;
+  `pkgutil --check-signature` must report a Developer ID signature
+  before `open`; and the handoff is to Installer.app -- which
+  re-verifies notarization and collects admin credentials itself --
+  never `sudo installer`. The platform is checked first (arm64 +
+  macOS 26 via `sysctlbyname`), `CONTAINER_DISTRO_NO_INSTALL_OFFER`
+  opts out, and the "newer release exists" heads-up only reads
+  api.github.com JSON -- nothing from the response executes. The pkg
+  lands in the per-user Darwin cache as a *sibling* of the `.wsl`
+  cache, invisible to `--list --cache`/`--purge-cache`, and is
+  re-verified on reuse.
+- **Residuals:** the pin deliberately can lag upstream -- the offer
+  installs the last *verified* release and warns when it's behind
+  ("check for an updated container-distro"), so freshness is a
+  release-cadence property, not a runtime check. `open`ing the pkg is
+  the user's explicit yes, but the installer's contents are still
+  upstream's trust: the pinned hash ties that to what we verified.
 
 ## Restricted distros
 

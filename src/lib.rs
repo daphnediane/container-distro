@@ -23,6 +23,7 @@ pub mod catalog_ops;
 pub mod completions;
 pub mod container;
 pub mod forward;
+mod install;
 pub mod man;
 pub mod naming;
 pub mod oci;

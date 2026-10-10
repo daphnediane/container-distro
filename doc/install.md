@@ -6,7 +6,11 @@
   (`container system start`, `container machine
   list`). Development targets `container` 1.5.x; a code path that reads
   `appRoot` internals warns once per process on unverified releases --
-  see container-internals.md.
+  see container-internals.md. When `container` is missing, an
+  interactive `cm`/`container-distro` offers to download the signed
+  installer for the verified release (SHA-256 pinned in the binary) and
+  open it in Installer.app -- `CONTAINER_DISTRO_NO_INSTALL_OFFER=1`
+  disables the offer.
 - A current stable Rust toolchain (edition 2024; `rustup` recommended).
 
 ## Build
@@ -58,19 +62,25 @@ cm --install-alias wsl
 cm --install-alias ~/.local/bin/wsl
 
 # optional: register the `container distro` subcommand (cm doesn't need it)
-sudo container-distro install-plugin    # -> /usr/local/libexec/container-plugins/distro
+container-distro install-plugin    # -> /usr/local/libexec/container-plugins/distro
 ```
 
 `install-plugin` resolves `container` (`CONTAINER_CLI`, then
-`/usr/local/bin/container`, then `PATH`), derives
-`<prefix>/libexec/container-plugins/` from it, and **copies** the binary
-there -- a symlink would let your user account replace what other users'
-`container distro` invocations exec. It also installs the distro init
+`/usr/local/bin/container`, then `PATH`) as the invoking user --
+offering to install `container` itself first when it's missing and the
+session is interactive. It derives `<prefix>/libexec/container-plugins/`
+from the resolved binary and **copies** itself there -- a symlink would
+let your user account replace what other users' `container distro`
+invocations exec. When the plugin directory isn't user-writable (the
+normal `/usr/local` case), it re-execs itself as
+`sudo <self> install-plugin --plugin-dir <root>` so only the file ops
+run as root -- the `sudo` password prompt comes from `sudo` itself, and
+prefixing `sudo` by hand still works. It also installs the distro init
 assets (`sbin.distro*/`) alongside the binary: outside the shared home
 and root-owned for a standard install, so guests can't rewrite what
 runs as PID 1 (T6). `cm`-only installs use per-user copies kept
 immutable with `uchg`. `uninstall-plugin` removes the registration and
-the assets.
+the assets, self-elevating the same way.
 
 The plugin is optional: `cm` links the `container_distro` library
 directly, and the standalone `container-distro` binary exposes the same

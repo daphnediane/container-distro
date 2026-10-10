@@ -12,6 +12,12 @@ cm [OPTIONS] [-- <COMMAND LINE>]
 With no arguments, `cm` opens a login shell in the default distro or
 machine. If `container` services aren't running, `cm` runs
 `container system start` first -- matching WSL's transparent start.
+When `container` itself isn't installed, an interactive `cm` offers to
+download the signed installer for the release this build is verified
+against and open it in Installer.app (the download is verified against
+a SHA-256 pinned in the binary; `CONTAINER_DISTRO_NO_INSTALL_OFFER=1`
+disables the offer). Non-interactive runs get the install instructions
+as an error instead.
 
 ## Machines and distros are one namespace
 
@@ -120,7 +126,7 @@ materializes a fresh one (see [container-distro.md]).
 | `--unregister`        | Delete a distro or machine and its storage                            |
 | `--rename OLD NEW`    | Rename a machine or distro; `--machine`/`--distro` selects on a clash |
 | `--migrate NAME`      | Make NAME an instance of the selected backend (see below)             |
-| `--version`           | Print `cm` and `container` versions                                   |
+| `--version`           | Print `cm` and `container` versions (`not installed` when missing)    |
 
 `--unregister` and `-t` resolve distros first, like `-d` -- so they act
 on a distro when a same-named machine exists.

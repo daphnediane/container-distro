@@ -93,6 +93,7 @@ fn run(args: Args) -> Result<ExitCode> {
 
 /// Spawn `container` with inherited stdio and forward its exit code.
 fn passthru(args: &[&str]) -> Result<ExitCode> {
+    container::require_installed()?;
     let status = container::container_cmd()
         .args(args)
         .status()
@@ -656,6 +657,10 @@ fn forward(name: Option<&str>, mappings: &[PortMapping], sel: Backend) -> Result
 
 fn version() -> Result<ExitCode> {
     println!("cm {}", env!("CARGO_PKG_VERSION"));
+    if container::resolve_binary().is_none() {
+        println!("container: not installed");
+        return Ok(ExitCode::SUCCESS);
+    }
     passthru(&["--version"])
 }
 

@@ -301,6 +301,60 @@ pub fn container_cmd() -> Command {
     Command::new(env::var("CONTAINER_CLI").unwrap_or_else(|_| container_binary().into()))
 }
 
+/// The `container` release the interactive install offer downloads and
+/// opens — pinned to a release whose appRoot internals we have
+/// verified, so bump it together with `VERIFIED_CONTAINER_MINOR` (and
+/// `PKG_SHA256` in install.rs) once the new release's layout checks
+/// out — doc/container-internals.md "version gating".
+pub const PINNED_CONTAINER_VERSION: &str = "1.5.0";
+
+/// `name` looked up on `PATH` — the first match that is a file.
+pub(crate) fn find_on_path(name: &Path) -> Option<PathBuf> {
+    env::var_os("PATH").and_then(|paths| {
+        env::split_paths(&paths)
+            .map(|d| d.join(name))
+            .find(|p| p.is_file())
+    })
+}
+
+/// The resolved `container` binary: `CONTAINER_CLI` (a path, or a name
+/// found on PATH), then the installed location, then PATH. `None` when
+/// no `container` can be found — [`require_installed`] turns that into
+/// an install offer or an error.
+pub fn resolve_binary() -> Option<PathBuf> {
+    if let Some(name) = env::var_os("CONTAINER_CLI").map(PathBuf::from) {
+        return if name.components().count() > 1 {
+            name.is_file().then_some(name)
+        } else {
+            find_on_path(&name)
+        };
+    }
+    let installed = Path::new(INSTALLED_CONTAINER_PATH);
+    if installed.is_file() {
+        Some(installed.to_path_buf())
+    } else {
+        find_on_path(Path::new("container"))
+    }
+}
+
+/// Fail early when `container` can't be resolved: interactive sessions
+/// on a supported platform get an offer to download and open the
+/// signed installer; everything else gets the manual instructions. A
+/// `CONTAINER_CLI` that doesn't resolve is reported, not offered over —
+/// the fix is to unset it, not to install another copy.
+pub fn require_installed() -> Result<()> {
+    if resolve_binary().is_some() {
+        return Ok(());
+    }
+    if env::var_os("CONTAINER_CLI").is_some() {
+        bail!("`container` not found via $CONTAINER_CLI or on PATH");
+    }
+    if !crate::install::offer()? {
+        bail!("{}", crate::install::not_installed_message());
+    }
+    Ok(())
+}
+
 fn system_status() -> Option<serde_json::Value> {
     let out = container_cmd()
         .args(["system", "status", "--format", "json"])
@@ -370,6 +424,7 @@ pub fn container_disk_usage(app_root: &Path, id: &str) -> Option<u64> {
 
 /// Start `container` services if they are not already running.
 pub fn ensure_started() -> Result<()> {
+    require_installed()?;
     if system_running() {
         return Ok(());
     }

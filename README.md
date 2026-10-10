@@ -28,7 +28,8 @@ cm --install-man && container-distro install-man   # man pages
 cm --install-alias wsl
 
 # optional: the `container distro` subcommand (cm doesn't need it)
-sudo container-distro install-plugin   # -> /usr/local/libexec/container-plugins/distro
+container-distro install-plugin   # -> /usr/local/libexec/container-plugins/distro
+                                  # self-elevates with sudo if needed
 ```
 
 Building a checkout instead: `cargo install --path .`
@@ -329,6 +330,10 @@ for re-evaluation, is in doc/security.md.
   `cm`).
 - `container` is resolved from `/usr/local/bin/container` (the upstream
   install location), then `PATH`; set `CONTAINER_CLI` to override.
+- If `container` isn't installed, an interactive `cm`/`container-distro`
+  offers to download the signed 1.5.0 installer and open it in
+  Installer.app -- verified against a SHA-256 pinned in the binary.
+  `CONTAINER_DISTRO_NO_INSTALL_OFFER=1` disables the offer.
 - Built and verified against `container` 1.5.0. Some features reach
   into daemon internals that may change on newer releases -- a warning
   appears on unverified versions; see doc/container-internals.md

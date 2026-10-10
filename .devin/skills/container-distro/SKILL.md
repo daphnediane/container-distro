@@ -186,8 +186,11 @@ $D rm -f d1
 ```
 
 Test machine: `container machine create --name alpine --set-default alpine:latest`.
-Installing the plugin needs root:
-`sudo container-distro install-plugin` (after `cargo install --path .`).
+Installing the plugin self-elevates: `container-distro install-plugin`
+(after `cargo install --path .`) re-execs `sudo` for the root-owned
+plugin dir. A missing `container` triggers the interactive installer
+offer first (tty + non-root only; `CONTAINER_DISTRO_NO_INSTALL_OFFER=1`
+disables).
 Man pages are generated from the clap definitions by `clap_mangen`:
 `cm --install-man` / `container-distro install-man` write to
 `<bin>/../share/man/man1` for the invoking binary (`--dir` overrides).
@@ -197,4 +200,4 @@ look generated — `\(aq` fingerprint + matching `.TH`/NAME). `cm` stays
 out of the `cm-*` namespace — two letters isn't unambiguously ours,
 and `cm` has no subcommand pages to go stale anyway.
 `scripts/install-local.sh` runs the full maintainer reinstall:
-`cargo install --path .` + `sudo install-plugin` + both `install-man`s.
+`cargo install --path .` + `install-plugin` + both `install-man`s.

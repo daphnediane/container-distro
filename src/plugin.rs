@@ -46,31 +46,10 @@ pub fn plugin_root_for(container_bin: &Path) -> Option<PathBuf> {
     )
 }
 
-fn find_on_path(name: &Path) -> Option<PathBuf> {
-    env::var_os("PATH").and_then(|paths| {
-        env::split_paths(&paths)
-            .map(|d| d.join(name))
-            .find(|p| p.is_file())
-    })
-}
-
 fn container_bin() -> Result<PathBuf> {
-    // CONTAINER_CLI wins; then the documented install location; then PATH.
-    let found = if let Some(name) = env::var_os("CONTAINER_CLI").map(PathBuf::from) {
-        if name.components().count() > 1 {
-            Some(name)
-        } else {
-            find_on_path(&name)
-        }
-    } else {
-        let installed = Path::new(crate::container::INSTALLED_CONTAINER_PATH);
-        if installed.is_file() {
-            Some(installed.to_path_buf())
-        } else {
-            find_on_path(Path::new("container"))
-        }
-    };
-    let bin = found.context("`container` not found (expected its install location or PATH)")?;
+    let bin = crate::container::resolve_binary().context(
+        "`container` not found — cannot derive the plugin directory (pass --plugin-dir)",
+    )?;
     fs::canonicalize(&bin).with_context(|| format!("failed to resolve {}", bin.display()))
 }
 
@@ -106,14 +85,87 @@ fn same_file(a: &Path, b: &Path) -> bool {
     a.dev() == b.dev() && a.ino() == b.ino()
 }
 
+/// Whether `a` and `b` are files with identical bytes — size first,
+/// then SHA-256. The common no-op `install-plugin` is a cargo-installed
+/// binary whose bytes equal the plugin copy at a *different* path,
+/// which `same_file` can't see.
+fn same_bytes(a: &Path, b: &Path) -> bool {
+    let (Ok(ma), Ok(mb)) = (fs::metadata(a), fs::metadata(b)) else {
+        return false;
+    };
+    if !ma.is_file() || !mb.is_file() || ma.len() != mb.len() {
+        return false;
+    }
+    if same_file(a, b) {
+        return true;
+    }
+    let (Ok(fa), Ok(fb)) = (fs::File::open(a), fs::File::open(b)) else {
+        return false;
+    };
+    matches!(
+        (crate::oci::hash_reader(fa), crate::oci::hash_reader(fb)),
+        (Ok((ha, _)), Ok((hb, _))) if ha == hb
+    )
+}
+
+/// Whether the installed plugin under `dir` already matches what we'd
+/// install — identical binary (with an exec bit) and identical config —
+/// so `install-plugin` can answer "up to date" without elevating. All
+/// reads; anything unreadable counts as not-current (elevate and let
+/// the privileged half decide).
+fn plugin_current(dir: &Path, exe: &Path) -> bool {
+    let installed = dir.join("bin").join(PLUGIN_NAME);
+    let Ok(cfg) = fs::read_to_string(dir.join("config.toml")) else {
+        return false;
+    };
+    cfg == config_toml()
+        && same_bytes(&installed, exe)
+        && fs::metadata(&installed).is_ok_and(|m| m.permissions().mode() & 0o111 != 0)
+}
+
+/// Install the plugin, elevating only for the root-owned file ops.
+///
+/// `container` is resolved — and the interactive install offer run —
+/// as the invoking user, before any sudo step: under `sudo` the offer
+/// couldn't fire at all, and env_reset/secure_path would resolve a
+/// different `container` (and strip `CONTAINER_CLI`). When the plugin
+/// dir isn't user-writable the file ops are re-exec'd as
+/// `sudo <self> install-plugin --plugin-dir <root>` — the same trust
+/// as the `sudo` invocation this replaces. An installed plugin that
+/// already matches (binary SHA-256 + config + exec bit) short-circuits
+/// before any of that — no sudo prompt for a no-op reinstall.
 pub fn install(root: Option<PathBuf>, from: Option<&Path>) -> Result<()> {
-    let dir = plugin_dir(root)?;
+    let dir = match &root {
+        Some(_) => plugin_dir(root.clone())?,
+        None => {
+            crate::container::require_installed()?;
+            plugin_dir(None)?
+        }
+    };
+    // Resolve the binary up front: `plugin_current` compares its bytes,
+    // and the elevated child gets it as an explicit --from so sudo's
+    // env_reset can't move which file is installed.
     let exe = match from {
         Some(f) => {
             fs::canonicalize(f).with_context(|| format!("failed to resolve {}", f.display()))?
         }
         None => fs::canonicalize(env::current_exe()?)?,
     };
+    // Identical content already installed? Answer without elevating —
+    // the common no-op is a re-run after `cargo install`.
+    if plugin_current(&dir, &exe) {
+        println!("`container {PLUGIN_NAME}` is already installed and up to date");
+        println!("  to update, run install-plugin from the new binary or pass --from");
+        return Ok(());
+    }
+    let plugin_root = dir.parent().map_or_else(|| dir.clone(), Path::to_path_buf);
+    let extra = vec!["--from".to_string(), exe.to_string_lossy().into_owned()];
+    crate::install::with_plugin_privilege("install-plugin", &plugin_root, &extra, || {
+        install_into(&dir, &exe)
+    })
+}
+
+fn install_into(dir: &Path, exe: &Path) -> Result<()> {
     let bin_dir = dir.join("bin");
     fs::create_dir_all(&bin_dir).map_err(|e| permission_hint(e, &bin_dir))?;
     let config = dir.join("config.toml");
@@ -125,30 +177,16 @@ pub fn install(root: Option<PathBuf>, from: Option<&Path>) -> Result<()> {
     // costs a boot-time warning until `set` recreates the distro.
     // Copy, not symlink: the plugin dir is typically root-owned while the
     // build output is user-writable — a link would let whoever owns the
-    // binary replace what other users exec via `container distro`.
+    // binary replace what other users exec via `container distro`. A
+    // symlink — even one pointing at this binary — is replaced with a
+    // copy.
     let bin = bin_dir.join(PLUGIN_NAME);
-    // Running `install-plugin` *via the installed plugin* finds itself as
-    // the source; leave it alone. (Re-install from a newer build instead:
-    // run that binary's install-plugin, or pass --from.) A symlink — even
-    // one pointing at this binary — is replaced with a copy.
-    if bin
-        .symlink_metadata()
-        .is_ok_and(|m| m.file_type().is_file())
-        && same_file(&bin, &exe)
-    {
-        println!(
-            "`container {PLUGIN_NAME}` is already installed ({})",
-            bin.display()
-        );
-        println!("  to update, run install-plugin from the new binary or pass --from");
-        return Ok(());
-    }
     if bin.symlink_metadata().is_ok() {
         fs::remove_file(&bin).map_err(|e| permission_hint(e, &bin))?;
     }
     // fs::copy is fclonefileat/fcopyfile on macOS — an APFS clone (CoW)
     // where the filesystem supports it.
-    fs::copy(&exe, &bin).map_err(|e| permission_hint(e, &bin))?;
+    fs::copy(exe, &bin).map_err(|e| permission_hint(e, &bin))?;
     fs::set_permissions(&bin, fs::Permissions::from_mode(0o755))
         .map_err(|e| permission_hint(e, &bin))?;
     println!("Installed `container {PLUGIN_NAME}` ({})", bin.display());
@@ -178,8 +216,27 @@ fn remove_dir_if_empty(dir: &Path) -> bool {
     }
 }
 
+/// Remove the plugin registration, elevating via `sudo` re-exec when
+/// the plugin dir isn't user-writable — same model as [`install`].
 pub fn uninstall(root: Option<PathBuf>) -> Result<()> {
     let dir = plugin_dir(root)?;
+    // Nothing to remove? Answer without elevating. `metadata` (not
+    // read) so an unreadable-by-us file still counts as present — the
+    // privileged half sorts out what it actually is.
+    match fs::metadata(dir.join("config.toml")) {
+        Err(e) if e.kind() == ErrorKind::NotFound => {
+            println!("Not installed ({})", dir.display());
+            return Ok(());
+        }
+        _ => {}
+    }
+    let plugin_root = dir.parent().map_or_else(|| dir.clone(), Path::to_path_buf);
+    crate::install::with_plugin_privilege("uninstall-plugin", &plugin_root, &[], || {
+        uninstall_from(&dir)
+    })
+}
+
+fn uninstall_from(dir: &Path) -> Result<()> {
     let config = dir.join("config.toml");
     match fs::read_to_string(&config) {
         Ok(c) if c.contains(ABSTRACT) => {}
@@ -209,7 +266,7 @@ pub fn uninstall(root: Option<PathBuf>) -> Result<()> {
         remove_dir_if_empty(&assets);
     }
     let bin_gone = remove_dir_if_empty(&bin_dir);
-    let gone = remove_dir_if_empty(&dir) && bin_gone;
+    let gone = remove_dir_if_empty(dir) && bin_gone;
     if gone {
         println!("Removed {}", dir.display());
     }

@@ -287,7 +287,9 @@ pub enum Command {
         opts: CreateOptions,
     },
 
-    /// Register as a `container` CLI plugin so `container distro` works
+    /// Register as a `container` CLI plugin so `container distro`
+    /// works (offers to install `container` first when missing;
+    /// self-elevates with sudo when the plugin dir needs root)
     InstallPlugin {
         /// Plugin directory (default: <container prefix>/libexec/container-plugins)
         #[arg(long)]
@@ -334,6 +336,7 @@ pub enum Command {
     },
 
     /// Remove the `container distro` plugin registration
+    /// (self-elevates with sudo when the plugin dir needs root)
     UninstallPlugin {
         #[arg(long)]
         plugin_dir: Option<PathBuf>,

@@ -189,13 +189,10 @@ fn verify_sha256(path: &Path, expected: &str, url: &str) -> Result<()> {
     Ok(())
 }
 
-/// The content-addressed `.wsl` cache: `confstr(_CS_DARWIN_USER_CACHE_DIR)`
-/// (`/var/folders/…/C/<APP_NAME>/wsl`), the OS-managed per-user cache —
-/// excluded from backups, counted as purgeable space. `None` when the
-/// directory can't be resolved or created; `fetch` falls back to a
-/// temp file.
-#[must_use]
-pub fn cache_dir() -> Option<PathBuf> {
+/// The OS-managed per-user cache root —
+/// `confstr(_CS_DARWIN_USER_CACHE_DIR)` (`/var/folders/…/C/`):
+/// excluded from backups, counted as purgeable space.
+pub(crate) fn darwin_user_cache() -> Option<PathBuf> {
     let base = unsafe {
         let mut buf = vec![0u8; 1024];
         let n = libc::confstr(
@@ -208,16 +205,62 @@ pub fn cache_dir() -> Option<PathBuf> {
         }
         PathBuf::from(String::from_utf8_lossy(&buf[..n - 1]).into_owned())
     };
-    let dir = base.join(APP_NAME).join("wsl");
+    Some(base)
+}
+
+/// Our slice of the per-user cache, `…/C/container-distro/`. `None`
+/// when it can't be resolved or created.
+pub(crate) fn app_cache_dir() -> Option<PathBuf> {
+    let dir = darwin_user_cache()?.join(APP_NAME);
     fs::create_dir_all(&dir).ok()?;
     Some(dir)
+}
+
+/// The content-addressed `.wsl` cache:
+/// `…/C/<APP_NAME>/wsl`. `None` when the directory can't be resolved
+/// or created; `fetch` falls back to a temp file.
+#[must_use]
+pub fn cache_dir() -> Option<PathBuf> {
+    let dir = app_cache_dir()?.join("wsl");
+    fs::create_dir_all(&dir).ok()?;
+    Some(dir)
+}
+
+/// The shared HTTPS agent setup: rustls + the platform trust store
+/// (the macOS keychain applies) and `http_proxy`-style env vars, with a
+/// `container-distro/<version>` user-agent (api.github.com rejects
+/// requests without one).
+fn build_agent(timeout: Option<std::time::Duration>) -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .proxy(ureq::Proxy::try_from_env())
+        .tls_config(
+            ureq::tls::TlsConfig::builder()
+                .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+                .build(),
+        )
+        .user_agent(concat!("container-distro/", env!("CARGO_PKG_VERSION")))
+        .timeout_global(timeout)
+        .build()
+        .into()
+}
+
+/// The download agent — no overall timeout, bulk transfers can take
+/// minutes.
+pub(crate) fn agent() -> ureq::Agent {
+    build_agent(None)
+}
+
+/// `agent()` with a short end-to-end timeout — for cheap probes where a
+/// hung connection must not stall an interactive prompt.
+pub(crate) fn probe_agent() -> ureq::Agent {
+    build_agent(Some(std::time::Duration::from_secs(10)))
 }
 
 /// GET `url` into `out` with ureq (rustls + the platform trust store,
 /// so the macOS keychain applies, and `http_proxy`-style env vars).
 /// Retries twice, rewinding `out` between attempts, with a one-line
 /// progress meter on stderr.
-fn download_to(url: &str, out: &mut File) -> Result<()> {
+pub(crate) fn download_to(url: &str, out: &mut File) -> Result<()> {
     eprintln!("Downloading {url}");
     let mut last = anyhow!("no attempts made");
     for attempt in 1..=3 {
@@ -238,16 +281,7 @@ fn download_to(url: &str, out: &mut File) -> Result<()> {
 }
 
 fn try_download(url: &str, out: &mut File) -> Result<()> {
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .proxy(ureq::Proxy::try_from_env())
-        .tls_config(
-            ureq::tls::TlsConfig::builder()
-                .root_certs(ureq::tls::RootCerts::PlatformVerifier)
-                .build(),
-        )
-        .build()
-        .into();
-    let mut resp = agent
+    let mut resp = agent()
         .get(url)
         .call()
         .with_context(|| format!("GET {url}"))?;
