@@ -93,7 +93,7 @@ a *guest* path; host paths only work if the same path is shared.
 Piped stdin is forwarded (`cm` always passes `-i`). Interactive shells
 need a TTY -- `machine run` requires one, and `cm` execs it for full
 terminal passthrough. Known upstream wart: `machine run` can drop the
-guest's very first write; see [gaps/exec-stdio].
+guest's very first write; see [exec-stdio].
 
 ## Listing
 
@@ -201,7 +201,7 @@ same schema — Microsoft's own manifest works verbatim. It is an
 explicit per-invocation override, never auto-loaded from `$HOME`,
 since anything under `$HOME` is guest-writable and a default search
 path would let a distro rewrite familiar names to hostile images (see
-security.md). The same catalog is available to the plugin through
+design/security.md). The same catalog is available to the plugin through
 `container distro catalog`; `container distro create` itself still
 takes image refs only.
 
@@ -225,7 +225,7 @@ bare rootfs, so it's rejected with `--machine`. The name comes from
 `oobe.defaultName`, then the catalog NAME for catalog downloads, then
 the file stem. Other manifest keys are
 ignored: distros provision the host user rather than honoring
-`oobe.defaultUid`, and `oobe.command` never runs (security.md T4).
+`oobe.defaultUid`, and `oobe.command` never runs (design/security.md T4).
 
 `--install` creates a **distro** (`container distro create`), then
 opens a shell in it (`--no-launch` skips the shell). There is no
@@ -251,7 +251,7 @@ SSH-agent forward, no sudo -- explicit flags still apply, and it is
 `--export` briefly stops a running machine while its filesystem is
 snapshotted, then restarts it -- `container export` can't read a
 machine's rootfs directly, so `cm` exports a clone (see
-[gaps/export-import]).
+[export-import]).
 
 `--import` registers the tar as a distro (`container distro import`) --
 or as a machine with `--machine`. `LOC` is WSL's
@@ -269,7 +269,7 @@ foreground forwarder: `127.0.0.1:HOST` on the Mac → `GUEST` on the
 machine/distro's IP, until Ctrl-C. **Experimental** -- for distros,
 prefer real port publishing (`--publish` at install, or
 `container distro set --publish`/`--unpublish`); see
-[gaps/port-forwarding].
+[port-forwarding].
 
 ## Man page and `wsl` alias
 
@@ -301,7 +301,7 @@ man-page link.
 [`wsl.exe`-compatible]: https://github.com/microsoft/WSL
 [apple/container#1954]: https://github.com/apple/container/issues/1954
 [container-distro.md]: container-distro.md#interrupted-set-recovery
-[gaps/exec-stdio]: gaps/exec-stdio.md
-[gaps/export-import]: gaps/export-import.md
-[gaps/port-forwarding]: gaps/port-forwarding.md
+[exec-stdio]: design/upstream-limitations.md#machine-run-exec-fidelity-stdin-argv-first-write
+[export-import]: design/upstream-limitations.md#container-export-cant-snapshot-a-machine-or-distro-rootfs
+[port-forwarding]: design/upstream-limitations.md#no-localhost-port-forwarding-for-machines
 [install.md]: install.md#man-pages

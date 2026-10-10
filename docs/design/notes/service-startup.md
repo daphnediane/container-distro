@@ -59,4 +59,4 @@ add the explicit `cm --shutdown --all`/`--system` variant regardless,
 since it's two lines and unambiguous.
 
 [#11]: https://github.com/daphnediane/container-distro/issues/11
-[L2.5]: ../lower-level-integration.md#the-plugin-route--l25
+[L2.5]: ../lower-level-integration.md#the-plugin-route-l25

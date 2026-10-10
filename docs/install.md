@@ -6,7 +6,7 @@
   (`container system start`, `container machine
   list`). Development targets `container` 1.5.x; a code path that reads
   `appRoot` internals warns once per process on unverified releases --
-  see container-internals.md. When `container` is missing, an
+  see design/container-internals.md. When `container` is missing, an
   interactive `cm`/`container-distro` offers to download the signed
   installer for the verified release (SHA-256 pinned in the binary) and
   open it in Installer.app -- `CONTAINER_DISTRO_NO_INSTALL_OFFER=1`

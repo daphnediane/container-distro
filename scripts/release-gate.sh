@@ -1,5 +1,5 @@
 #!/bin/sh
-# Pre-release gate: everything doc/release.md step 1 requires, in one
+# Pre-release gate: everything docs/design/release.md step 1 requires, in one
 # command (#16). Exits nonzero on the first failure.
 # PROPTEST_CASES=<n> deepens the parser-fuzz pass inside `cargo test`.
 set -eu

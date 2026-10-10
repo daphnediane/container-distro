@@ -54,7 +54,7 @@ larger decision than renaming the project.
   see it in `container list`, `container inspect <id>`, and the
   container's `containers/` dir.
 - The Cargo package name (`container-distro`) and the repository name
-- Prose in `README.md`, `doc/`, and `--help` text
+- Prose in `README.md`, `docs/`, and `--help` text
 - Temp-file prefixes (`cm-import-`, `distro-set-`, …)
 
 ## Migration strategy for a future rename
@@ -84,4 +84,4 @@ larger decision than renaming the project.
 Before there are real users, the cheaper path is fine: change the
 constants and recreate any test distros.
 
-[`src/naming.rs`]: ../src/naming.rs
+[`src/naming.rs`]: ../../src/naming.rs

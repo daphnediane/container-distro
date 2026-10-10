@@ -23,7 +23,7 @@ binaries:
 
 Persistent names (labels `io.github.daphnediane.container-distro.*`, the
 state dir `~/Library/Application Support/container-distro/`) all come
-from `container_distro::naming`; see `doc/naming.md` before changing
+from `container_distro::naming`; see `docs/design/naming.md` before changing
 any of them.
 
 ## `cm` argument mapping (machines)

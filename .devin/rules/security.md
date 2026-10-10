@@ -7,7 +7,7 @@ description: Security review requirements when changing code, shell assets, or d
 
 This project gives guests host reach (home mounts, SSH agent, published
 ports) and guest-root conveniences (sudo/doas, `--cap-add ALL`) by
-design — the trade-offs are spelled out in `doc/security.md`, not
+design — the trade-offs are spelled out in `docs/design/security.md`, not
 accidental.
 
 - **Think about security impact before committing.** Does the change add
@@ -22,12 +22,12 @@ accidental.
   PID 1 and root, so review them like the Rust, not like config.
 - **Never commit secrets.** No keys, tokens, or credentials in code,
   tests, docs, or commit messages — and don't print them to logs.
-- **Document every new trade-off or shortcoming in `doc/security.md`.**
+- **Document every new trade-off or shortcoming in `docs/design/security.md`.**
   New accepted risk → trade-off table entry; new violation/panic →
   findings table; new mitigation → note it under the risk it addresses.
 - **Upstream findings follow `upstream-security.md` instead.** A
   suspected vulnerability in upstream code is parked on a `local/`
-  branch — no details in shared branches, `doc/security.md`, or commit
+  branch — no details in shared branches, `docs/design/security.md`, or commit
   messages. (Linking an already-*public* upstream issue, as the findings
   table does, is fine.)
 - **Docs may not oversell.** Anything marketed as "restricted",
@@ -37,6 +37,6 @@ accidental.
   convenience boundary, not a wall — verify the protective code is
   absent or unexecuted (asset not mounted, not just an env check) when
   the claim is "cannot".
-- **Keep `doc/security.md`'s checklist honest** — flip statuses as work
+- **Keep `docs/design/security.md`'s checklist honest** — flip statuses as work
   lands, and add new entries when review uncovers a hole worth fixing
   later.

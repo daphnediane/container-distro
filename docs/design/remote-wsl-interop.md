@@ -23,15 +23,16 @@ scheme.
   on the machine running the editor -- they can never invoke `cm` on
   macOS directly.
 - The `wsl.exe` surface they need is small (~6 invocation patterns) and
-  `cm` already covers most of it. The gaps: UTF-16LE output for list
-  commands, WSL-shaped `-l -v` output, `-i` stdin wiring in `cm`'s exec
-  path, and a **stdout attach race in `container machine run`** that
-  eats the first writes -- measured and documented below; tracked in
-  [gaps/exec-stdio].
+  `cm` already covers most of it. The remaining gaps: UTF-16LE output
+  for list commands and a **stdout attach race in `container machine
+  run`** that eats the first writes -- measured and documented below;
+  tracked in [upstream-limitations]. (`-i` stdin wiring, `-e` argv
+  fidelity, and WSL-shaped `-l -v` output are shipped.)
 - The hard problem isn't the CLI -- it's **transport**: the server binds
   guest `127.0.0.1:<port>` and the editor connects to *its own*
-  localhost, relying on WSL2 `localhostForwarding`. We have no
-  forwarding ([gap doc]), so that port has to be bridged by *something*.
+  localhost, relying on WSL2 `localhostForwarding`. We only have a
+  manual forwarder ([port-forwarding gap doc]), so that port has to be
+  bridged by *something*.
 - Four viable architectures, roughly in increasing effort:
   1. **Don't emulate WSL at all** -- `sshd` in the guest + Remote-SSH,
      or `code tunnel` inside the machine. Works today, zero `cm`
@@ -72,13 +73,13 @@ Spawned via
 `cp.spawn('wsl.exe', args, { windowsVerbatimArguments: true })` --
 needs a literal `wsl.exe` PE on `PATH`; no shell, no console:
 
-| Invocation                             | Encoding | Purpose                                                             |
-| -------------------------------------- | -------- | ------------------------------------------------------------------- |
-| `wsl.exe --list --verbose`             | UTF-16LE | Distro list; regex `(\*\|\s)\s+NAME STATE VERSION` (VERSION = `\d`) |
-| `wsl.exe --list --online`              | UTF-16LE | Installable distros (`NAME FRIENDLY NAME` table)                    |
-| `wsl.exe --set-default <d>`            | UTF-16LE | Set default                                                         |
-| `wsl.exe --unregister <d>`             | UTF-16LE | Delete distro (exit code checked)                                   |
-| `wsl.exe --distribution <d> -- <cmd>…` | UTF-8    | All exec: env probing and the server bootstrap                      |
+| Invocation                               | Encoding | Purpose                                                             |
+| ---------------------------------------- | -------- | ------------------------------------------------------------------- |
+| `wsl.exe --list --verbose`               | UTF-16LE | Distro list; regex `(\*\|\s)\s+NAME STATE VERSION` (VERSION = `\d`) |
+| `wsl.exe --list --online`                | UTF-16LE | Installable distros (`NAME FRIENDLY NAME` table)                    |
+| `wsl.exe --set-default <d>`              | UTF-16LE | Set default                                                         |
+| `wsl.exe --unregister <d>`               | UTF-16LE | Delete distro (exit code checked)                                   |
+| `wsl.exe --distribution <d> -- <cmd>...` | UTF-8    | All exec: env probing and the server bootstrap                      |
 
 Notable details:
 
@@ -155,28 +156,29 @@ Checked against a running `alpine` machine (`container` 1.5.x):
 | stdin → guest                      | **needs `-i`**; without it guest stdin is closed -- see [exec-stdio]                                                                           |
 | stdout reliability                 | **racy** -- first writes dropped on either stream; see [exec-stdio]                                                                            |
 | argv fidelity                      | **not preserved** -- `machine run` shell-evals joined argv ([apple/container#1954]); single-quoted `bash -c '…'` survives the extra eval round |
-| `-l -v` WSL-format output          | absent -- `-v` ignored today; see [verbose-list]                                                                                               |
+| `-l -v` WSL-format output          | **present** -- `cm -l -v` prints the exact `NAME STATE VERSION` table (`VERSION` = `2`)                                                        |
 | UTF-16LE list output               | absent -- only relevant on the Windows side anyway                                                                                             |
 | `-d`, `-s`, `-t`, `--unregister`   | all present and compatible                                                                                                                     |
 | `--list --online`                  | **present** -- `cm -l -o` prints the curated catalog (`NAME FRIENDLY NAME` table)                                                              |
 
-Details in [gaps/exec-stdio] -- the headline for this use case: stdout
-attaches late and the **first write on either stream is dropped**, so
-quick probe commands (`uname`, `command -v`, `cat /etc/os-release`) are
-exactly the traffic that loses output, while the bootstrap script's
-result block (echoed at the end, after downloads and sleeps) survives.
-The honest fix is upstream in `machine run`'s stdio wiring; `cm`
-workarounds (`-i` passthrough, attach handshake) are in the gap doc.
+Details in [upstream-limitations] -- the headline for this use case:
+stdout attaches late and the **first write on either stream is
+dropped**, so quick probe commands (`uname`, `command -v`, `cat
+/etc/os-release`) are exactly the traffic that loses output, while the
+bootstrap script's result block (echoed at the end, after downloads
+and sleeps) survives. The honest fix is upstream in `machine run`'s
+stdio wiring; `cm` workarounds (`-i` passthrough, `container exec`
+for `-e`) are shipped.
 
 Concrete `cm` changes for this use case:
 
-- Pass `-i` on the exec path (or at least when stdin isn't a TTY) -- one
-  flag; details in [exec-stdio].
+- Pass `-i` on the exec path (or at least when stdin isn't a TTY) --
+  **done**; details in [upstream-limitations].
 - Per-arg quoting in the exec path to neutralize `machine run`'s
-  shell-eval round ([apple/container#1954]) -- otherwise
-  `cm -e cmd "a b"` silently becomes `cmd a b`.
+  shell-eval round ([apple/container#1954]) -- **done** via `container
+  exec`, with single-quoted `machine run` as the fallback.
 - Emit WSL-compatible `-l -v` (a `*`, name, `Running`/`Stopped`, version
-  `2`) -- overlaps the existing verbose-list gap.
+  `2`) -- **done**.
 - Optionally grow `cm forward` (localhost→machine port forwarder) and/or
   a `cm -d m --stdio-connect <port>` that execs an in-guest `nc` -- the
   two bridging primitives the transports above want.
@@ -341,11 +343,9 @@ fork; VSCodium is the unambiguous client for it.
 
 [#8]: https://github.com/daphnediane/container-distro/issues/8
 [apple/container#1148]: https://github.com/apple/container/issues/1148
-[exec-stdio]: gaps/exec-stdio.md
-[gap doc]: gaps/port-forwarding.md
-[gaps/exec-stdio]: gaps/exec-stdio.md
-[lower-level-integration]: lower-level-integration.md#l2--swift-library-products-thin-c-shim-for-rust
-[port-forwarding gap doc]: gaps/port-forwarding.md
-[stdout race]: gaps/exec-stdio.md
+[exec-stdio]: upstream-limitations.md#machine-run-exec-fidelity-stdin-argv-first-write
+[lower-level-integration]: lower-level-integration.md#rejected-rungs
+[port-forwarding gap doc]: upstream-limitations.md#no-localhost-port-forwarding-for-machines
+[stdout race]: upstream-limitations.md#machine-run-exec-fidelity-stdin-argv-first-write
+[upstream-limitations]: upstream-limitations.md#machine-run-exec-fidelity-stdin-argv-first-write
 [apple/container#1954]: https://github.com/apple/container/issues/1954
-[verbose-list]: gaps/verbose-list.md

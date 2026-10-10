@@ -197,7 +197,7 @@ remains.
 [#17]: https://github.com/daphnediane/container-distro/issues/17
 [cargo-release]: https://github.com/crate-ci/cargo-release
 [Changelog]: #changelog
-[install]: install.md
+[install]: ../install.md
 [SemVer]: https://semver.org
-[TODO]: TODO.md
+[TODO]: ../TODO.md
 [Version gating]: container-internals.md#version-gating

@@ -2,7 +2,7 @@
 
 User-facing changes per release, newest first. Written at release time
 from the commit log and the TODO items completed since the previous
-tag -- see doc/release.md.
+tag -- see docs/design/release.md.
 
 ## 0.4.2 -- 2026-10-08
 

@@ -17,7 +17,7 @@ exclude = [
     "/.templates/",
     "/.vscode/",
     "/.markdownlint.json",
-    "/doc/",
+    "/docs/",
     "/scripts/",
     "/deny.toml",
 ]
@@ -43,7 +43,7 @@ proptest = "1.11"
 
 # `cargo release` conventions (dry-run by default, `-x` to execute):
 # strips the -dev suffix, commits `chore: release X.Y.Z`, and tags
-# `vX.Y.Z`. crates.io publish and git push stay manual (doc/release.md).
+# `vX.Y.Z`. crates.io publish and git push stay manual (docs/design/release.md).
 [package.metadata.release]
 allow-branch = ["main", "release/*"]
 consolidate-commits = false

@@ -305,7 +305,7 @@ pub fn container_cmd() -> Command {
 /// opens — pinned to a release whose appRoot internals we have
 /// verified, so bump it together with `VERIFIED_CONTAINER_MINOR` (and
 /// `PKG_SHA256` in install.rs) once the new release's layout checks
-/// out — doc/container-internals.md "version gating".
+/// out — docs/design/container-internals.md "version gating".
 pub const PINNED_CONTAINER_VERSION: &str = "1.5.0";
 
 /// `name` looked up on `PATH` — the first match that is a file.
@@ -392,7 +392,7 @@ pub fn container_version() -> Option<String> {
 /// have verified: `containers/<id>/rootfs.ext4`,
 /// `containers/<id>/runtime-configuration.json` and its
 /// `options.rootFsOverride`. Extended as new `container` minors are
-/// verified — a release-checklist step (doc/release.md).
+/// verified — a release-checklist step (docs/design/release.md).
 pub const VERIFIED_CONTAINER_MINOR: &[&str] = &["1.5"];
 
 /// Warn (once per process) when the `container` daemon is not a version

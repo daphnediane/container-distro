@@ -16,7 +16,7 @@ assume good faith, don't be a jerk.
 - **Bug reports** -- open an [issue] with the `cm`/`container-distro`
   version (`cm --version`), your `container` version, macOS release,
   the command you ran, and what happened vs. what you expected.
-- **Feature ideas** -- check doc/TODO.md first; a fair amount of the
+- **Feature ideas** -- check docs/TODO.md first; a fair amount of the
   roadmap is already tracked there. For anything bigger than a small
   fix, open an issue to discuss before writing code.
 - **Pull requests** -- small, focused PRs are far easier to review
@@ -24,7 +24,7 @@ assume good faith, don't be a jerk.
 
 ## Development setup
 
-Full prerequisites and install detail live in doc/install.md. Short
+Full prerequisites and install detail live in docs/install.md. Short
 version:
 
 - macOS with Apple's [`container`] installed and working
@@ -63,7 +63,7 @@ time, so you don't need to touch it.
 Man pages and shell completions are generated at runtime from the clap
 definitions -- never edit generated output; change the definitions
 instead. If your change alters the CLI surface, update the matching
-reference doc (doc/cm.md or doc/container-distro.md).
+reference doc (docs/cm.md or docs/container-distro.md).
 
 ## Commit and PR conventions
 
@@ -78,7 +78,7 @@ reference doc (doc/cm.md or doc/container-distro.md).
 
 ## Security issues
 
-Machines and distros are *not* sandboxes -- read doc/security.md
+Machines and distros are *not* sandboxes -- read docs/design/security.md
 before reporting what looks like a hole; several apparent ones are
 documented, deliberate trade-offs.
 

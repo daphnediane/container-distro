@@ -116,7 +116,7 @@ missing ones fall back to defaults.
 - `machine run` **requires a TTY** for interactive shells; we always
   pass `-i` so piped stdin reaches the guest.
 - First-write drop: `machine run` can lose the guest's first write --
-  open upstream, see [gaps/exec-stdio].
+  open upstream, see [exec-stdio].
 - `homeMount` values are `rw`/`ro`/`none`; only `none` disables the
   same-path share.
 - Machine defaults (half host CPUs/memory) are mirrored by
@@ -146,7 +146,7 @@ missing ones fall back to defaults.
   never-booted containers. `distro export` works around this the same
   way `cm --export` does for machines: a scratch container whose
   conventional `rootfs.ext4` is a clonefile of the distro's journaled
-  disk (details: [gaps/export-import]).
+  disk (details: [export-import]).
 - `container create`'s stdout is the container ID -- discarded via
   `run_container_quiet`.
 - A distro's *container* id is ephemeral: `<name>-<6 lowercase hex>`
@@ -272,7 +272,7 @@ storage -- not a promised interface. Call sites are marked with
   `userSetup.username` on machines, our `HostUser` on distros.
 - **Networking**: guests NAT through the vmnet `192.168.64.x` subnet;
   `192.168.64.1` is gateway *and* DNS. Not used by any code path today
-  -- recorded for the GUI/X11 work ([gaps/gui-apps]).
+  -- recorded for the GUI/X11 work ([gui-apps]).
 - **Starting directory**: `machine run` starts the guest process at the
   host cwd when it's under the shared `$HOME`, else the guest home. `cm`
   reproduces this for `exec` and for distros via `guest_path`
@@ -331,16 +331,14 @@ process on stderr when `server.version` isn't a verified release.
 [apple/container#2024]: https://github.com/apple/container/issues/2024
 [apple/container#2210]: https://github.com/apple/container/issues/2210
 [apple/container#2325]: https://github.com/apple/container/issues/2325
-[exec-stdio]: gaps/exec-stdio.md
-[export-import]: gaps/export-import.md
-[gaps/exec-stdio]: gaps/exec-stdio.md
-[gaps/export-import]: gaps/export-import.md
-[gaps/gui-apps]: gaps/gui-apps.md
+[exec-stdio]: upstream-limitations.md#machine-run-exec-fidelity-stdin-argv-first-write
+[export-import]: upstream-limitations.md
+[gui-apps]: notes/gui-apps.md
 [lower-level-integration]: lower-level-integration.md
-[mounts-outside-home]: gaps/mounts-outside-home.md
+[mounts-outside-home]: upstream-limitations.md#no-mounts-outside-home-for-machines
 [naming]: naming.md
 [release process]: release.md
 [security]: security.md
-[service-startup]: gaps/service-startup.md
-[subprocess-overhead]: gaps/subprocess-overhead.md
+[service-startup]: notes/service-startup.md
+[subprocess-overhead]: notes/subprocess-overhead.md
 [Version gating]: #version-gating

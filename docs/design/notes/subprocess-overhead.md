@@ -38,5 +38,5 @@ JSON drift actually breaks us -- then go L2, not L1.
   stdin
 
 [#9]: https://github.com/daphnediane/container-distro/issues/9
-[exec-stdio]: exec-stdio.md
+[exec-stdio]: ../upstream-limitations.md#machine-run-exec-fidelity-stdin-argv-first-write
 [L1/L2]: ../lower-level-integration.md#rung-by-rung-how-low-can-cm-go

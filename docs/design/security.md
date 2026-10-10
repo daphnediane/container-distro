@@ -257,34 +257,11 @@ on the user's behalf.
 
 ## Restricted distros
 
-`create --restricted` (alias `--untrusted`, also on `import` and
-`cm --install`) flips the create-time defaults: `--home-mount none`,
-`--network none` (loopback only -- no interface, DNS, or outbound),
-`--no-ssh`, and `--no-sudo` (the assets dir mounted at `/sbin.distro`
-lacks `grant-admin.sh`, so no privilege-granting code exists in the
-guest). It exists for semi-trusted images -- generated code, random
-images, imported rootfses (T4).
-
-**It is not a panacea, and not a sandbox.** What it does not do:
-
-- It's a defaults preset, not policy: `-v`/`--automount`/`-p`/
-  `--home-mount`/`--network`/`--ssh`/`--sudo` reopen holes on the same
-  command line, and `container distro set` reopens them later.
-- It's your session either way: `container distro run --root` or
-  `container exec -u 0:0` still yields guest root -- restricted only
-  stops the provisioned *user* from being granted sudo.
-- `--cap-add ALL` and unmasked `/proc`/`/sys` stay: init systems need
-  them and caps are contained by the VM -- but "no sudo" is a
-  convenience boundary inside the guest, not a wall.
-- Your identity still goes in: name/uid/gid are provisioned and readable
-  in `/etc/passwd`, process lists, and `CONTAINER_*` env.
-- `--no-sudo` (including via `set`) prevents future grants; it cannot
-  remove sudoers/doas files already written into a rootfs.
-- No network also means no published ports and no in-guest package
-  installs -- `--restricted` distros are bring-your-own-bits.
-
-What remains trusted: the VM boundary (the real containment), the
-`container` daemon, and the host account running the commands.
+The user-facing description of `--restricted` -- what it sets and what
+it does *not* do -- lives in [the security guide](../security.md#restricted-distros).
+Design-side, the trade-off it manages is T4 (untrusted rootfs import),
+and T3 covers why "no sudo" is a convenience boundary rather than a
+wall.
 
 ## Findings and resolutions
 
@@ -383,7 +360,7 @@ Each open gap adds attack surface; flagging the traps up front.
 [#19]: https://github.com/daphnediane/container-distro/issues/19
 [#20]: https://github.com/daphnediane/container-distro/issues/20
 [apple/container#2325]: https://github.com/apple/container/issues/2325
-[configuration-files]: gaps/configuration-files.md
-[gui-apps]: gaps/gui-apps.md
+[configuration-files]: notes/configuration-files.md
+[gui-apps]: notes/gui-apps.md
 [remote-wsl-interop]: remote-wsl-interop.md
-[Restricted distros]: #restricted-distros
+[Restricted distros]: ../security.md#restricted-distros

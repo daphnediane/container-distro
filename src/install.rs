@@ -42,7 +42,7 @@ const NO_OFFER_ENV: &str = "CONTAINER_DISTRO_NO_INSTALL_OFFER";
 /// SHA-256 of `container-<PINNED_CONTAINER_VERSION>-installer-signed.pkg`
 /// — the `digest` GitHub reports for the release asset. Pinned so the
 /// download can't be swapped en route; bump together with
-/// `PINNED_CONTAINER_VERSION` (doc/container-internals.md).
+/// `PINNED_CONTAINER_VERSION` (docs/design/container-internals.md).
 const PKG_SHA256: &str = "a24808cb202318fa1c3bbee0c6c6887fe1225fe899d7b687a0ddd939bd6573f8";
 
 /// How long we wait for Installer.app to drop the CLI before telling

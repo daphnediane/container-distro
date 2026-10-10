@@ -535,7 +535,7 @@ fn install_from_file(
 /// WSL `--export`: distros go through `container export` directly;
 /// machines through the scratch-container workaround (`container
 /// export` can't snapshot a machine's plugin-state rootfs — see
-/// doc/gaps/export-import.md). FILE `-` writes the tar to stdout.
+/// docs/design/upstream-limitations.md). FILE `-` writes the tar to stdout.
 fn export(name: &str, file: &str, sel: Backend) -> Result<ExitCode> {
     let output = (file != "-").then_some(Path::new(file));
     match named_target(name, sel)? {

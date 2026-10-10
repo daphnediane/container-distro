@@ -10,7 +10,7 @@
 //! outside this repository — container labels, the per-user state
 //! directory — is derived from the constants here, so a rename is a
 //! one-line change plus an entry in the `LEGACY_*` lists. See
-//! `doc/naming.md` for every place the name appears and the migration
+//! `docs/design/naming.md` for every place the name appears and the migration
 //! strategy.
 
 use std::collections::BTreeMap;

@@ -43,7 +43,7 @@ container, so tampered runtime configuration never survives a
 stop/start. The materialized container is named `<name>-<6hex>` and
 gets a fresh suffix each time — our ops find it by its distro label,
 so `container ls` shows e.g. `alpine-f4f8a1` rather than `alpine`.
-Journal files are `uchg`-locked at rest (security.md T6).
+Journal files are `uchg`-locked at rest (design/security.md T6).
 
 ## Subcommands
 
@@ -334,4 +334,4 @@ Keep publishes on loopback unless you want LAN-reachable services -- a
 
 [install.md]: install.md#man-pages
 [install.md-2]: install.md#shell-completions
-[naming.md]: naming.md
+[naming.md]: design/naming.md

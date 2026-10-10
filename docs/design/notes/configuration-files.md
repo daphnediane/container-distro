@@ -18,9 +18,17 @@ Two config files, split by scope:
   resources (memory, processors, swap, defaultVhdSize), networking
   (networkingMode, localhostForwarding, dnsProxy), `[experimental]`
   features.
+- **`/etc/wsl-distribution.conf`** -- inside the distro rootfs, shipped
+  by the *distro author* in a `.wsl` package ([build-custom-distro]):
+  `[oobe] defaultName`/`defaultUid`/`command` (the command runs once at
+  first launch), `[shortcut] icon`/`name` for the Start-menu entry, and
+  a `terminal profile` GUID. Metadata about the distribution, not user
+  config.
 
-The split makes sense: things the *guest* needs to know at boot live in
-the guest; things describing the *VM itself* live on the host.
+The first two are the interesting split: things the *guest* needs to
+know at boot live in the guest; things describing the *VM itself* live
+on the host. The third is packaging metadata -- closest to an OCI
+image's `Config` fields than to either config file.
 
 ## What we have today
 
@@ -47,6 +55,14 @@ Following WSL's split:
   extensions (extra mounts, forwards) once an L2.5 plugin exists; at L0,
   cm-side per-machine overrides could live under the host config's
   `[machine.<name>]` tables.
+- **In-distro `/etc/wsl-distribution.conf`** -- partially honored
+  already: `cm --install --from-file` and `catalog install` read
+  `oobe.defaultName` to suggest the distro name, and deliberately
+  ignore the rest. `oobe.command` never runs -- importing a rootfs
+  shouldn't execute its code before you ask (security T4);
+  `oobe.defaultUid` doesn't apply since machines and distros provision
+  the *host* account; `shortcut.*`/terminal-profile keys have no macOS
+  analogue.
 - **Guest-side `/etc/wsl.conf`** -- honoring the real file would
   maximize compat for users copying WSL setups, but has a
   chicken-and-egg problem: reading it requires running a process in the
@@ -66,4 +82,5 @@ distro configs; if we do it, cache aggressively and treat it as
 best-effort hints, not a contract.
 
 [#6]: https://github.com/daphnediane/container-distro/issues/6
-[mounts-outside-home]: mounts-outside-home.md
+[build-custom-distro]: https://learn.microsoft.com/en-us/windows/wsl/build-custom-distro
+[mounts-outside-home]: ../upstream-limitations.md#no-mounts-outside-home-for-machines

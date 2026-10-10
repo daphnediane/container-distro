@@ -21,7 +21,7 @@ source of truth. "Rung" references are the integration levels in
 
 - [ ] **Configuration files** -- host-side `cm` config (L0); guest
   `wsl.conf` subset is harder and has a confused-deputy trap to design
-  around ([#6]; [gaps/configuration-files], security.md)
+  around ([#6]; [configuration-files], design/security.md)
 
 ### Post-1.0 — machines
 
@@ -29,17 +29,17 @@ source of truth. "Rung" references are the integration levels in
   `container export` honors a machine's rootfs mount source, drop the
   scratch-container workaround; once a `--no-boot` machine can be
   booted by `machine run`, use it and drop the create-boot probe. Both
-  bugs still need filing upstream ([#15]; [gaps/export-import])
+  bugs still need filing upstream ([#15]; [export-import])
 - [ ] **Mounts outside `$HOME` for machines** -- upstream
   ([apple/container#1805], [apple/container#2278]); distros cover it
-  today ([#3]; [gaps/mounts-outside-home])
+  today ([#3]; [mounts-outside-home])
 - [ ] **`machine run` first-write drop** -- still open upstream; file an
-  issue (closest: [apple/container#1148]) ([#4]; [gaps/exec-stdio])
+  issue (closest: [apple/container#1148]) ([#4]; [exec-stdio])
 - [ ] **Automatic localhost forwarding** -- WSL-style dynamic forwarding
   would supersede the experimental `cm --forward` ([#5];
-  [gaps/port-forwarding])
+  [port-forwarding])
 - [ ] **GUI apps (WSLg-style)** -- open; the X11 cookie path needs care
-  ([#7]; [gaps/gui-apps], security notes there)
+  ([#7]; [gui-apps], security notes there)
 
 ## Interop
 
@@ -55,11 +55,11 @@ source of truth. "Rung" references are the integration levels in
 
 - [ ] **Subprocess overhead** -- one `container` spawn per op plus
   `system status` checks; only worth fixing (XPC/Swift client libraries,
-  L1/L2) if it ever hurts ([#9]; [gaps/subprocess-overhead])
+  L1/L2) if it ever hurts ([#9]; [subprocess-overhead])
 - [ ] **Service startup semantics** -- `cm --shutdown` stops machines
   but leaves `container` services up by design; revisit only if a
   narrower "stop what we started" primitive appears upstream ([#11];
-  [gaps/service-startup])
+  [service-startup])
 
 ## Security & hardening
 
@@ -69,7 +69,7 @@ From [security.md's checklist]:
 
 - [ ] Nudge semi-trusted workloads off rw home shares -- an rw-home
   guest can tamper with runtime-managed state that *other* containers
-  rely on, not just its own files (security.md T1). Options: a
+  rely on, not just its own files (design/security.md T1). Options: a
   create-time hint when registering non-`--restricted` distros, docs
   recommending `home-mount ro` as the default posture for generated or
   imported images, or a scoped-subdir share instead of all of
@@ -108,15 +108,15 @@ From [security.md's checklist]:
 [apple/container#1148]: https://github.com/apple/container/issues/1148
 [apple/container#1805]: https://github.com/apple/container/issues/1805
 [apple/container#2278]: https://github.com/apple/container/issues/2278
-[gaps/configuration-files]: gaps/configuration-files.md
-[gaps/exec-stdio]: gaps/exec-stdio.md
-[gaps/export-import]: gaps/export-import.md
-[gaps/gui-apps]: gaps/gui-apps.md
-[gaps/mounts-outside-home]: gaps/mounts-outside-home.md
-[gaps/port-forwarding]: gaps/port-forwarding.md
-[gaps/service-startup]: gaps/service-startup.md
-[gaps/subprocess-overhead]: gaps/subprocess-overhead.md
+[configuration-files]: design/notes/configuration-files.md
+[exec-stdio]: design/upstream-limitations.md#machine-run-exec-fidelity-stdin-argv-first-write
+[export-import]: design/upstream-limitations.md
+[gui-apps]: design/notes/gui-apps.md
+[mounts-outside-home]: design/upstream-limitations.md#no-mounts-outside-home-for-machines
+[port-forwarding]: design/upstream-limitations.md#no-localhost-port-forwarding-for-machines
+[service-startup]: design/notes/service-startup.md
+[subprocess-overhead]: design/notes/subprocess-overhead.md
 [install]: install.md
-[lower-level-integration]: lower-level-integration.md#rung-by-rung-how-low-can-cm-go
-[remote-wsl-interop]: remote-wsl-interop.md
-[security.md's checklist]: security.md#pre-10-checklist
+[lower-level-integration]: design/lower-level-integration.md#rung-by-rung-how-low-can-cm-go
+[remote-wsl-interop]: design/remote-wsl-interop.md
+[security.md's checklist]: design/security.md#pre-10-checklist
