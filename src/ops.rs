@@ -3785,7 +3785,20 @@ mod tests {
             spec
         );
         drop(lock);
-        assert!(fs::File::open(&spec_p).unwrap().try_lock().is_ok());
+        // The flock releases with the fd — but a close-time release
+        // isn't sequenced with all observable effects of close(2) (the
+        // kernel can lag), so poll a fresh opener instead of asserting
+        // on the first probe.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let probe = loop {
+            match fs::File::open(&spec_p).unwrap().try_lock() {
+                Err(fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                res => break res,
+            }
+        };
+        assert!(probe.is_ok(), "relock probe failed: {probe:?}");
         unlock(&spec_p);
     }
 
