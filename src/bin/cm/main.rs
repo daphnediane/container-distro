@@ -668,7 +668,9 @@ fn install(opts: &InstallOpts) -> Result<ExitCode> {
     container::validate_name(&name)?;
     if !opts.wants_machine() {
         if !backend::distros_enabled() {
-            bail!("a distro install needs distro support (unset CM_BACKEND=machine)");
+            bail!(
+                "--install defaults to a distro; that needs distro support (unset CM_BACKEND=machine)"
+            );
         }
         let name = distro::create(Some(name), &create, &image)?;
         if opts.no_launch {
@@ -759,9 +761,8 @@ fn export(name: &str, file: &str, sel: Backend) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-/// WSL `--import`: wrap a rootfs tar as an OCI image and create a
-/// machine — or, with `--distro`, import it as a distro. (The
-/// distro-default flip lands separately.)
+/// WSL `--import`: import a rootfs tar as a distro — or, with
+/// `--machine`, wrap it as an OCI image and create a machine.
 fn import(
     name: &str,
     install_location: Option<&str>,
@@ -773,11 +774,13 @@ fn import(
         eprintln!("cm: ignoring install location `{loc}` — storage is managed by `container`");
     }
     let file = Path::new(file);
-    if sel != Backend::Distro {
+    if sel == Backend::Machine {
         distro::import_machine(name, file)?;
     } else {
         if !backend::distros_enabled() {
-            bail!("a distro import needs distro support (unset CM_BACKEND=machine)");
+            bail!(
+                "--import defaults to a distro; that needs distro support (unset CM_BACKEND=machine)"
+            );
         }
         container::ensure_started()?;
         // The new distro would shadow a same-named machine for `cm` —

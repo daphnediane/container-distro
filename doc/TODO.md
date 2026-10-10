@@ -10,10 +10,10 @@ source of truth. "Rung" references are the integration levels in
 
 ### For 1.0 — distros
 
-- [ ] **Make distros the `cm` default; add `--machine`** -- `--distro`/
-  `--machine` selectors landed on every name-resolving action; the
-  `--install`/`--import` default flip remains. Machines remain for
-  WSL-parity testing and upstream comparisons ([#21])
+- [x] **Make distros the `cm` default; add `--machine`** -- `--install`/
+  `--import` build distros unless `--machine` is given; `--distro`/
+  `--machine` are selectors on every name-resolving action. Machines
+  remain for WSL-parity testing and upstream comparisons ([#21])
 
 ## Machines (WSL parity, mostly upstream-blocked)
 

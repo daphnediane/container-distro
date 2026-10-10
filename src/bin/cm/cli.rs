@@ -45,10 +45,10 @@ pub struct InstallOpts {
     pub cpus: Option<u32>,
     pub memory: Option<String>,
     pub home_mount: Option<HomeMount>,
-    /// `--distro`/`--machine` selectors — the install/import default
-    /// flip lands separately; for now a distro still requires opt-in.
-    /// Distro-only options (`--restricted`, `--from-file`, `--share`,
-    /// `--publish`) are rejected alongside `--machine` at parse time.
+    /// Create a `container distro` — the default; `wants_machine()`
+    /// reports the `--machine` opt-out. Distro-only options
+    /// (`--restricted`, `--from-file`, `--share`, `--publish`) are
+    /// rejected alongside `--machine` at parse time.
     pub distro: bool,
     /// Create a `container machine` instead of a distro.
     pub machine: bool,
@@ -61,15 +61,8 @@ pub struct InstallOpts {
 
 impl InstallOpts {
     /// `--machine` opts out of the distro default.
-    /// A machine unless a distro is opted into — `--distro` or any
-    /// distro-only option. (`--machine` can't coexist with them, so it
-    /// needn't appear here.) The distro-default flip lands separately.
     pub fn wants_machine(&self) -> bool {
-        !(self.distro
-            || self.restricted
-            || matches!(self.source, InstallSource::File(_))
-            || !self.shares.is_empty()
-            || !self.publish.is_empty())
+        self.machine
     }
 }
 
@@ -227,9 +220,9 @@ pub struct Args {
     #[arg(long = "migrate", value_name = "NAME")]
     pub migrate: Option<String>,
 
-    /// Create a machine from a catalog name or container image and boot
+    /// Create a distro from a catalog name or container image and boot
     /// it (`cm -l -o` lists the catalog); bare installs the default
-    /// distribution
+    /// distribution. With --machine, creates a `container machine`
     #[arg(long = "install", value_name = "DISTRO|IMAGE", num_args = 0..=1)]
     pub install: Option<Option<String>>,
 
@@ -311,9 +304,10 @@ pub struct Args {
     #[arg(long = "export", num_args = 2, value_names = ["NAME", "FILE"])]
     pub export: Option<Vec<String>>,
 
-    /// Create a machine from a rootfs tar or tar.gz (FILE `-` reads
-    /// stdin; with --distro, imports a distro instead). INSTALL_LOCATION
-    /// is accepted for WSL compatibility and ignored
+    /// Import a rootfs tar or tar.gz as a distro (FILE `-` reads
+    /// stdin; with --machine, wraps it as an OCI image and creates a
+    /// `container machine` instead). INSTALL_LOCATION is accepted for
+    /// WSL compatibility and ignored
     #[arg(
         long = "import",
         num_args = 2..=3,
@@ -780,7 +774,7 @@ mod tests {
             panic!("expected install");
         };
         assert_eq!(opts.source, InstallSource::Default);
-        assert!(opts.wants_machine());
+        assert!(!opts.wants_machine());
     }
 
     #[test]
@@ -790,7 +784,7 @@ mod tests {
             panic!("expected install");
         };
         assert_eq!(opts.source, InstallSource::Image("ghcr.io/x/y:1".into()));
-        assert!(opts.wants_machine());
+        assert!(!opts.wants_machine());
 
         let args = parse(&["cm", "--install", "--from-file", "rocky-9.wsl"]).unwrap();
         let Action::Install(opts) = args.action().unwrap() else {
@@ -906,7 +900,7 @@ mod tests {
         assert_eq!(opts.cpus, Some(2));
         assert_eq!(opts.memory.as_deref(), Some("4G"));
         assert_eq!(opts.home_mount, Some(HomeMount::Ro));
-        assert!(opts.wants_machine());
+        assert!(!opts.wants_machine());
         assert!(parse(&["cm", "--cpus", "2"]).is_err());
     }
 

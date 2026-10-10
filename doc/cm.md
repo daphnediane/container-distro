@@ -20,8 +20,8 @@ exists as both shadows the machine (and `cm -l` warns). The default is
 likewise: a default distro wins over the default machine, and
 `cm -s <machine>` clears any default distro.
 
-`cm --install` and `cm --import` default to `container machine` —
-`--distro` opts into a distro. `container distro create` makes them
+Distros are the default: `cm --install` and `cm --import` build them
+unless `--machine` is given. `container distro create` makes them
 directly. See container-distro.md.
 
 `--distro` and `--machine` are backend selectors, not just creation
