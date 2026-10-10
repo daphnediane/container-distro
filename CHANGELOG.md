@@ -4,6 +4,79 @@ User-facing changes per release, newest first. Written at release time
 from the commit log and the TODO items completed since the previous
 tag -- see docs/design/release.md.
 
+## 0.5.0 -- 2026-10-10
+
+### Added
+
+- Journaled distro state: a stopped distro is now only its journal —
+  `spec.json` + `rootfs.ext4`, `uchg`-locked under `~/Library/
+  Application Support/container-distro/distros/<name>/`. `start`
+  materializes a fresh container from the journaled spec and `stop`
+  dismantles it, so configuration a guest or stray `container` command
+  writes into runtime state can never survive a restart; `start` also
+  diffs a found-running container's reconstructed spec against the
+  journal and warns per-field.
+- `container distro rename` and `cm --rename OLD NEW`; `--machine` /
+  `--distro` selectors disambiguate a name present in both backends.
+- `container distro catalog list|info|install|cache|purge` — the same
+  installable catalog `cm --list --online` uses; `catalog info`
+  reports the full entry plus matching cache/image/machine/distro
+  state (`--format json`).
+- `cm --migrate NAME` converges a name onto the selected backend: a
+  machine migrates in carrying its disk, a pre-journal distro is
+  adopted, and `--machine` migrates a distro out.
+- Missing-`container` install offer: on a terminal, the first command
+  offers to download the pinned, SHA-256-verified signed installer pkg
+  and opens it in Installer.app (`CONTAINER_DISTRO_NO_INSTALL_OFFER=1`
+  opts out). Non-interactive failures print real install instructions,
+  and `cm --version` reports `container: not installed` instead of
+  erroring.
+- Distro journals record provenance (`origin`: creation time, the
+  creating build's version, and source — image / file / `.wsl`
+  download / machine / adopted); `list` shows journal creation time
+  for stopped distros and prefers the recorded source over generated
+  `local/distro-*` image refs.
+
+### Changed
+
+- **Upgrading:** distros created by ≤0.4.2 are adopted automatically
+  on first contact — the journal is written `uchg`-locked and the
+  disk and live config carry over. Once the one-time `journalized`
+  marker lands, journal-less containers are refused until adopted via
+  `container distro migrate NAME` or `cm --migrate NAME`. Leftover
+  `preserved/` `set`-staging pairs fold into the journal; the
+  auto-adoption pass sunsets in the 1.1 line.
+- `cm --install` and `cm --import` now create **distros** by default;
+  `--machine` opts back into `container machine`. `--machine` /
+  `--distro` are backend selectors on every name-resolving action
+  (`-d`, `-t`, `-s`, `--unregister`, `--export`, `--forward`,
+  `--install`, `--import`, `--migrate`, `--rename`).
+- Cross-backend name collisions are refused on every create path —
+  `create` / `import` / `catalog install` / `migrate` / `rename` and
+  their machine equivalents — unless `--force` opts in (`cm` resolves
+  a shared name to the distro, so a collision used to shadow the
+  machine silently). `cm -l` and catalog views now list same-named
+  pairs as two rows annotated `(machine)` / `(distro)`.
+- `install-plugin` / `uninstall-plugin` resolve `container` as the
+  invoking user, then self-elevate via `sudo` only when the plugin dir
+  isn't user-writable — a no-op reinstall no longer prompts, and the
+  docs drop the `sudo` prefix.
+- Materialized distro containers get machine-style randomized ids
+  (`<name>-<6hex>`); per-distro init assets live inside the journal
+  dir and refresh on every materialize.
+- `install-man` / `uninstall-man` prune stale generated
+  `container-distro-*.1` pages left behind by removed subcommands
+  (foreign or hand-written pages warn and stay).
+- `export` of a stopped distro uses the same scratch-container +
+  clonefile workaround as machine export — `container export` still
+  can't read a journaled disk directly.
+
+### Fixed
+
+- `cm --install` names a catalog install after the entry (`ubuntu`,
+  matching `wsl --install` registering `Ubuntu`) instead of deriving
+  `ubuntu-latest` from the resolved image ref.
+
 ## 0.4.2 -- 2026-10-08
 
 ### Changed

@@ -6,15 +6,6 @@ source of truth. "Rung" references are the integration levels in
 [lower-level-integration]. `For 1.0`/`Post-1.0` splits mirror the
 `release-1` milestone on the linked issues.
 
-## Distros (`container distro`)
-
-### For 1.0 — distros
-
-- [x] **Make distros the `cm` default; add `--machine`** -- `--install`/
-  `--import` build distros unless `--machine` is given; `--distro`/
-  `--machine` are selectors on every name-resolving action. Machines
-  remain for WSL-parity testing and upstream comparisons ([#21])
-
 ## Machines (WSL parity, mostly upstream-blocked)
 
 ### For 1.0 — machines
@@ -74,15 +65,6 @@ From [security.md's checklist]:
   recommending `home-mount ro` as the default posture for generated or
   imported images, or a scoped-subdir share instead of all of
   `$HOME` ([#19])
-- [x] **Adopt the machine model's anti-persistence defenses for
-  distros** -- done, stronger than the sketched options: a stopped
-  distro is only its journal (`spec.json` + `rootfs.ext4`,
-  `uchg`-locked); `start` materializes a fresh container from the
-  journaled spec and `stop` dismantles it, so no runtime config at all
-  survives a restart ([#18])
-- [x] **Integrity-check distro-visible state at start** -- `start`
-  diffs a found-running container's reconstructed spec against the
-  journal and warns per-field ([#20])
 
 ## Docs & tooling
 
@@ -101,10 +83,7 @@ From [security.md's checklist]:
 [#11]: https://github.com/daphnediane/container-distro/issues/11
 [#14]: https://github.com/daphnediane/container-distro/issues/14
 [#15]: https://github.com/daphnediane/container-distro/issues/15
-[#18]: https://github.com/daphnediane/container-distro/issues/18
 [#19]: https://github.com/daphnediane/container-distro/issues/19
-[#20]: https://github.com/daphnediane/container-distro/issues/20
-[#21]: https://github.com/daphnediane/container-distro/issues/21
 [apple/container#1148]: https://github.com/apple/container/issues/1148
 [apple/container#1805]: https://github.com/apple/container/issues/1805
 [apple/container#2278]: https://github.com/apple/container/issues/2278
