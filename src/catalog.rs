@@ -210,17 +210,21 @@ pub fn lookup<'a>(entries: &'a [Entry], name: &str) -> Option<&'a Entry> {
     entries.iter().find(|e| e.name.eq_ignore_ascii_case(name))
 }
 
-/// The header above both `--list --online` tables.
-const HEADER: &str = "The following is a list of valid distributions that can be installed.\n\
-                      Install using 'cm --install <Distro>'.\n\n";
+/// The header above both catalog tables.
+fn header(install_command: &str) -> String {
+    format!(
+        "The following is a list of valid distributions that can be installed.\n\
+         Install using '{install_command}'.\n\n"
+    )
+}
 
 /// `wsl --list --online`-shaped output: a two-line header then a
 /// `NAME FRIENDLY NAME` table — the format remote-WSL editor extensions
 /// scrape. Entries not installable on `arch` are hidden, like WSL
 /// on ARM hiding amd64-only distributions.
 #[must_use]
-pub fn render(entries: &[Entry], arch: &str) -> String {
-    let mut out = String::from(HEADER);
+pub fn render_with_command(entries: &[Entry], arch: &str, install_command: &str) -> String {
+    let mut out = header(install_command);
     let mut rows = vec![vec!["NAME".to_string(), "FRIENDLY NAME".to_string()]];
     for e in entries.iter().filter(|e| e.installable(arch)) {
         rows.push(vec![e.name.clone(), e.friendly_name.clone()]);
@@ -230,6 +234,12 @@ pub fn render(entries: &[Entry], arch: &str) -> String {
         out.push('\n');
     }
     out
+}
+
+/// [`render_with_command`] with `cm`'s install syntax.
+#[must_use]
+pub fn render(entries: &[Entry], arch: &str) -> String {
+    render_with_command(entries, arch, "cm --install <Distro>")
 }
 
 /// Whether an entry's install source is present locally.
@@ -255,21 +265,22 @@ pub struct EntryStatus {
     pub instances: Vec<(String, bool)>,
 }
 
-/// `cm -l -o -v`: the catalog table plus local state per entry —
+/// The catalog table plus local state per entry —
 /// `LOCAL` reports a `pulled` image or `cached` `.wsl` (`downloading`
 /// while another process is fetching it), and `INSTANCES` lists the
 /// machines/distros installed from the entry, marking running ones.
 /// `status` is parallel to `entries`. `verbosity >= 2` adds `SOURCE`
-/// (`image`/`.wsl`) and `REF` (the image reference or download hash).
+/// (`image`/`.wsl`) and `REF` (the image reference or download URL).
 #[must_use]
-pub fn render_verbose(
+pub fn render_verbose_with_command(
     entries: &[Entry],
     arch: &str,
     status: &[EntryStatus],
     verbosity: u8,
+    install_command: &str,
 ) -> String {
     debug_assert_eq!(entries.len(), status.len());
-    let mut out = String::from(HEADER);
+    let mut out = header(install_command);
     let dash = || "-".to_string();
     let mut header = vec!["NAME".to_string(), "FRIENDLY NAME".to_string()];
     if verbosity >= 2 {
@@ -309,13 +320,7 @@ pub fn render_verbose(
         if verbosity >= 2 {
             let (kind, r) = match e.source(arch) {
                 Some(Source::Image(i)) => ("image".to_string(), i.to_string()),
-                Some(Source::Wsl(d)) => {
-                    let sha = d.sha256_normalized();
-                    (
-                        ".wsl".to_string(),
-                        format!("{}…", &sha[..12.min(sha.len())]),
-                    )
-                }
+                Some(Source::Wsl(d)) => (".wsl".to_string(), d.url.clone()),
                 None => (dash(), dash()),
             };
             row.extend([kind, r]);
@@ -328,6 +333,17 @@ pub fn render_verbose(
         out.push('\n');
     }
     out
+}
+
+/// [`render_verbose_with_command`] with `cm`'s install syntax.
+#[must_use]
+pub fn render_verbose(
+    entries: &[Entry],
+    arch: &str,
+    status: &[EntryStatus],
+    verbosity: u8,
+) -> String {
+    render_verbose_with_command(entries, arch, status, verbosity, "cm --install <Distro>")
 }
 
 #[cfg(test)]
@@ -435,6 +451,22 @@ mod tests {
     }
 
     #[test]
+    fn render_uses_the_calling_frontend_in_its_hint() {
+        let cat = load(None).unwrap();
+        let out = render_with_command(
+            &cat.entries,
+            "arm64",
+            "container distro catalog install <DISTRO>",
+        );
+        assert!(
+            out.lines()
+                .nth(1)
+                .unwrap()
+                .contains("container distro catalog install")
+        );
+    }
+
+    #[test]
     fn render_verbose_adds_status_columns() {
         let cat = load(None).unwrap();
         let mut status = vec![EntryStatus::default(); cat.entries.len()];
@@ -484,8 +516,12 @@ mod tests {
         let ubuntu = lines.iter().find(|l| l.starts_with("Ubuntu ")).unwrap();
         assert!(ubuntu.contains("image"));
         assert!(ubuntu.contains("docker.io/library/ubuntu:latest"));
+        let rlc_entry = cat.entries.iter().find(|e| e.name == "RLCPlus-10").unwrap();
         let rlc = lines.iter().find(|l| l.starts_with("RLCPlus-10")).unwrap();
         assert!(rlc.contains(".wsl"));
-        assert!(rlc.contains("b87c820232b2…"));
+        let Source::Wsl(download) = rlc_entry.source("arm64").unwrap() else {
+            panic!("RLCPlus-10 should be a .wsl download");
+        };
+        assert!(rlc.contains(&download.url));
     }
 }

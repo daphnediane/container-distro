@@ -16,8 +16,10 @@ binaries:
   lacks: mounts outside `$HOME`, published ports, export/import, `set`.
 - `src/` — the `container_distro` library: shared `container` CLI
   wrappers and serde types, `naming` (persistent names/labels), `oci`
-  (rootfs tar → OCI layout), `forward` (TCP forwarder), `table`, plus
-  the distro `spec`/`ops`/`plugin` logic used by both binaries.
+  (rootfs tar → OCI layout), `catalog`/`catalog_ops` (installable
+  catalog and `.wsl` download flow), `forward` (TCP forwarder),
+  `table`, plus the distro `spec`/`ops`/`plugin` logic used by both
+  binaries.
 
 Persistent names (labels `io.github.daphnediane.container-distro.*`, the
 state dir `~/Library/Application Support/container-distro/`) all come
@@ -42,8 +44,10 @@ any of them.
   `--unregister <m>` → `machine rm`
 - `--shutdown` stops running machines; `--shutdown --system` also runs
   `container system stop`
-- `--install <image>` (`--name`, `--no-launch`, `--cpus`, `--memory`,
-  `--home-mount`) → `machine create`, then a shell
+- `--install [DISTRO|IMAGE]` (`--name`, `--no-launch`, `--cpus`,
+  `--memory`, `--home-mount`) resolves the catalog first (bare = the
+  catalog default) → distro create by default, `machine create` with
+  `--machine`, then a shell
 - `--forward HOST[:GUEST]` (repeatable, `-d` selects) → foreground
   localhost → machine-IP TCP forwarder
 - `--status` → `container system status`
@@ -69,7 +73,17 @@ A distro is a regular container: our `assets/init` is the entrypoint
 (mounted read-only at `/sbin.distro`), it has `--cap-add ALL`, no masked
 or read-only paths, `--ssh`, the host account passed through
 `CONTAINER_*` env, and the home directory at the same path. `run` uses
-`container exec` (argv-exact). `set` recreates the container on the same
+`container exec` (argv-exact). `catalog list|info|install|cache|purge`
+exposes the same installable catalog `cm` uses; `catalog info` reports
+the full entry plus matching cache/image/machine/distro state
+(`--format json`), and both `catalog list -v` and `info` show
+machine/distro name conflicts instead of shadowing (instances get
+`(machine)`/`(distro)` suffixes; info adds a `conflicts` section),
+and `catalog install`
+resolves catalog names only (`create` stays image-only), image entries
+call `ops::create`, and `.wsl` entries go through verified download +
+`ops::import` with `catalog:<name>` provenance. `set` recreates the
+container on the same
 filesystem: it clones `containers/<id>/rootfs.ext4` (`fs::copy` → clonefile
 on APFS) to `state_dir()/preserved/<id>.ext4` with a `<id>.json` spec
 journal, recreates, moves it back, and sets `options.rootFsOverride` in
@@ -120,7 +134,9 @@ explicit `--sudo` does). `set` accepts `--network`, `--ssh`/`--no-ssh`,
 `cm` treats machines and distros as one namespace (`src/bin/cm/backend.rs`),
 linking the library rather than exec'ing the plugin: `-d NAME` resolves a
 distro first, then a machine; a default distro overrides the default
-machine; `-l` merges both (KIND column at `-v -v`); `--install --distro`
+machine; `-l` merges both — same-named pairs stay as two rows annotated
+`(machine)`/`(distro)` (KIND column at `-v -v`); shadowing applies only
+to operational resolution; `--install --distro`
 / `--share` / `--publish` create distros. `CM_BACKEND=machine` disables
 distros.
 

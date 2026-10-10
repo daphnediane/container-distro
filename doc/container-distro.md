@@ -111,6 +111,54 @@ catalog import, IMAGE shows the origin instead of the generated
 `local/distro-*` snapshot reference (`file:<basename>`, `catalog:<name>`;
 `--format json` carries the full `origin` object).
 
+### `catalog`
+
+The installable-distro catalog is the same compiled-in list
+`cm -l -o` uses — Microsoft's `DistributionInfo.json` schema plus our
+`Image` extension. `create` remains the explicit image path and
+`import` remains the explicit local-file path; `catalog` resolves
+friendly catalog names and `.wsl` downloads.
+
+| Command                                                  | Description                                                                                                                                             |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `catalog list [-v ...] [--catalog FILE]`                 | `NAME`/`FRIENDLY NAME`; `-v` adds local state and instances (machines and distros), repeated `-v` adds the install source and image ref or download URL |
+| `catalog info DISTRO [--catalog FILE] [--format FORMAT]` | Show the entry's catalog fields plus cache, image, and existing distro state (`FORMAT` is `table` or `json`)                                            |
+| `catalog install [DISTRO] [OPTIONS]`                     | Install a catalog entry (`catalog list` shows names); bare installs the default entry                                                                   |
+| `catalog cache [--catalog FILE]`                         | Show cached `.wsl` downloads, their catalog entry, and the image they were imported as                                                                  |
+| `catalog purge`                                          | Delete cached `.wsl` downloads (imported distros/images are unaffected)                                                                                 |
+
+`catalog install` accepts every `create` option (`-n`, mounts, ports,
+resources, `--restricted`, `--no-boot`, `--set-default`, …). It only
+resolves catalog entries — use `create IMAGE` for an image reference and
+`import NAME FILE` for a local tar/`.wsl`. Image-backed entries become
+the same distro `create` would make, named for the catalog entry unless
+`-n` overrides it. `.wsl` entries are downloaded, verified against the
+catalog's SHA-256, cached, then imported with `catalog:<name>`
+provenance; the package's `oobe.defaultName` supplies the distro name
+when it is present and `-n` is not.
+
+`catalog info DISTRO` shows the entry's own `Default` flag, whether the
+resolved catalog default selects it, every `Image`/`Amd64Url`/`Arm64Url`
+field, the host-selected source, and the matching local state: a cached
+`.wsl` file and its recorded source, local images (including the
+verified `rootfs-sha256` link for imports), existing distro summaries,
+and machines built from the same source. `--format json` emits the same
+report as a structured JSON object. Like `catalog list -v`, the probes
+are best-effort and never start `container` services just to answer the
+query.
+
+Catalog reporting never resolves a name to one backend: if a machine
+and a distro share an entry-relevant name, `catalog list -v` shows both
+instances suffixed `(machine)` / `(distro)` and `catalog info` adds a
+`Name conflicts` section (`local.conflicts` in JSON). Selector-driven
+resolution (`--machine`, `--distro`, or `cm`'s distro-first default)
+only applies to operations like `start`, `stop`, `run`, or `unregister`.
+
+`--catalog FILE` is an explicit per-invocation override — never
+auto-loaded from `$HOME` — using the same schema as `cm --catalog`.
+`catalog cache` uses it only to label entries; `catalog purge` does not
+consult it.
+
 ### `inspect NAME...`
 
 Dump the distros' `container` configuration as JSON.

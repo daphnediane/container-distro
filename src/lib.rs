@@ -19,6 +19,7 @@
 //! `cm` comes from here too, so it works without the plugin installed.
 
 pub mod catalog;
+pub mod catalog_ops;
 pub mod completions;
 pub mod container;
 pub mod forward;

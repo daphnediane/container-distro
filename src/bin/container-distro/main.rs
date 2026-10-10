@@ -19,8 +19,9 @@ use container_distro::ops::{self, DistroSummary, RunOpts};
 use container_distro::plugin;
 use container_distro::spec::{Automount, SpecChanges};
 use container_distro::table::{columns, human_bytes, local_datetime};
+use container_distro::{catalog, catalog_ops, wsl};
 
-use cli::{Cli, Command, Format};
+use cli::{CatalogCommand, Cli, Command, Format};
 
 fn main() -> ExitCode {
     // Invoked as `container distro …`, `container` may pass the plugin
@@ -159,11 +160,65 @@ fn print_table(rows: &[DistroSummary]) {
     }
 }
 
+fn catalog_command(command: CatalogCommand) -> Result<()> {
+    match command {
+        CatalogCommand::List { verbose, catalog } => {
+            print!(
+                "{}",
+                catalog_ops::render_online(
+                    catalog.as_deref(),
+                    verbose,
+                    true,
+                    true,
+                    "container distro catalog install <DISTRO>"
+                )?
+            );
+        }
+        CatalogCommand::Info {
+            distro,
+            catalog,
+            format,
+        } => {
+            let cat = catalog::load(catalog.as_deref())?;
+            let info = catalog_ops::info(&cat, &distro)?;
+            if format == Format::Json {
+                println!("{}", serde_json::to_string_pretty(&info)?);
+            } else {
+                print!("{}", catalog_ops::render_info(&info));
+            }
+        }
+        CatalogCommand::Install {
+            distro,
+            name,
+            catalog,
+            opts,
+        } => {
+            let cat = catalog::load(catalog.as_deref())?;
+            println!(
+                "{}",
+                catalog_ops::install(&cat, distro.as_deref(), name, &opts, false)?
+            );
+        }
+        CatalogCommand::Cache { catalog } => {
+            print!("{}", catalog_ops::render_cache(catalog.as_deref()));
+        }
+        CatalogCommand::Purge => {
+            let (count, bytes) = wsl::purge_cache();
+            println!(
+                "Removed {count} cached .wsl file(s), freed {} MiB",
+                bytes >> 20
+            );
+        }
+    }
+    Ok(())
+}
+
 fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Command::Create { name, opts, image } => {
             println!("{}", ops::create(name, &opts, &image)?);
         }
+        Command::Catalog { command } => catalog_command(command)?,
         Command::List {
             quiet,
             running,

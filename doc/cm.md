@@ -16,9 +16,11 @@ machine. If `container` services aren't running, `cm` runs
 ## Machines and distros are one namespace
 
 `-d NAME` resolves a **distro** first, then a machine -- a name that
-exists as both shadows the machine (and `cm -l` warns). The default is
-likewise: a default distro wins over the default machine, and
-`cm -s <machine>` clears any default distro.
+exists as both shadows the machine *for operations* (and `cm -l`
+warns). Listings never hide it though: `cm -l` shows both rows,
+suffixing the ambiguous name with `(machine)` / `(distro)`. The
+default is likewise operational: a default distro wins over the
+default machine, and `cm -s <machine>` clears any default distro.
 
 Distros are the default: `cm --install` and `cm --import` build them
 unless `--machine` is given. `container distro create` makes them
@@ -83,18 +85,18 @@ guest's very first write; see [gaps/exec-stdio].
 
 ## Listing
 
-| Option             | Description                                                                        |
-| ------------------ | ---------------------------------------------------------------------------------- |
-| `-l, --list`       | Names under a header, `(Default)` marked                                           |
-| `-l -q, --quiet`   | Bare names only                                                                    |
-| `-l -v, --verbose` | WSL's exact `NAME STATE VERSION` table (`VERSION` is always `2`)                   |
-| `-l -v -v`         | Plus `container`-specific columns incl. `KIND` (`machine`/`distro`), IP, resources |
-| `-l --all`         | Accepted for WSL compatibility; `-l` already lists stopped entries                 |
-| `-l --running`     | Only running machines and distros                                                  |
-| `-l -o, --online`  | The installable-distro catalog (`NAME FRIENDLY NAME`) instead of installed ones    |
-| `-l -o -v`         | Plus `LOCAL`/`INSTANCES` status columns; `-v -v` adds `SOURCE`/`REF`               |
-| `-l --cache`       | The `.wsl` download cache: SHA-256, size, catalog entry, and the image it loaded   |
-| `--purge-cache`    | Empty the `.wsl` download cache                                                    |
+| Option             | Description                                                                                       |
+| ------------------ | ------------------------------------------------------------------------------------------------- |
+| `-l, --list`       | Names under a header, `(Default)` marked; same-name machine+distro pairs show both, kind-suffixed |
+| `-l -q, --quiet`   | Bare names only (conflicted names keep the `(machine)`/`(distro)` suffix)                         |
+| `-l -v, --verbose` | WSL's exact `NAME STATE VERSION` table (`VERSION` is always `2`)                                  |
+| `-l -v -v`         | Plus `container`-specific columns incl. `KIND` (`machine`/`distro`), IP, resources                |
+| `-l --all`         | Accepted for WSL compatibility; `-l` already lists stopped entries                                |
+| `-l --running`     | Only running machines and distros                                                                 |
+| `-l -o, --online`  | The installable-distro catalog (`NAME FRIENDLY NAME`) instead of installed ones                   |
+| `-l -o -v`         | Plus `LOCAL`/`INSTANCES` status columns; `-v -v` adds `SOURCE`/`REF` (image ref or download URL)  |
+| `-l --cache`       | The `.wsl` download cache: SHA-256, size, catalog entry, and the image it loaded                  |
+| `--purge-cache`    | Empty the `.wsl` download cache                                                                   |
 
 Listing covers both kinds. A stopped distro is just its journal — the
 row has no CREATED time because there is no container; starting
@@ -179,7 +181,8 @@ same schema — Microsoft's own manifest works verbatim. It is an
 explicit per-invocation override, never auto-loaded from `$HOME`,
 since anything under `$HOME` is guest-writable and a default search
 path would let a distro rewrite familiar names to hostile images (see
-security.md). `container distro` itself never consults the catalog; it
+security.md). The same catalog is available to the plugin through
+`container distro catalog`; `container distro create` itself still
 takes image refs only.
 
 `cm -l -o -v` annotates the catalog with local state: `LOCAL` is
@@ -188,10 +191,12 @@ a `.wsl` whose hash sits verified in the download cache, and
 `downloading` while another process's fetch holds the entry's
 lockfile; `INSTANCES` lists the machines and distros built from the
 entry (`name (running)`), traced through image references and the
-`rootfs-sha256` label. The probes are best-effort and never block —
-cache state is read without flocking and `container` is queried only
-when already running — so a download in another process can't stall
-the listing.
+`rootfs-sha256` label. When a name exists as both a machine and a
+distro both instances are shown, suffixed `(machine)` / `(distro)` —
+the listing reports, it doesn't resolve. The probes are best-effort
+and never block — cache state is read without flocking and `container`
+is queried only when already running — so a download in another
+process can't stall the listing.
 
 `--from-file` imports a local rootfs tar or a `.wsl` distribution
 package (WSL 2.4.4+ tar format) as a **distro** — machines can't boot a

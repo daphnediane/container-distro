@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 use container_distro::ops::CreateOptions;
 use container_distro::spec::{Automount, HomeMount, MountSpec, PublishSpec};
 
@@ -35,6 +35,58 @@ pub enum Format {
 }
 
 #[derive(Debug, Subcommand)]
+pub enum CatalogCommand {
+    /// List the installable-distro catalog
+    #[command(visible_alias = "ls")]
+    List {
+        /// Show local cache/image/instance state; repeat for source refs
+        #[arg(short, long, action = ArgAction::Count)]
+        verbose: u8,
+        /// Use FILE instead of the built-in catalog
+        #[arg(long, value_name = "FILE")]
+        catalog: Option<PathBuf>,
+    },
+
+    /// Show one catalog entry and its local state
+    Info {
+        /// Catalog entry to inspect (`catalog list` shows the choices)
+        #[arg(value_name = "DISTRO")]
+        distro: String,
+        /// Use FILE instead of the built-in catalog
+        #[arg(long, value_name = "FILE")]
+        catalog: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = Format::Table)]
+        format: Format,
+    },
+
+    /// Install a distro from the catalog (default: Ubuntu)
+    Install {
+        /// Catalog entry to install (`catalog list` shows the choices)
+        #[arg(value_name = "DISTRO")]
+        distro: Option<String>,
+        /// Distro name (default: the catalog entry's NAME, or the .wsl
+        /// package's oobe.defaultName)
+        #[arg(short = 'n', long)]
+        name: Option<String>,
+        /// Use FILE instead of the built-in catalog
+        #[arg(long, value_name = "FILE")]
+        catalog: Option<PathBuf>,
+        #[command(flatten)]
+        opts: CreateOptions,
+    },
+
+    /// List cached .wsl catalog downloads
+    Cache {
+        /// Use FILE instead of the built-in catalog for entry names
+        #[arg(long, value_name = "FILE")]
+        catalog: Option<PathBuf>,
+    },
+
+    /// Delete cached .wsl catalog downloads
+    Purge,
+}
+
+#[derive(Debug, Subcommand)]
 pub enum Command {
     /// Create a distro from an image and boot it
     Create {
@@ -45,6 +97,12 @@ pub enum Command {
         opts: CreateOptions,
         /// Image reference, e.g. alpine:latest
         image: String,
+    },
+
+    /// List and install catalog distributions
+    Catalog {
+        #[command(subcommand)]
+        command: CatalogCommand,
     },
 
     /// List distros
@@ -271,9 +329,101 @@ pub enum Command {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     fn parse(argv: &[&str]) -> Result<Cli, clap::Error> {
         Cli::try_parse_from(argv)
+    }
+
+    #[test]
+    fn catalog_subcommands() {
+        let cli = parse(&[
+            "distro",
+            "catalog",
+            "list",
+            "-v",
+            "-v",
+            "--catalog",
+            "cat.json",
+        ])
+        .unwrap();
+        let Command::Catalog {
+            command: CatalogCommand::List { verbose, catalog },
+        } = cli.command
+        else {
+            panic!("expected catalog list");
+        };
+        assert_eq!(verbose, 2);
+        assert_eq!(catalog.as_deref(), Some(Path::new("cat.json")));
+
+        let cli = parse(&[
+            "distro",
+            "catalog",
+            "info",
+            "alpine",
+            "--catalog",
+            "cat.json",
+            "--format",
+            "json",
+        ])
+        .unwrap();
+        let Command::Catalog {
+            command:
+                CatalogCommand::Info {
+                    distro,
+                    catalog,
+                    format,
+                },
+        } = cli.command
+        else {
+            panic!("expected catalog info");
+        };
+        assert_eq!(distro, "alpine");
+        assert_eq!(catalog.as_deref(), Some(Path::new("cat.json")));
+        assert_eq!(format, Format::Json);
+
+        let cli = parse(&[
+            "distro",
+            "catalog",
+            "install",
+            "alpine",
+            "-n",
+            "dev",
+            "--restricted",
+            "--no-boot",
+        ])
+        .unwrap();
+        let Command::Catalog {
+            command:
+                CatalogCommand::Install {
+                    distro,
+                    name,
+                    catalog,
+                    opts,
+                },
+        } = cli.command
+        else {
+            panic!("expected catalog install");
+        };
+        assert_eq!(distro.as_deref(), Some("alpine"));
+        assert_eq!(name.as_deref(), Some("dev"));
+        assert_eq!(catalog, None);
+        assert!(opts.restricted && opts.no_boot);
+
+        assert!(matches!(
+            parse(&["distro", "catalog", "cache", "--catalog", "cat.json"])
+                .unwrap()
+                .command,
+            Command::Catalog {
+                command: CatalogCommand::Cache { .. }
+            }
+        ));
+        assert!(matches!(
+            parse(&["distro", "catalog", "purge"]).unwrap().command,
+            Command::Catalog {
+                command: CatalogCommand::Purge
+            }
+        ));
     }
 
     #[test]

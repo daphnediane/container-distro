@@ -25,6 +25,8 @@ pub struct Entry {
     pub status: String,
     pub default: bool,
     pub kind: &'static str,
+    /// A machine and a distro share this name; displays annotate it.
+    pub conflict: bool,
     pub ip: Option<String>,
     pub cpus: Option<u64>,
     pub memory: Option<u64>,
@@ -41,6 +43,7 @@ impl Entry {
             status: m.status.clone(),
             default: m.default,
             kind: "machine",
+            conflict: false,
             ip: m.ip_address.clone(),
             cpus: m.cpus,
             memory: m.memory,
@@ -61,6 +64,7 @@ impl Entry {
             status: d.status.clone(),
             default: d.default,
             kind: "distro",
+            conflict: false,
             ip: d.ip_address.clone(),
             cpus: d.cpus,
             memory: d.memory,
@@ -72,23 +76,46 @@ impl Entry {
     }
 }
 
-/// Merge machines and distros into one list. A distro shadows a machine
-/// of the same name, and a default distro takes the default marker from
+/// Merge machines and distros into one list. Same-named pairs are
+/// conflicts: both rows stay and are marked so every format can
+/// annotate them; shadowing is an operational-resolution concern, not a
+/// display one. A default distro still takes the default marker from
 /// the default machine (matching [`crate::backend::resolve`]).
 pub fn merge(mut machines: Vec<Entry>, distros: Vec<Entry>) -> Vec<Entry> {
-    machines.retain(|m| !distros.iter().any(|d| d.name == m.name));
+    let distro_names: std::collections::BTreeSet<&str> =
+        distros.iter().map(|d| d.name.as_str()).collect();
+    let conflicts: std::collections::BTreeSet<String> = machines
+        .iter()
+        .filter(|m| distro_names.contains(m.name.as_str()))
+        .map(|m| m.name.clone())
+        .collect();
     if distros.iter().any(|d| d.default) {
         machines.iter_mut().for_each(|m| m.default = false);
     }
     machines.extend(distros);
+    for e in &mut machines {
+        e.conflict = conflicts.contains(&e.name);
+    }
     machines
+}
+
+impl Entry {
+    /// The name as printed: suffixed with the backend kind when a
+    /// same-named machine and distro would otherwise be ambiguous.
+    fn display_name(&self) -> String {
+        if self.conflict {
+            format!("{} ({})", self.name, self.kind)
+        } else {
+            self.name.clone()
+        }
+    }
 }
 
 /// `cm -l`: header, then names with the default marked.
 pub fn format_simple(entries: &[Entry]) -> String {
     let mut out = format!("{LIST_HEADER}\n");
     for e in entries {
-        out.push_str(&e.name);
+        out.push_str(&e.display_name());
         if e.default {
             out.push_str(" (Default)");
         }
@@ -97,9 +124,13 @@ pub fn format_simple(entries: &[Entry]) -> String {
     out
 }
 
-/// `cm -l -q`: bare names.
+/// `cm -l -q`: bare names; conflicted names carry their kind suffix so
+/// the two backends stay distinguishable.
 pub fn format_quiet(entries: &[Entry]) -> String {
-    entries.iter().map(|e| format!("{}\n", e.name)).collect()
+    entries
+        .iter()
+        .map(|e| format!("{}\n", e.display_name()))
+        .collect()
 }
 
 /// WSL reports 1 or 2; a container machine is a full VM, like WSL 2.
@@ -110,9 +141,10 @@ const VERSION: &str = "2";
 /// The leading `NAME STATE VERSION` columns replicate `wsl.exe`: NAME is
 /// padded to the longest name + 4, STATE to 16.
 pub fn format_verbose(entries: &[Entry], verbosity: u8) -> String {
-    let name_w = entries
+    let names: Vec<String> = entries.iter().map(Entry::display_name).collect();
+    let name_w = names
         .iter()
-        .map(|e| e.name.chars().count())
+        .map(|n| n.chars().count())
         .chain([4])
         .max()
         .unwrap_or(4)
@@ -129,12 +161,9 @@ pub fn format_verbose(entries: &[Entry], verbosity: u8) -> String {
         "  {:<name_w$}{:<state_w$}{}",
         "NAME", "STATE", "VERSION"
     )];
-    for (e, state) in entries.iter().zip(&states) {
+    for ((e, name), state) in entries.iter().zip(&names).zip(&states) {
         let star = if e.default { '*' } else { ' ' };
-        prefixes.push(format!(
-            "{star} {:<name_w$}{state:<state_w$}{VERSION}",
-            e.name
-        ));
+        prefixes.push(format!("{star} {name:<name_w$}{state:<state_w$}{VERSION}"));
     }
     if verbosity < 2 {
         return prefixes.iter().map(|p| format!("{p}\n")).collect();
@@ -234,7 +263,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_distro_shadows_and_takes_default() {
+    fn merge_keeps_conflicting_rows_and_annotates_them() {
         let machines = vec![
             entry("alpine", "running", true),
             entry("x", "stopped", false),
@@ -246,16 +275,22 @@ mod tests {
         let merged = merge(machines, vec![d1, x]);
         let names: Vec<_> = merged
             .iter()
-            .map(|e| (e.name.as_str(), e.kind, e.default))
+            .map(|e| (e.name.as_str(), e.kind, e.default, e.conflict))
             .collect();
         assert_eq!(
             names,
             [
-                ("alpine", "machine", false),
-                ("d1", "distro", true),
-                ("x", "distro", false)
+                ("alpine", "machine", false, false),
+                ("x", "machine", false, true),
+                ("d1", "distro", true, false),
+                ("x", "distro", false, true)
             ]
         );
+        let out = format_simple(&merged);
+        assert!(out.contains("x (machine)\n"));
+        assert!(out.contains("x (distro)\n"));
+        assert!(out.contains("alpine\n"));
+        assert!(out.contains("d1 (Default)\n"));
     }
 
     #[test]

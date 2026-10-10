@@ -100,17 +100,19 @@ it your identity and home directory.
   an `Image` carry `Amd64Url`/`Arm64Url` downloads with a **mandatory
   `Sha256`**, fetched in-process via ureq (platform trust store, env
   proxies) and verified before import — the trust equivalent of an
-  image pull, since the hash is pinned in the built-in catalog.
+  image pull, since the hash is pinned in the built-in catalog. Both
+  `cm --install` and `container distro catalog install` use that path.
   Downloads are cached content-addressed (`<sha256>.wsl`) in the Darwin
   user cache dir; cache hits re-verify the hash, so a guest (who can
   write the cache) can delete files but cannot poison them. The
-  imported rootfs still gets full provisioning,
-  so `--restricted` remains the right choice for distributions you
-  don't fully trust; making it the default for downloaded rootfses is
-  still under consideration. `--from-file` imports local files where
-  the user already has the bits, so the T4 argument above applies
-  as-is. A `--catalog FILE` override can supply arbitrary `.wsl` URLs
-  with attacker-chosen hashes — but a custom catalog is already an
+  imported rootfs still gets full provisioning, so `--restricted`
+  remains the right choice for distributions you don't fully trust;
+  making it the default for downloaded rootfses is still under
+  consideration. `--from-file` and `container distro import` handle
+  local files where the user already has the bits, so the T4 argument
+  above applies as-is. A `--catalog FILE` override on either CLI can
+  supply arbitrary `.wsl` URLs with attacker-chosen hashes — but a custom
+  catalog is already an
   explicit act of trust (it can equally point `Image` at a hostile
   registry), so pinning to a caller-supplied manifest adds no new
   trust.
@@ -257,7 +259,7 @@ commits that follow this document.
 | C3  | Medium     | `CONTAINER_USER`/`UID`/`GID`/`HOME` interpolated unvalidated into root-run shell code (`create-user.sh` sudoers path traversal, passwd-line injection) | **Fixed** -- charset checks in `create-user.sh` and `host_user()`                                                                           |
 | C4  | Medium     | `-d`/`-s`/`-t`/`--unregister` values passed unvalidated → flag smuggling into inner `container` CLI (`cm -t=-f` → `machine stop -f`)                   | **Fixed** -- `validate_name`/`validate_user` on all passthru args                                                                           |
 | C5  | Medium     | `distro export -o <dir>` hits upstream [apple/container#2325] -- `export` deletes an existing directory                                                | **Fixed** -- existing dirs rejected in `ops::export`                                                                                        |
-| C6  | Low        | Distro silently shadows a machine of the same name on `-d` (warning only in `cm -l`)                                                                   | **Fixed** -- resolution-time warning when a distro shadows a machine                                                                        |
+| C6  | Low        | Distro silently shadows a machine of the same name on `-d` (warning only in `cm -l`)                                                                   | **Fixed** -- resolution-time warning, and listings/info show both backends with `(machine)`/`(distro)` annotations                          |
 | C7  | Low        | `init -u` re-provisions on every boot: sudoers re-added, owner can't lock down their distro                                                            | **Fixed** -- per-user `/etc/.distro.user.*` sentinel; admin edits preserved                                                                 |
 | C8  | Low        | Idle-PID1 loop doesn't reap zombies                                                                                                                    | **Fixed** -- bare `wait` reaps orphans reparented to PID 1                                                                                  |
 | C9  | Low        | Forwarder: unbounded thread per connection, no timeouts                                                                                                | **Fixed** -- 64-conn semaphore cap; backlog queues excess (no idle timeout by design)                                                       |

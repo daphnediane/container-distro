@@ -25,7 +25,7 @@ use cli::{Action, Args, Backend, InstallOpts, InstallSource, ShellType};
 use container_distro::container::{self, ArgvMode};
 use container_distro::forward::PortMapping;
 use container_distro::ops::{self as distro, CreateOptions, RunOpts};
-use container_distro::{catalog, naming, oci, table, wsl};
+use container_distro::{catalog, catalog_ops, wsl};
 use list::Entry;
 
 fn main() -> ExitCode {
@@ -225,10 +225,21 @@ fn list(
     catalog_file: Option<PathBuf>,
 ) -> Result<ExitCode> {
     if online {
-        return list_online(verbosity, catalog_file.as_deref());
+        print!(
+            "{}",
+            catalog_ops::render_online(
+                catalog_file.as_deref(),
+                verbosity,
+                true,
+                backend::distros_enabled(),
+                "cm --install <Distro>"
+            )?
+        );
+        return Ok(ExitCode::SUCCESS);
     }
     if cache {
-        return list_cache(catalog_file.as_deref());
+        print!("{}", catalog_ops::render_cache(catalog_file.as_deref()));
+        return Ok(ExitCode::SUCCESS);
     }
     container::ensure_started()?;
     let machines = container::list_machines()?;
@@ -271,214 +282,6 @@ fn list(
         list::format_simple(&entries)
     };
     print!("{out}");
-    Ok(ExitCode::SUCCESS)
-}
-
-/// `cm -l -o`: the installable catalog — baked in (or a `--catalog`
-/// file), so a plain listing never touches `container`. `-v` adds each
-/// entry's local state — `LOCAL` (a pulled image, a cached `.wsl`, or
-/// `downloading` while a fetch is in flight) and `INSTANCES` (machines
-/// and distros installed from the entry, running ones marked).
-///
-/// Every probe is best-effort and never blocks: `container` is
-/// consulted only when already running — a listing shouldn't start
-/// services — and the cache is read without flocking; an in-flight
-/// download is detected by `try_lock` on its `.lock` sidecar, never
-/// waited on.
-fn list_online(verbosity: u8, catalog_file: Option<&Path>) -> Result<ExitCode> {
-    let cat = catalog::load(catalog_file)?;
-    let arch = oci::host_arch();
-    if verbosity == 0 {
-        print!("{}", catalog::render(&cat.entries, arch));
-        return Ok(ExitCode::SUCCESS);
-    }
-    let probe = OnlineProbe::gather();
-    let status: Vec<catalog::EntryStatus> =
-        cat.entries.iter().map(|e| probe.status_of(e)).collect();
-    print!(
-        "{}",
-        catalog::render_verbose(&cat.entries, arch, &status, verbosity)
-    );
-    Ok(ExitCode::SUCCESS)
-}
-
-/// Local state for `--list --online --verbose`. Every field degrades
-/// to empty rather than erroring or blocking.
-struct OnlineProbe {
-    /// Verified `<sha256>.wsl` files in the download cache, by hash.
-    cached: std::collections::HashSet<String>,
-    /// Images `container` knows, or empty when services are down.
-    images: Vec<container::ImageListEntry>,
-    /// `(running, image reference)` per installed name — a distro
-    /// shadows a same-named machine, like everywhere else in `cm`.
-    instances: std::collections::BTreeMap<String, (bool, Option<String>)>,
-}
-
-/// A SHA-256 in cache-filename form: lowercase hex, `0x` stripped —
-/// the label on an imported image keeps the catalog's raw spelling.
-fn normalize_sha(s: &str) -> String {
-    s.strip_prefix("0x")
-        .or_else(|| s.strip_prefix("0X"))
-        .unwrap_or(s)
-        .to_lowercase()
-}
-
-impl OnlineProbe {
-    fn gather() -> Self {
-        use std::collections::{BTreeMap, HashSet};
-        let cached: HashSet<String> = wsl::cache_entries().into_iter().map(|e| e.sha256).collect();
-        let mut images = Vec::new();
-        let mut instances = BTreeMap::new();
-        if container::system_running() {
-            images = container::list_images().unwrap_or_default();
-            // `machine list` has no image column; inspect reports the
-            // reference each machine was created from.
-            for m in container::list_machines().unwrap_or_default() {
-                let image = container::inspect_machine(&m.id)
-                    .ok()
-                    .and_then(|d| d.image.map(|i| i.reference));
-                instances.insert(m.id.clone(), (m.is_running(), image));
-            }
-            if backend::distros_enabled() {
-                for s in distro::summaries(false).unwrap_or_default() {
-                    instances.insert(s.id.clone(), (s.is_running(), s.image.clone()));
-                }
-            }
-        }
-        Self {
-            cached,
-            images,
-            instances,
-        }
-    }
-
-    /// The `rootfs-sha256` label on a local image, normalized — the
-    /// link from a distro's image back to the `.wsl` download it was
-    /// imported from.
-    fn rootfs_sha(&self, image_ref: &str) -> Option<String> {
-        use container_distro::spec::LABEL_ROOTFS_SHA256;
-        let key = naming::label_key(LABEL_ROOTFS_SHA256);
-        self.images
-            .iter()
-            .find(|i| container::same_image(&i.configuration.name, image_ref))
-            .and_then(|i| i.labels().get(&key).map(|s| normalize_sha(s)))
-    }
-
-    fn status_of(&self, e: &catalog::Entry) -> catalog::EntryStatus {
-        let mut st = catalog::EntryStatus::default();
-        let Some(source) = e.source(oci::host_arch()) else {
-            return st;
-        };
-        for (name, (running, image)) in &self.instances {
-            let hit = image.as_deref().is_some_and(|r| match source {
-                catalog::Source::Image(i) => container::same_image(r, i),
-                catalog::Source::Wsl(d) => self
-                    .rootfs_sha(r)
-                    .is_some_and(|s| s == d.sha256_normalized()),
-            });
-            if hit {
-                st.instances.push((name.clone(), *running));
-            }
-        }
-        st.local = match source {
-            catalog::Source::Image(i)
-                if self
-                    .images
-                    .iter()
-                    .any(|x| container::same_image(&x.configuration.name, i)) =>
-            {
-                catalog::Local::Yes
-            }
-            catalog::Source::Wsl(d) => {
-                let sha = d.sha256_normalized();
-                if self.cached.contains(&sha) {
-                    catalog::Local::Yes
-                } else if wsl::download_in_progress(&sha) {
-                    catalog::Local::Downloading
-                } else {
-                    catalog::Local::No
-                }
-            }
-            _ => catalog::Local::No,
-        };
-        st
-    }
-}
-
-/// `cm --list --cache`: the `.wsl` download cache, which catalog entry
-/// each file is for, and which image it was imported as. Cache files
-/// are named by their verified SHA-256 — the same hash lands on the
-/// imported image's `rootfs-sha256` label, which is how the two link.
-fn list_cache(catalog_file: Option<&std::path::Path>) -> Result<ExitCode> {
-    use container_distro::spec::LABEL_ROOTFS_SHA256;
-
-    let cached = wsl::cache_entries();
-    let cat = catalog::load(catalog_file).ok();
-    let images = container::list_images().unwrap_or_default();
-    let sha_key = naming::label_key(LABEL_ROOTFS_SHA256);
-
-    println!(
-        "Cached .wsl downloads ({})",
-        wsl::cache_dir().map_or_else(|| "?".into(), |p| p.display().to_string())
-    );
-    if cached.is_empty() {
-        println!("  (empty)");
-        return Ok(ExitCode::SUCCESS);
-    }
-    let mut rows = vec![vec![
-        "SHA256".into(),
-        "SIZE".into(),
-        "CATALOG ENTRY".into(),
-        "IMPORTED AS".into(),
-    ]];
-    for e in &cached {
-        // Prefer the catalog's own name for this SHA; fall back to the
-        // name recorded in the lockfile at fetch time, marking it when
-        // the catalog still knows the name but at a different SHA —
-        // i.e. a superseded build.
-        let entry_name = cat
-            .as_ref()
-            .and_then(|c| {
-                c.entries
-                    .iter()
-                    .find(|en| {
-                        [&en.amd64_url, &en.arm64_url]
-                            .into_iter()
-                            .flatten()
-                            .any(|d| d.sha256_normalized() == e.sha256)
-                    })
-                    .map(|en| en.name.clone())
-            })
-            .or_else(|| {
-                let meta = e.meta.as_ref()?;
-                let superseded = cat.as_ref().is_some_and(|c| {
-                    c.entries
-                        .iter()
-                        .any(|en| en.name.eq_ignore_ascii_case(&meta.name))
-                });
-                Some(if superseded {
-                    format!("{} (superseded)", meta.name)
-                } else {
-                    meta.name.clone()
-                })
-            })
-            .unwrap_or_default();
-        let image_ref = images
-            .iter()
-            .filter(|i| i.labels().get(&sha_key) == Some(&e.sha256))
-            .map(|i| i.configuration.name.clone())
-            .collect::<Vec<_>>()
-            .join(", ");
-        rows.push(vec![
-            format!("{}…", &e.sha256[..12.min(e.sha256.len())]),
-            format!("{} MiB", e.size >> 20),
-            entry_name,
-            image_ref,
-        ]);
-    }
-    for line in table::columns(&rows, 3) {
-        println!("{line}");
-    }
     Ok(ExitCode::SUCCESS)
 }
 
@@ -573,22 +376,6 @@ fn shutdown(system: bool) -> Result<ExitCode> {
     Ok(code)
 }
 
-/// What `--install` resolved to on this host.
-enum Resolved {
-    /// An OCI image to create a machine or distro from; `name` is the
-    /// catalog entry's NAME when one matched — `wsl --install`
-    /// registers the distro under that name (`Ubuntu`), not a
-    /// derivation of the image.
-    Image { image: String, name: Option<String> },
-    /// A catalog `.wsl` download (URL + SHA-256); the entry's NAME is
-    /// the last-resort distro name after the package's own manifest.
-    Wsl {
-        url: String,
-        sha256: String,
-        name: String,
-    },
-}
-
 /// The positional `--install` argument is a catalog name when it
 /// matches one (case-insensitive), otherwise an image reference —
 /// catalog names contain no `/`/`:`/`@`, so a qualified ref always
@@ -598,41 +385,15 @@ enum Resolved {
 /// on ARM rejecting amd64-only distributions). An image matched
 /// through the catalog keeps the entry's NAME as the default distro
 /// name — a bare image reference derives one from the ref instead.
-fn resolve(cat: &catalog::Catalog, source: &InstallSource) -> Result<Resolved> {
-    let entry = match source {
-        InstallSource::Default => cat.default_entry().context("the distro catalog is empty")?,
-        InstallSource::CatalogOrImage(a) => match catalog::lookup(&cat.entries, a) {
-            Some(e) => e,
-            None => {
-                return Ok(Resolved::Image {
-                    image: a.clone(),
-                    name: None,
-                });
-            }
-        },
-        InstallSource::Image(r) => {
-            return Ok(Resolved::Image {
-                image: r.clone(),
-                name: None,
-            });
-        }
+fn resolve<'a>(
+    cat: &'a catalog::Catalog,
+    source: &'a InstallSource,
+) -> Result<catalog_ops::Resolved<'a>> {
+    match source {
+        InstallSource::Default => catalog_ops::resolve(cat, None, false),
+        InstallSource::CatalogOrImage(a) => catalog_ops::resolve(cat, Some(a), true),
+        InstallSource::Image(image) => Ok(catalog_ops::Resolved::Image { image, name: None }),
         InstallSource::File(_) => bail!("internal error: file source resolved as image"),
-    };
-    match entry.source(oci::host_arch()) {
-        Some(catalog::Source::Image(i)) => Ok(Resolved::Image {
-            image: i.to_string(),
-            name: Some(entry.name.clone()),
-        }),
-        Some(catalog::Source::Wsl(d)) => Ok(Resolved::Wsl {
-            url: d.url.clone(),
-            sha256: d.sha256.clone(),
-            name: entry.name.clone(),
-        }),
-        None => bail!(
-            "{:?} is not available for {} (no image or .wsl download for that architecture)",
-            entry.name,
-            oci::host_arch()
-        ),
     }
 }
 
@@ -653,9 +414,10 @@ fn install(opts: &InstallOpts) -> Result<ExitCode> {
         return install_from_file(opts, &create, file, None, distro::ImportSource::Local);
     }
     let cat = catalog::load(opts.catalog.as_deref())?;
-    let (image, hint) = match resolve(&cat, &opts.source)? {
-        Resolved::Image { image, name } => (image, name),
-        Resolved::Wsl { url, sha256, name } => {
+    let resolved = resolve(&cat, &opts.source)?;
+    let (image, hint) = match &resolved {
+        catalog_ops::Resolved::Image { image, name } => (*image, *name),
+        catalog_ops::Resolved::Wsl { name, .. } => {
             // Machines boot from images — a catalog entry that only
             // ships a rootfs download can't satisfy `--machine`.
             if opts.machine {
@@ -663,39 +425,31 @@ fn install(opts: &InstallOpts) -> Result<ExitCode> {
                     "`{name}` ships as a rootfs archive, which only distros boot (drop --machine)"
                 );
             }
-            // `fetched` holds a shared lock on the cache entry — purge
-            // and prune wait for the import below instead of deleting
-            // the file mid-flight.
-            let fetched = wsl::fetch(&url, &sha256, &name)?;
-            return install_from_file(
-                opts,
-                &create,
-                fetched.path(),
-                Some(&name),
-                distro::ImportSource::Download {
-                    url: &url,
-                    sha256: &sha256,
-                    name: &name,
-                },
-            );
+            if !backend::distros_enabled() {
+                bail!("--install needs distro support (unset CM_BACKEND=machine)");
+            }
+            let name = catalog_ops::install_resolved(resolved, opts.name.clone(), &create)?;
+            if opts.no_launch {
+                return Ok(ExitCode::SUCCESS);
+            }
+            let mut cmd = distro::run_command(RunOpts {
+                name: Some(name),
+                ..RunOpts::default()
+            })?;
+            return Err(anyhow::Error::from(cmd.exec()).context("failed to exec `container exec`"));
         }
     };
-    // --name is used verbatim; otherwise a catalog install takes the
-    // entry's NAME (sanitized: `Ubuntu` → `ubuntu`, like `wsl --install`
-    // registering `Ubuntu`) and a bare image install derives one from
-    // the image ref (`alpine:latest` → `alpine-latest`).
-    let name = opts
-        .name
-        .clone()
-        .unwrap_or_else(|| container::default_machine_name(hint.as_deref().unwrap_or(&image)));
-    container::validate_name(&name)?;
     if !opts.wants_machine() {
         if !backend::distros_enabled() {
             bail!(
                 "--install defaults to a distro; that needs distro support (unset CM_BACKEND=machine)"
             );
         }
-        let name = distro::create(Some(name), &create, &image)?;
+        let name = catalog_ops::install_resolved(
+            catalog_ops::Resolved::Image { image, name: hint },
+            opts.name.clone(),
+            &create,
+        )?;
         if opts.no_launch {
             return Ok(ExitCode::SUCCESS);
         }
@@ -706,6 +460,15 @@ fn install(opts: &InstallOpts) -> Result<ExitCode> {
         return Err(anyhow::Error::from(cmd.exec()).context("failed to exec `container exec`"));
     }
 
+    // --name is used verbatim; otherwise a catalog install takes the
+    // entry's NAME (sanitized: `Ubuntu` → `ubuntu`, like `wsl --install`
+    // registering `Ubuntu`) and a bare image install derives one from
+    // the image ref (`alpine:latest` → `alpine-latest`).
+    let name = opts
+        .name
+        .clone()
+        .unwrap_or_else(|| container::default_machine_name(hint.unwrap_or(image)));
+    container::validate_name(&name)?;
     let mut cmd = container::container_cmd();
     cmd.args(["machine", "create", "--name", &name]);
     if let Some(c) = opts.cpus {
@@ -718,7 +481,7 @@ fn install(opts: &InstallOpts) -> Result<ExitCode> {
         cmd.args(["--home-mount", h.as_str()]);
     }
     let status = cmd
-        .arg(&image)
+        .arg(image)
         .status()
         .context("failed to run `container machine create`")?;
     if !status.success() || opts.no_launch {
@@ -744,23 +507,9 @@ fn install_from_file(
     if !backend::distros_enabled() {
         bail!("--from-file needs distro support (unset CM_BACKEND=machine)");
     }
-    if !file.is_file() {
-        bail!("{} does not exist", file.display());
-    }
     // --name is used verbatim; a derived name (the .wsl manifest's
     // oobe.defaultName, else the file stem) is sanitized to a valid one.
-    let name = match &opts.name {
-        Some(n) => n.clone(),
-        None => container::default_machine_name(
-            &wsl::distribution_name(file)
-                .ok()
-                .flatten()
-                .or_else(|| name_hint.map(str::to_string))
-                .unwrap_or_else(|| file_default_name(file)),
-        ),
-    };
-    container::validate_name(&name)?;
-    let name = distro::import(&name, file, create, source)?;
+    let name = catalog_ops::import_file(file, opts.name.clone(), name_hint, create, source)?;
     if opts.no_launch {
         return Ok(ExitCode::SUCCESS);
     }
@@ -819,21 +568,6 @@ fn import(
         )?;
     }
     Ok(ExitCode::SUCCESS)
-}
-
-/// Derive a default distro name from a rootfs filename: drop the
-/// archive suffixes (`rocky-9.wsl` → `rocky-9`, `fs.tar.gz` → `fs`).
-fn file_default_name(file: &std::path::Path) -> String {
-    let Some(mut stem) = file.file_name().map(|n| n.to_string_lossy().into_owned()) else {
-        return "distro".to_string();
-    };
-    for ext in [".tar.gz", ".tgz", ".tar.xz", ".wsl", ".tar"] {
-        if stem.len() > ext.len() && stem.to_lowercase().ends_with(ext) {
-            stem.truncate(stem.len() - ext.len());
-            break;
-        }
-    }
-    stem
 }
 
 /// The IPv4 address of a running machine, booting it if needed.
@@ -977,20 +711,17 @@ mod tests {
         let cat = builtin();
         // `wsl --install` registers `Ubuntu` — a catalog install takes
         // the entry's NAME, not an image-derived `ubuntu-latest`.
-        let Resolved::Image { image, name } = resolve(&cat, &InstallSource::Default).unwrap()
+        let catalog_ops::Resolved::Image { image, name } =
+            resolve(&cat, &InstallSource::Default).unwrap()
         else {
             panic!("the catalog default should resolve to an image");
         };
         assert_eq!(image, "docker.io/library/ubuntu:latest");
-        assert_eq!(name.as_deref(), Some("Ubuntu"));
-        assert_eq!(
-            container::default_machine_name(name.as_deref().unwrap()),
-            "ubuntu"
-        );
+        assert_eq!(name, Some("Ubuntu"));
+        assert_eq!(container::default_machine_name(name.unwrap()), "ubuntu");
         for arg in ["ubuntu", "UBUNTU-24.04"] {
-            let Resolved::Image { name, .. } =
-                resolve(&cat, &InstallSource::CatalogOrImage(arg.to_string())).unwrap()
-            else {
+            let source = InstallSource::CatalogOrImage(arg.to_string());
+            let catalog_ops::Resolved::Image { name, .. } = resolve(&cat, &source).unwrap() else {
                 panic!("{arg} should resolve to an image");
             };
             assert!(name.is_some(), "{arg}");
@@ -1006,7 +737,7 @@ mod tests {
             InstallSource::CatalogOrImage("quay.io/x/y:1".to_string()),
             InstallSource::Image("alpine:3".to_string()),
         ] {
-            let Resolved::Image { name, .. } = resolve(&cat, &source).unwrap() else {
+            let catalog_ops::Resolved::Image { name, .. } = resolve(&cat, &source).unwrap() else {
                 panic!("{source:?} should resolve to an image");
             };
             assert_eq!(name, None, "{source:?}");
@@ -1016,11 +747,8 @@ mod tests {
     #[test]
     fn wsl_catalog_entries_keep_their_name() {
         let cat = builtin();
-        let Resolved::Wsl { name, .. } = resolve(
-            &cat,
-            &InstallSource::CatalogOrImage("rlcplus-9".to_string()),
-        )
-        .unwrap() else {
+        let source = InstallSource::CatalogOrImage("rlcplus-9".to_string());
+        let catalog_ops::Resolved::Wsl { name, .. } = resolve(&cat, &source).unwrap() else {
             panic!("RLCPlus-9 should resolve to a .wsl download");
         };
         assert_eq!(name, "RLCPlus-9");

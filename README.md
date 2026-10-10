@@ -67,7 +67,7 @@ Full reference: doc/cm.md · man pages: `man cm`, `man container-distro`.
 | `--shutdown`         | Stop all running machines and distros (`--system`: also stop services)                              |
 | `--status`           | Show container system status                                                                        |
 | `--unregister`       | Delete a machine or distro and its storage                                                          |
-| `--install [distro]` | Create + boot a machine (`--name`, `--no-launch`, `--cpus`, `--memory`, `--home-mount`); bare =     |
+| `--install [distro]` | Create + boot a distro (`--machine` for a machine; `--name`, `--no-launch`, `--cpus`, `--memory`,   |
 |                      | catalog default (Ubuntu). Names resolve via the catalog (`cm -l -o`, `--catalog FILE` overrides —   |
 |                      | Microsoft's `DistributionInfo.json` schema + `Image`; `.wsl` URL entries download+verify SHA-256),  |
 |                      | image refs pass through (`--from-image` forces), `--from-file` imports a tar/`.wsl` as a distro     |
@@ -120,6 +120,7 @@ On top of that:
 | Published ports        | `-p 3000`, `-p 8080:80`, `-p 0.0.0.0:8080:80/udp` (host IP defaults to `127.0.0.1`)                                                                                                                                                                      |
 | Change settings later  | `container distro set NAME --cpus 4 --add-volume … --publish …` (recreates, keeps the filesystem)                                                                                                                                                        |
 | Export / import        | `container distro export NAME -o f.tar`, `container distro import NAME f.tar[.gz]`                                                                                                                                                                       |
+| Catalog installs       | `container distro catalog list`, `catalog info DISTRO`, `catalog install DISTRO` -- the `cm` catalog's image and verified `.wsl` entries; `catalog cache`/`purge` manage downloads                                                                       |
 | Migrate                | `container distro migrate MACHINE [-n NAME] [--keep]` -- clones the machine's rootfs into a distro (cpus/memory/home-mount/user carry over); `--out DISTRO` is the reverse, into a new `container machine`. The source is removed unless `--keep`        |
 | Exact argv             | `run` uses `container exec`, so arguments are never re-split                                                                                                                                                                                             |
 | Restricted mode        | `--restricted` (`--untrusted`): no mounts, no network, no agent, no sudo -- see below                                                                                                                                                                    |
