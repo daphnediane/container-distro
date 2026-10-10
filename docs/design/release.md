@@ -56,6 +56,22 @@ The mechanical bits are driven by [cargo-release] (`cargo install
    ([Version gating]) and extend `VERIFIED_CONTAINER_MINOR` plus the
    install-offer pin (`PINNED_CONTAINER_VERSION`, `PKG_SHA256`) once
    verified.
+
+   Then run the **legacy adoption check**,
+   `scripts/check-legacy-adoption.sh`, against the real state dir and
+   appRoot (`container` must be running). It builds pre-journal distros
+   with the newest pre-journal release -- pinned under `scratch/` as
+   `cargo install --locked container-distro@0.4.2 --root
+   scratch/old-0.4.2` (bump the pin if a later pre-journal release ever
+   ships) -- and verifies this build auto-adopts them on first contact
+   (journal `uchg`-locked, disk and live config carried), refuses
+   journal-less containers once the `journalized` marker is set until
+   `cm --migrate` adopts them, and folds a legacy `preserved/`
+   `set`-staging pair into the journal. It cleans up its own
+   `relcheck-*` distros; re-opening the migration window also re-adopts
+   any other still-pre-journal distros on the machine, which is the
+   intended upgrade behavior. Keep the check in the gate until
+   auto-adoption sunsets in 1.2.0.
 2. Update `CHANGELOG.md` (see [Changelog]): prepend a
    `## X.Y.Z -- YYYY-MM-DD` section drafted from the commit log since
    the previous tag (`git log --oneline v<prev>..HEAD`) and the

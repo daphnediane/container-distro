@@ -185,6 +185,13 @@ $D set d1 --cpus 2                           # recreate, state preserved
 $D rm -f d1
 ```
 
+`scripts/check-legacy-adoption.sh` exercises the ≤0.4.2 → journaled
+upgrade against the real state dir: auto-adoption on first contact,
+refusal + explicit `cm --migrate` adopt once the `journalized` marker
+is set, and the legacy `preserved/` staging fold. The release process
+runs it (docs/design/release.md); it needs `container` running and the
+pinned old binaries under `scratch/old-0.4.2`.
+
 Test machine: `container machine create --name alpine --set-default alpine:latest`.
 Installing the plugin self-elevates: `container-distro install-plugin`
 (after `cargo install --path .`) re-execs `sudo` for the root-owned
