@@ -188,9 +188,12 @@ pub enum Command {
     },
 
     /// Migrate between a `container machine` and a distro, carrying the
-    /// root filesystem across; the source is removed unless `--keep`
+    /// root filesystem across; the source is removed unless `--keep`.
+    /// Naming a pre-journal distro container adopts it instead — its
+    /// live config becomes the journal
     Migrate {
-        /// Machine to migrate in (with --out, the distro to migrate out)
+        /// Machine to migrate in (with --out, the distro to migrate
+        /// out). A pre-journal distro is adopted, not migrated
         name: String,
         /// Machine → distro (the default direction)
         #[arg(long = "in", conflicts_with = "out")]

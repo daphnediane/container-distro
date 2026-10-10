@@ -138,8 +138,9 @@ hijacked `PATH` or `CONTAINER_CLI` runs an arbitrary binary as the user.
 
 `~/Library/Application Support/container-distro/` holds
 `sbin.distro/init` and `create-user.sh` -- executed as PID 1 and as root
-in every distro -- plus `default-distro` and the `preserved/` staging
-area. With `home-mount=rw` all of it was guest-writable: TCC does not
+in every distro -- plus `default-distro`, the `distros/` journals, and
+the `journalized` migration marker. With `home-mount=rw` all of it was
+guest-writable: TCC does not
 protect `Application Support`, and virtiofs writes are made by the
 daemon as the user, so no macOS layer intervened (verified on a running
 distro). There is no standard per-user location outside `$HOME`, so the
@@ -158,21 +159,39 @@ answer was to take the files out of reach rather than move them:
   to clear it (verified on a running distro). Refresh unlocks, writes,
   re-locks; writes use `O_NOFOLLOW`, so a planted symlink can't turn a
   refresh into a clobber of an arbitrary user file.
-- The same flag covers `preserved/<name>.ext4`/`.json` while staged --
-  a guest could otherwise rewrite the spec `recover_interrupted`
-  recreates from, or the filesystem it puts back -- `preserved/` stays
-  locked at rest so nothing can be planted there, and `default-distro`
+- The same flag covers each distro's journal —
+  `~/Library/Application Support/container-distro/distros/<name>/`
+  (`spec.json` + `rootfs.ext4`), all `uchg`-locked at rest. (Not
+  `appRoot/plugin-state/` — that's another app's data folder, and an
+  unentitled client writing there trips macOS's app-data consent
+  prompt.) A guest could otherwise
+  rewrite the spec a distro recreates from, or plant journal entries a
+  later read would trust. `spec.json` doubles as the `flock` target —
+  the fd is opened `O_RDWR|O_NOFOLLOW` while unlocked, then re-locked,
+  and writes through the held fd are still honored, so the journal
+  stays locked *and* unlinkable mid-operation (a freestanding lockfile
+  could be unlinked under the lock, voiding exclusion). `default-distro`
   is locked on write/refresh.
 - `boot` refreshes whichever directory the container actually mounts:
   per-user copies upgrade (and lock) in place; installed copies warn
   once on drift.
 
+The pre-journal world gets exactly one trusted upgrade: a
+`journalized` marker (itself `uchg`-locked, so unforgeable) gates a
+one-time pass that adopts journal-less distro containers and folds
+staged `preserved/` pairs — and only pairs whose `.json` carries
+`uchg`, since the flag proves ours. Afterwards a journal-less labeled
+container is refused: it can only be planted, so `container distro
+migrate NAME` is the explicit opt-in. The pass sunsets after 1.1.x.
+Separately, `start` diffs a found-running container's reconstructed
+spec against the journal and warns per-field — drift is loud, not
+silently adopted.
+
 Residuals, deliberately accepted: a bare `container start` skips the
 refresh (contents can only be stale, never tampered -- the lock makes
-that cosmetic); the plant window for `preserved/` shrinks to the
-duration of a real `set`/`migrate`, when the dir is legitimately
-unlocked; and everything *else* in `$HOME` stays guest-writable --
-that's T1's model, unchanged.
+that cosmetic); journal dirs unlock briefly during real mutations; and
+everything *else* in `$HOME` stays guest-writable -- that's T1's model,
+unchanged.
 
 Alternatives considered and rejected: `container cp` into the rootfs
 (`cp` requires a running container, and `init` must exist before the
@@ -298,17 +317,19 @@ Each open gap adds attack surface; flagging the traps up front.
    both on push/PR plus a weekly advisory scan ([#12])
 6. Decide init-assets location vs. shared home (T6) -- **done**:
    plugin-adjacent installed assets preferred, per-user fallback
-   `uchg`-locked; `preserved/` staging and `default-distro` covered by
-   the same flag ([#13])
+   `uchg`-locked; journal state and `default-distro` covered by the
+   same flag ([#13])
 7. C8 (PID 1 zombie reaping), C11 (uninstall TOCTOU / prefix cleanup) --
    **done**; C10's rw-all-`/Volumes` surface stays an accepted opt-in
    trade-off
 8. Nudge semi-trusted workloads off rw home shares (T1) -- **open**
    ([#19])
 9. Adopt the machine model's anti-persistence defenses for distros --
-   **open** ([#18])
-10. Integrity-check distro-visible state at `boot`/`start` -- **open**
-    ([#20])
+   **done**: stopped distros are journal + disk under `plugin-state/
+   container-distro/`, materialized fresh at every start ([#18])
+10. Integrity-check distro-visible state at `boot`/`start` -- **done**:
+    `start` diffs a running container's reconstructed spec against the
+    journal and warns per-field ([#20])
 
 [#12]: https://github.com/daphnediane/container-distro/issues/12
 [#13]: https://github.com/daphnediane/container-distro/issues/13

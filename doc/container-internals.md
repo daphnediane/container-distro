@@ -132,16 +132,17 @@ missing ones fall back to defaults.
 - `--network none` yields an empty `configuration.networks`; the default
   attachment is named `"default"`.
 - `container delete` removes the container's whole data directory --
-  including `rootfs.ext4` -- which is why `set` stages the filesystem in
-  our own `preserved/` dir first.
+  including `rootfs.ext4` -- which is why a distro's disk lives in its
+  journal and stop folds it back before the container is deleted.
 - `container export` **deletes an existing output directory** (upstream
   [apple/container#2325]) -- `check_export_output` refuses directories
   first.
 - `export` snapshots `containers/<id>/rootfs.ext4` literally, ignoring
   any configured rootfs mount -- so it fails on machines and on
-  never-booted containers. We deliberately point `rootFsOverride` at the
-  conventional path so export keeps working on distros after `set`
-  (details: [gaps/export-import]).
+  never-booted containers. `distro export` works around this the same
+  way `cm --export` does for machines: a scratch container whose
+  conventional `rootfs.ext4` is a clonefile of the distro's journaled
+  disk (details: [gaps/export-import]).
 - `container create`'s stdout is the container ID -- discarded via
   `run_container_quiet`.
 - `image load -i` accepts an OCI image-layout tar; we tag manifests with
@@ -172,7 +173,8 @@ storage -- not a promised interface. Call sites are marked with
   **`containers/<id>/rootfs.ext4`**. A never-booted container therefore
   has no rootfs -- which is also why `container export` fails on one.
 - **`runtime-configuration.json`** is the per-container runtime spec.
-  `container distro set` rewrites `options.rootFsOverride` in it:
+  Materializing a distro (`start`, or `set`'s recreate) rewrites
+  `options.rootFsOverride` in it to point at the journaled disk:
 
   ```json
   {"type": {"block": {"sync": {"fsync": {}}, "format": "ext4",
@@ -181,7 +183,7 @@ storage -- not a promised interface. Call sites are marked with
    "options": []}
   ```
 
-  so `start` mounts our preserved ext4 instead of copying the image
+  so `start` mounts the journaled ext4 instead of copying the image
   snapshot over `rootfs.ext4` (the copy would fail on the existing
   file). This is the same mechanism `container machine` uses for its
   plugin-state disks -- we reuse it, we didn't invent it.
@@ -202,10 +204,10 @@ storage -- not a promised interface. Call sites are marked with
 - `rootfs.ext4` is **sparse** -- allocated blocks (`st_blocks * 512`)
   are what `machine list` reports as DISK and what `distro list` reports
   (`container_disk_usage`).
-- `fs::copy` on APFS is a clonefile, so staging a multi-GB rootfs into
-  `preserved/` is instant and CoW.
+- `fs::copy` on APFS is a clonefile, so cloning a multi-GB rootfs into
+  an export scratch container is instant and CoW.
 - Only distro-owned containers are patched -- identified by the
-  `<prefix>.distro` label before `set` touches anything.
+  `<prefix>.distro` label before anything touches them.
 
 ## Plugin registration internals
 

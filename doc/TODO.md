@@ -10,14 +10,10 @@ source of truth. "Rung" references are the integration levels in
 
 ### For 1.0 — distros
 
-- [ ] **Make distros the `cm` default; add `--machine`** -- flip
-  `--install`/create to build a distro unless `--machine` is given
-  (today `--distro` opts in). Distro-first is also the safer default:
-  only distros support `--restricted`, and it's the path we control.
-  Keep `--machine` for WSL-parity testing and upstream comparisons.
-  Gated on adopting the machine model's anti-persistence defenses for
-  distros (Security & hardening below, [#18]) -- don't make the
-  less-regenerated backend the default until it matches ([#21])
+- [ ] **Make distros the `cm` default; add `--machine`** -- `--distro`/
+  `--machine` selectors landed on every name-resolving action; the
+  `--install`/`--import` default flip remains. Machines remain for
+  WSL-parity testing and upstream comparisons ([#21])
 
 ## Machines (WSL parity, mostly upstream-blocked)
 
@@ -78,18 +74,15 @@ From [security.md's checklist]:
   recommending `home-mount ro` as the default posture for generated or
   imported images, or a scoped-subdir share instead of all of
   `$HOME` ([#19])
-- [ ] **Adopt the machine model's anti-persistence defenses for
-  distros** -- `container machine` gives each boot a randomized
-  backing-container id and regenerates its runtime config, so guest
-  edits don't persist; distros use stable names. Consider randomized
-  backing-container names + recreate-per-boot, or regenerate/verify
-  the backing container's recorded config at `boot`/`start`, so
-  guest tampering can't outlive a restart ([#18])
-- [ ] **Integrity-check distro-visible state at start** -- beyond the
-  uchg-locked assets, consider recording what `cm` last wrote for a
-  distro (mounts, resources, ssh/sudo posture) and warning on drift
-  at `boot`/`start` -- turns silent tampering into a loud diff
-  ([#20])
+- [x] **Adopt the machine model's anti-persistence defenses for
+  distros** -- done, stronger than the sketched options: a stopped
+  distro is only its journal (`spec.json` + `rootfs.ext4`,
+  `uchg`-locked); `start` materializes a fresh container from the
+  journaled spec and `stop` dismantles it, so no runtime config at all
+  survives a restart ([#18])
+- [x] **Integrity-check distro-visible state at start** -- `start`
+  diffs a found-running container's reconstructed spec against the
+  journal and warns per-field ([#20])
 
 ## Docs & tooling
 

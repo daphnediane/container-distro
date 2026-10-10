@@ -61,7 +61,9 @@ machine plugin's state instead -- the container's `rootfs.json`:
 ```
 
 Export ignores the configured rootfs mount source. It's an upstream bug.
-Regular containers, including `container distro` ones, are unaffected.
+Regular containers are unaffected; `container distro` ones are — their
+rootfs mounts the journaled disk via `rootFsOverride`, just like a
+machine's.
 
 The mechanism (verified 2026-10-04): a container's data dir holds only
 `runtime-configuration.json` until first start; then the daemon copies
@@ -70,12 +72,12 @@ ext4 file) to `containers/<id>/rootfs.ext4`. Machines instead carry
 `options.rootFsOverride` in `runtime-configuration.json` pointing at
 their plugin-state ext4 -- no copy. Two consequences: `export` also
 fails on *never-booted* regular containers (no `rootfs.ext4` yet), and
-the same override lets `container distro set` carry a booted rootfs
-across a recreate. We only patch `runtime-configuration.json` on
-containers `container distro` itself created -- never a machine's
-backing container -- and point the override at the conventional
-`containers/<id>/rootfs.ext4` path, so `export` still works afterwards
-and `delete` removes the disk with the container.
+the same override lets `container distro` attach a journaled rootfs
+when it materializes a container at `start`. We only patch
+`runtime-configuration.json` on containers `container distro` itself
+created -- never a machine's backing container -- and since the
+override points at the journal, `container export` is broken for
+distros exactly as it is for machines.
 
 **Upstream:** no existing issue found (searched 2026-10-03: "export",
 "machine export", "rootfs.ext4", "snapshot disk"). The related issues
@@ -102,7 +104,9 @@ directory, open). A new issue is still warranted, with the repro above
   container that never starts (our older imported images carry no
   `Cmd`), so the scratch container passes an explicit `--entrypoint
   /bin/sh`; and a SIGKILLed export can leak the scratch container, so
-  it carries an `export-scratch` label naming the machine.
+  it carries an `export-scratch` label naming the machine. `distro
+  export` reuses the same trick: the scratch container's conventional
+  `rootfs.ext4` is a clonefile of the distro's journaled disk.
 - **`distro migrate` / `migrate --out`.** The same clone machinery —
   `migrate` stages the machine's disk into a distro, `migrate --out`
   replaces a new machine's disk with the distro's — still the better

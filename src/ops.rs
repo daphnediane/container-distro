@@ -5,11 +5,51 @@
  */
 
 //! `container distro` operations, composed from the `container` CLI.
+//!
+//! ## State machine
+//!
+//! A distro follows the machine model: its durable state is a *journal*
+//! directory at `state_dir()/distros/<name>/` — inside our own
+//! Application Support directory rather than `appRoot/plugin-state/`,
+//! which lives in another app's data folder (writing there trips
+//! macOS's app-data consent prompt for unentitled clients) — holding
+//!
+//! - `spec.json`: the desired [`DistroSpec`], `uchg`-locked at rest. It
+//!   doubles as the per-distro `flock` target: the lock fd is opened
+//!   while the flag is cleared, then the file is re-locked. Writes
+//!   through an already-open fd are still honored under `uchg`, so the
+//!   journal can be rewritten in place without ever being removable.
+//! - `rootfs.ext4`: the distro's disk. Moved here when the distro
+//!   stops and `uchg`-locked at rest; while running it is mounted via
+//!   `rootFsOverride` pointing at this path (the daemon needs it
+//!   unlocked then, which is fine — a running guest owns its disk
+//!   anyway, and the locked journal dir keeps it from being unlinked).
+//!
+//! A *stopped* distro is exactly this directory: its container exists
+//! only while running (or transiently between `container create` and
+//! the first stop). Starting materializes a fresh container from the
+//! journaled spec and attaches the journaled disk, so configuration a
+//! guest or a stray `container` command wrote into the runtime config
+//! never survives a stop/start — including fields `DistroSpec` doesn't
+//! model. Stopping stops the container, moves the disk into the
+//! journal, and deletes the container.
+//!
+//! A leftover stopped container (a bare `container stop`, a crash, a
+//! reboot) is detected and dismantled on the next operation — the same
+//! converge path an interrupted `set` lands in, so an interrupted `set`
+//! and a clean stop are the same state. When materialization fails the
+//! distro stays stopped — like `machine boot`, there is no stale
+//! recorded configuration to fall back to.
+//!
+//! Upgrade paths: a pre-journal distro (a container, no journal) is
+//! adopted — its journal is reconstructed from the live configuration —
+//! on first contact, and a legacy `preserved/<name>.{json,ext4}` pair
+//! (the old `set` staging) is folded into the journal.
 
 use std::env;
 use std::ffi::CString;
 use std::fs;
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, IsTerminal, Seek, SeekFrom, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::FromRawFd;
@@ -79,7 +119,7 @@ impl DistroSummary {
 }
 
 /// Options shared by `create` and `import`.
-#[derive(Debug, Clone, Default, clap::Args)]
+#[derive(Debug, Clone, Default, PartialEq, clap::Args)]
 pub struct CreateOptions {
     /// Share a host directory: SRC:DST[:ro] (repeatable)
     #[arg(short = 'v', long = "volume", value_name = "SRC:DST[:ro]")]
@@ -321,6 +361,19 @@ pub(crate) fn unlock(path: &Path) {
     }
 }
 
+/// Whether `path` carries the user-immutable flag — checked with
+/// `lstat` (the flag can't ride a symlink). A guest can't set it through
+/// a virtiofs share, so a locked file is host-written: the check doubles
+/// as journal provenance.
+fn is_locked(path: &Path) -> bool {
+    let Ok(c) = CString::new(path.as_os_str().as_bytes()) else {
+        return false;
+    };
+    // SAFETY: `c` is a valid NUL-terminated path; `st` a valid out-param.
+    let mut st = unsafe { std::mem::zeroed::<libc::stat>() };
+    (unsafe { libc::lstat(c.as_ptr(), &mut st) }) == 0 && st.st_flags & libc::UF_IMMUTABLE != 0
+}
+
 /// Write `body` to `path` via `O_NOFOLLOW`, so a symlink planted
 /// through a shared-home mount is removed rather than followed — the
 /// alternative is a refresh clobbering an arbitrary file the user owns.
@@ -458,7 +511,7 @@ fn assets_dir(admin: bool) -> Result<PathBuf> {
 /// `set` recreates onto per-user assets, or `install-plugin` refreshes
 /// the installed copy.
 fn refresh_mounted_assets(name: &str) -> Result<()> {
-    ensure_preserved_locked()?;
+    ensure_state_locked()?;
     let mounted = find(name).ok().and_then(|info| {
         info.configuration
             .mounts
@@ -692,11 +745,10 @@ fn boot(name: &str, _lock: &DistroLock) -> Result<()> {
 
 /// Report the ports `name` publishes, now that it is listening —
 /// loopback binds as info, anything wider as a LAN-exposure warning.
+/// Read from the journal, not the container: the recorded spec is the
+/// truth.
 fn report_ports(name: &str) {
-    let Ok(info) = find(name) else { return };
-    let Ok(spec) = DistroSpec::from_container(&info, &host_home().unwrap_or_default()) else {
-        return;
-    };
+    let Ok(spec) = read_journal(name) else { return };
     for p in &spec.publish {
         if p.is_loopback() {
             println!("`{name}` listening on {}:{}", p.host_ip, p.host_port);
@@ -709,19 +761,24 @@ fn report_ports(name: &str) {
     }
 }
 
-fn ensure_running(name: &str) -> Result<ContainerInfo> {
-    let lock = DistroLock::acquire(name)?;
-    // Recovery runs before `find` so it can rebuild a distro whose
-    // container was deleted by an interrupted `set`.
-    container::warn_unverified_version();
-    recover_interrupted(name, &lock)?;
-    let info = find(name)?;
-    if info.is_running() {
+/// Start `name` under its lock if it isn't running — converge any
+/// leftover container, re-resolve automounts, materialize fresh from
+/// the journal, boot — and return the running container.
+fn ensure_running_locked(name: &str, lock: &mut DistroLock) -> Result<ContainerInfo> {
+    if let Some(info) = converge(name, lock)? {
         return Ok(info);
     }
-    refresh_automounts(&info, &lock)?;
-    boot(name, &lock)?;
+    let spec = refresh_automounts(name, lock)?;
+    materialize(name, &spec, lock)?;
+    boot(name, lock)?;
     find(name)
+}
+
+fn ensure_running(name: &str) -> Result<ContainerInfo> {
+    container::warn_unverified_version();
+    ensure_journal(name)?;
+    let mut lock = DistroLock::acquire(name)?;
+    ensure_running_locked(name, &mut lock)
 }
 
 /// Whether nothing is the default: no default distro among `distros` (a
@@ -737,15 +794,44 @@ fn no_default(
 
 fn create_from_spec(spec: &DistroSpec, no_boot: bool, set_default: bool) -> Result<String> {
     check_sources(spec)?;
-    let lock = DistroLock::acquire(&spec.name)?;
-    let existing = distros()?;
-    if existing.iter().any(|c| c.id() == spec.name) {
+    container::warn_unverified_version();
+    ensure_state()?;
+    // The name must be fresh in every form a distro can take — journal,
+    // materialized container — and a same-named plain container would
+    // collide at `create` anyway.
+    if journal_dir(&spec.name)?.exists() || distro_exists(&spec.name)? {
         bail!("distro `{}` already exists", spec.name);
     }
+    if container::list_containers()?
+        .iter()
+        .any(|c| c.id() == spec.name)
+    {
+        bail!(
+            "a non-distro container named `{}` already exists",
+            spec.name
+        );
+    }
     bail_if_staged(&spec.name)?;
-    create_container(spec)?;
-    if !no_boot {
-        boot(&spec.name, &lock)?;
+    write_journal(&spec.name, spec)?;
+    let lock = DistroLock::acquire(&spec.name)?;
+    let r = (|| -> Result<()> {
+        // The create is validated now — `--no-boot` lands the same
+        // resting state as a stopped distro: journal only.
+        materialize(&spec.name, spec, &lock)?;
+        if no_boot {
+            dismantle(&spec.name, &lock)?;
+        } else {
+            boot(&spec.name, &lock)?;
+        }
+        Ok(())
+    })();
+    if let Err(e) = r {
+        // Leave the journal in place — a stopped distro. `start`
+        // retries the materialization, `rm` discards it.
+        if find(&spec.name).ok().is_some_and(|i| !i.is_running()) {
+            let _ = dismantle(&spec.name, &lock);
+        }
+        return Err(e);
     }
     // On request, or (like `container machine create`) when nothing is the
     // default. Otherwise leave it alone: under `cm`'s unified namespace a
@@ -754,7 +840,7 @@ fn create_from_spec(spec: &DistroSpec, no_boot: bool, set_default: bool) -> Resu
     let set_default = set_default
         || no_default(
             default_name().as_deref(),
-            &existing,
+            &distros()?,
             &container::list_machines().unwrap_or_default(),
         );
     if set_default {
@@ -799,7 +885,54 @@ fn summarize(c: &ContainerInfo, default: Option<&str>, app_root: Option<&Path>) 
     }
 }
 
-/// All distros, sorted by name.
+/// A `container` size string (`4096M`, `8G`, …) as bytes, for list
+/// output. Unknown spellings degrade to a blank column.
+fn size_bytes(s: &str) -> Option<u64> {
+    let (num, unit) = s
+        .trim()
+        .find(|c: char| c.is_ascii_alphabetic())
+        .map_or((s.trim(), ""), |i| s.trim().split_at(i));
+    let mult = match unit {
+        "" | "B" => 1,
+        "K" | "KiB" => 1 << 10,
+        "M" | "MiB" => 1 << 20,
+        "G" | "GiB" => 1 << 30,
+        "T" | "TiB" => 1 << 40,
+        _ => return None,
+    };
+    num.parse::<u64>().ok()?.checked_mul(mult)
+}
+
+/// A `list` row for a journaled (stopped) distro — assembled from its
+/// spec, since there is no container to inspect.
+fn journal_summary(name: &str, default: Option<&str>) -> Option<DistroSummary> {
+    let spec = read_journal(name).ok()?;
+    let disk = journal_fs_path(name)
+        .ok()
+        .and_then(|p| fs::metadata(p).ok())
+        .map(|m| std::os::unix::fs::MetadataExt::blocks(&m) * 512);
+    Some(DistroSummary {
+        id: name.to_string(),
+        status: if distro_busy(name) {
+            "busy".into()
+        } else {
+            "stopped".into()
+        },
+        default: default == Some(name),
+        cpus: spec.cpus,
+        memory: spec.memory.as_deref().and_then(size_bytes),
+        disk_size: disk,
+        image: Some(spec.image.clone()),
+        home_mount: Some(spec.home_mount.as_str().to_string()),
+        mounts: spec.mounts.iter().map(ToString::to_string).collect(),
+        ports: spec.publish.iter().map(ToString::to_string).collect(),
+        restricted: spec.is_restricted(),
+        ..Default::default()
+    })
+}
+
+/// All distros, sorted by name — running or stopped-with-container from
+/// `container list`, stopped ones from their journals.
 pub fn summaries(running_only: bool) -> Result<Vec<DistroSummary>> {
     let default = default_name();
     // DISK sizes are read from `container`'s internal storage layout.
@@ -811,8 +944,15 @@ pub fn summaries(running_only: bool) -> Result<Vec<DistroSummary>> {
         .map(|c| summarize(c, default.as_deref(), app_root.as_deref()))
         .collect();
     if !running_only {
-        // Filesystems staged by `set`s whose distro is gone get
-        // pseudo-rows so they can be `set`/`rm`'d from the listing.
+        for name in journal_names()? {
+            if !rows.iter().any(|r| r.id == name)
+                && let Some(s) = journal_summary(&name, default.as_deref())
+            {
+                rows.push(s);
+            }
+        }
+        // Filesystems staged by `set`s on pre-journal builds still get
+        // pseudo-rows so they can be `rm`'d from the listing.
         let orphans: Vec<DistroSummary> = staged_summaries()
             .into_iter()
             .filter(|s| !rows.iter().any(|r| r.id == s.id))
@@ -823,42 +963,109 @@ pub fn summaries(running_only: bool) -> Result<Vec<DistroSummary>> {
     Ok(rows)
 }
 
+/// Pseudo-summaries for `preserved/` leftovers whose distro is gone —
+/// staging left by an interrupted `set` on a pre-journal build.
+/// "interrupted" since nothing can still be holding their lock.
+fn staged_summaries() -> Vec<DistroSummary> {
+    let Ok(dir) = preserved_dir() else {
+        return Vec::new();
+    };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|e| {
+            e.file_name()
+                .to_str()
+                .and_then(|n| n.strip_suffix(".ext4"))
+                .map(String::from)
+        })
+        .map(|id| {
+            let image = preserved_journal(&id)
+                .ok()
+                .and_then(|p| fs::read(p).ok())
+                .and_then(|b| serde_json::from_slice::<DistroSpec>(&b).ok())
+                .map(|s| s.image);
+            DistroSummary {
+                id,
+                status: "interrupted".into(),
+                image,
+                ..Default::default()
+            }
+        })
+        .collect()
+}
+
+/// Materialize `name`'s container without booting (for `inspect`), then
+/// dismantle it again — a read shouldn't change the resting state.
+fn peek(name: &str) -> Result<()> {
+    ensure_journal(name)?;
+    let lock = DistroLock::acquire(name)?;
+    if converge(name, &lock)?.is_some() {
+        return Ok(()); // running — inspectable as-is
+    }
+    let spec = lock.spec()?;
+    materialize(name, &spec, &lock)?;
+    let r = run_container(&["inspect", name]);
+    dismantle(name, &lock)?;
+    r
+}
+
 pub fn inspect(names: &[String]) -> Result<()> {
     ensure_started()?;
-    for n in names {
-        find(n)?;
-    }
-    let mut args = vec!["inspect"];
-    args.extend(names.iter().map(String::as_str));
-    run_container(&args)?;
-    Ok(())
-}
-
-pub fn start(name: &str) -> Result<()> {
-    ensure_started()?;
-    let lock = DistroLock::acquire(name)?;
     container::warn_unverified_version();
-    recover_interrupted(name, &lock)?;
-    let info = find(name)?;
-    if !info.is_running() {
-        refresh_automounts(&info, &lock)?;
-    }
-    boot(name, &lock)?;
-    Ok(())
-}
-
-pub fn stop(names: &[String]) -> Result<()> {
-    ensure_started()?;
     for n in names {
-        if find(n)?.is_running() {
-            run_container_quiet(&["stop", n])?;
+        // A running distro inspects as-is; anything else converges to
+        // the journal view first so the output shows the configuration
+        // the next start will actually apply.
+        if find(n).ok().is_some_and(|i| i.is_running()) {
+            run_container(&["inspect", n])?;
+        } else if distro_exists(n)? {
+            peek(n)?;
+        } else {
+            bail!("no distro named `{n}`");
         }
     }
     Ok(())
 }
 
-/// Remove anything `set` staged for `name`; true when something was.
-fn cleanup_preserved(name: &str, _lock: &DistroLock) -> bool {
+pub fn start(name: &str) -> Result<()> {
+    ensure_started()?;
+    container::warn_unverified_version();
+    ensure_journal(name)?;
+    let mut lock = DistroLock::acquire(name)?;
+    if converge(name, &lock)?.is_none() {
+        let spec = refresh_automounts(name, &mut lock)?;
+        materialize(name, &spec, &lock)?;
+    }
+    // Runs on an already-running distro too — `init -u` and the port
+    // report are idempotent.
+    boot(name, &lock)
+}
+
+/// `container distro stop` / `cm -t`: stop the container and dismantle
+/// it — the distro rests as its journal.
+pub fn stop(names: &[String]) -> Result<()> {
+    ensure_started()?;
+    container::warn_unverified_version();
+    for n in names {
+        ensure_journal(n)?;
+        let lock = DistroLock::acquire(n)?;
+        if let Ok(info) = find(n) {
+            if info.is_running() {
+                run_container_quiet(&["stop", n])?;
+            }
+            dismantle(n, &lock)?;
+        }
+    }
+    Ok(())
+}
+
+/// Remove anything a pre-journal `set` staged for `name`; true when
+/// something was. Called without the journal lock (there may be no
+/// journal to lock).
+fn cleanup_preserved(name: &str) -> bool {
     if preserved_dir().is_err() {
         return false;
     }
@@ -876,39 +1083,64 @@ fn cleanup_preserved(name: &str, _lock: &DistroLock) -> bool {
     removed
 }
 
-pub fn delete(force: bool, names: &[String]) -> Result<()> {
-    ensure_started()?;
-    for n in names {
-        let lock = DistroLock::acquire(n)?;
-        let info = match find(n) {
-            Ok(info) => info,
-            // The container is gone but an interrupted `set` may still
-            // have its filesystem staged.
-            Err(_) if cleanup_preserved(n, &lock) => {
-                eprintln!("removed filesystem staged by an interrupted `set` for `{n}`");
-                continue;
-            }
-            Err(e) => return Err(e),
-        };
-        if info.is_running() {
-            if !force {
-                bail!("distro `{n}` is running (stop it first or use --force)");
-            }
-            run_container_quiet(&["stop", n])?;
-        }
-        delete_stopped_locked(n, &lock)?;
+/// Remove `name`'s journal (spec, disk, and dir), clearing `uchg` flags
+/// first — including a dir that was never fully written or was planted.
+fn remove_journal_dir(name: &str) -> Result<()> {
+    let dir = journal_dir(name)?;
+    if !dir.exists() {
+        return Ok(());
     }
-    Ok(())
+    with_journal_root_unlocked(|| {
+        for f in ["rootfs.ext4", "spec.json"] {
+            unlock(&dir.join(f));
+        }
+        unlock(&dir);
+        fs::remove_dir_all(&dir).with_context(|| format!("failed to remove {}", dir.display()))
+    })
 }
 
-/// Delete a stopped distro under its lock: the container, its snapshot
-/// images, anything `set` staged, and the default marker.
-fn delete_stopped_locked(n: &str, lock: &DistroLock) -> Result<()> {
-    run_container_quiet(&["delete", n])?;
-    remove_snapshot_images(n, None);
-    cleanup_preserved(n, lock);
-    if default_name().as_deref() == Some(n) {
-        write_default(None)?;
+pub fn delete(force: bool, names: &[String]) -> Result<()> {
+    ensure_started()?;
+    container::warn_unverified_version();
+    ensure_state()?;
+    for n in names {
+        let container = find(n).ok();
+        if container.is_none() && !journal_present(n) {
+            // Not a distro — but a half-written or unsigned journal dir,
+            // or a filesystem staged on a pre-journal build, can still
+            // be cleaned up.
+            let mut removed = journal_dir(n)?.exists();
+            if removed {
+                remove_journal_dir(n)?;
+            }
+            removed |= cleanup_preserved(n);
+            if !removed {
+                bail!("no distro named `{n}`");
+            }
+            eprintln!("removed `{n}`'s journal/staging leftovers");
+            continue;
+        }
+        // A journal-less distro container — pre-journal leftovers the
+        // migration didn't reach, or planted — is deleted without
+        // adoption; there's nothing to lock without a journal.
+        let _lock = journal_present(n)
+            .then(|| DistroLock::acquire(n))
+            .transpose()?;
+        if let Some(info) = &container {
+            if info.is_running() {
+                if !force {
+                    bail!("distro `{n}` is running (stop it first or use --force)");
+                }
+                run_container_quiet(&["stop", n])?;
+            }
+            run_container_quiet(&["delete", n])?;
+        }
+        remove_journal_dir(n)?;
+        cleanup_preserved(n);
+        remove_snapshot_images(n, None);
+        if default_name().as_deref() == Some(n) {
+            write_default(None)?;
+        }
     }
     Ok(())
 }
@@ -945,9 +1177,9 @@ pub fn run_command(o: RunOpts) -> Result<Command> {
         container::validate_user(u)?;
     }
     let name = resolve(o.name)?;
-    let info = ensure_running(&name)?;
+    ensure_running(&name)?;
     let home = host_home()?;
-    let spec = DistroSpec::from_container(&info, &home)?;
+    let spec = read_journal(&name)?;
     let me = &spec.user;
 
     let mut cmd = container_cmd();
@@ -1027,16 +1259,23 @@ fn remove_snapshot_images(name: &str, keep: Option<&str>) {
     }
 }
 
-/// Refuse to create `name` while an interrupted `set`/`migrate` has its
-/// filesystem staged — the user must choose to recover (`set`) or
-/// discard (`rm`) it first.
+/// Refuse to create `name` while an unsigned journal dir or a legacy
+/// `preserved/` pair sits at that name — the user must choose to keep
+/// or discard it first.
 fn bail_if_staged(name: &str) -> Result<()> {
+    if journal_dir(name).is_ok_and(|d| d.exists()) {
+        bail!(
+            "a journal directory for `{0}` exists but isn't a usable distro — \
+             `container distro rm {0}` discards it",
+            name
+        );
+    }
     if let Ok(staged) = preserved_rootfs(name)
         && staged.exists()
     {
         bail!(
             "an interrupted `set`/`migrate` left `{0}`'s filesystem staged — \
-             `container distro set {0}` recovers it, `container distro rm {0}` discards it",
+             `container distro rm {0}` discards it",
             name
         );
     }
@@ -1050,10 +1289,35 @@ fn container_dir(id: &str) -> Result<PathBuf> {
         .context("`container system status` did not report an appRoot")
 }
 
-/// Files staged by an in-flight `set`, inside our own state directory —
-/// the daemon owns `containers/`, so orphaned filesystems live where we
-/// can scan for them: `preserved/<name>.ext4` plus a
-/// `preserved/<name>.json` journal holding the distro's spec.
+/// The journal root — `state_dir()/distros`, inside our own Application
+/// Support directory. Upstream keeps plugin state under
+/// `appRoot/plugin-state/`, but that path lives inside *another app's*
+/// data folder: an unentitled client writing there trips macOS's
+/// app-data consent prompt, and resolving `appRoot` costs a
+/// `container system status` spawn per journal read. The uchg flags —
+/// not the location — are what keep guests from planting trusted
+/// state. Every distro's durable self lives here; its container is
+/// ephemeral.
+fn journal_root() -> Result<PathBuf> {
+    Ok(state_dir()?.join("distros"))
+}
+
+fn journal_dir(name: &str) -> Result<PathBuf> {
+    journal_root().map(|r| r.join(name))
+}
+
+fn journal_spec_path(name: &str) -> Result<PathBuf> {
+    Ok(journal_dir(name)?.join("spec.json"))
+}
+
+fn journal_fs_path(name: &str) -> Result<PathBuf> {
+    Ok(journal_dir(name)?.join("rootfs.ext4"))
+}
+
+/// Files staged by an in-flight `set` on pre-journal builds, inside our
+/// own state directory: `preserved/<name>.ext4` plus a
+/// `preserved/<name>.json` journal. Kept only to fold leftovers into
+/// the journal — nothing new is staged here.
 fn preserved_dir() -> Result<PathBuf> {
     Ok(state_dir()?.join("preserved"))
 }
@@ -1066,15 +1330,20 @@ fn preserved_journal(name: &str) -> Result<PathBuf> {
     Ok(preserved_dir()?.join(format!("{name}.json")))
 }
 
-/// Keep `preserved/` present and `uchg`-locked. Through a rw-shared
-/// home a guest could otherwise plant a staged filesystem + journal
-/// pair that `recover_interrupted` would then trust and recreate from
-/// — a confused-deputy path to mounts nobody asked for. Staging and
-/// restore ops unlock the dir briefly around their file ops instead.
-fn ensure_preserved_locked() -> Result<()> {
-    let dir = preserved_dir()?;
-    fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
-    set_locked(&dir, true)
+/// Keep `preserved/` and `distros/` present and `uchg`-locked: through
+/// a rw-shared home a guest could otherwise plant journal entries a
+/// later read would trust — a confused-deputy path to mounts nobody
+/// asked for. Mutations unlock a scope briefly around their file ops
+/// instead.
+fn ensure_state_locked() -> Result<()> {
+    for dir in [preserved_dir()?, journal_root()?] {
+        fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
+        set_locked(&dir, true)?;
+    }
+    // The pre-journal per-distro lockfiles are retired — `spec.json`
+    // is the lock target now.
+    let _ = fs::remove_dir_all(state_dir()?.join("locks"));
+    Ok(())
 }
 
 /// Run `f` with `preserved/` unlocked, re-locking it afterwards — even
@@ -1090,83 +1359,424 @@ fn with_preserved_unlocked<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
     }
 }
 
+/// Run `f` with the journal root unlocked, re-locking it afterwards —
+/// even on error, where `f`'s failure is the one reported.
+fn with_journal_root_unlocked<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
+    let dir = journal_root()?;
+    unlock(&dir);
+    let r = f();
+    let relock = set_locked(&dir, true);
+    match r {
+        Err(e) => Err(e),
+        Ok(v) => relock.map(|_| v),
+    }
+}
+
+/// Run `f` with `name`'s journal dir unlocked — adding or removing an
+/// entry needs it — re-locking afterwards.
+fn with_journal_dir_unlocked<T>(name: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    let dir = journal_dir(name)?;
+    unlock(&dir);
+    let r = f();
+    let relock = set_locked(&dir, true);
+    match r {
+        Err(e) => Err(e),
+        Ok(v) => relock.map(|_| v),
+    }
+}
+
+/// Write `spec` as `name`'s journal — both the create path and the
+/// adoption of a pre-journal distro land here. The directory and
+/// `spec.json` come out `uchg`-locked.
+fn write_journal(name: &str, spec: &DistroSpec) -> Result<()> {
+    ensure_state_locked()?;
+    let dir = journal_dir(name)?;
+    let spec_path = dir.join("spec.json");
+    with_journal_root_unlocked(|| {
+        if !dir.exists() {
+            fs::create_dir(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
+        }
+        unlock(&spec_path);
+        write_nofollow(&spec_path, &serde_json::to_vec_pretty(spec)?)?;
+        set_locked(&spec_path, true)?;
+        set_locked(&dir, true)
+    })
+}
+
+/// The journaled spec — the distro's trusted desired configuration.
+fn read_journal(name: &str) -> Result<DistroSpec> {
+    let spec: DistroSpec = serde_json::from_slice(
+        &fs::read(journal_spec_path(name)?).context("failed to read the distro journal")?,
+    )
+    .context("invalid distro journal")?;
+    if spec.name != name {
+        bail!(
+            "journal for `{name}` names `{}` — refusing to trust it",
+            spec.name
+        );
+    }
+    Ok(spec)
+}
+
+/// Whether `name` has a verified journal: directory and spec exist and
+/// carry `uchg`. A guest can't set the flag through a shared mount, so
+/// an unsigned directory was planted, not written by us — it must not
+/// count as a distro.
+fn journal_present(name: &str) -> bool {
+    let Ok(dir) = journal_dir(name) else {
+        return false;
+    };
+    is_locked(&dir) && is_locked(&dir.join("spec.json"))
+}
+
+/// Names of every journaled distro — stopped distros have no container,
+/// so this is the only place they exist. Unsigned dirs are skipped: see
+/// [`journal_present`]. Reads run the one-time migration first — it's
+/// how pre-journal distros surface in `list`/`cm` on upgrade.
+fn journal_names() -> Result<Vec<String>> {
+    migrate_once()?;
+    let Ok(entries) = fs::read_dir(journal_root()?) else {
+        return Ok(Vec::new());
+    };
+    Ok(entries
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .filter_map(|e| e.file_name().to_str().map(String::from))
+        .filter(|n| journal_present(n))
+        .collect())
+}
+
+/// Whether `name` is a distro — running, stopped-with-container, or
+/// journaled.
+fn distro_exists(name: &str) -> Result<bool> {
+    Ok(journal_present(name) || find(name).is_ok())
+}
+
+/// All distro names — journaled and container-backed — sorted. What
+/// `cm` resolves names against.
+pub fn distro_names() -> Result<Vec<String>> {
+    let mut names: Vec<String> = journal_names()?;
+    names.extend(distros()?.iter().map(|c| c.id().to_string()));
+    names.sort();
+    names.dedup();
+    Ok(names)
+}
+
+/// Open `path` read-write without following a planted symlink, clearing
+/// its `uchg` flag around the open and re-locking it after. A file
+/// descriptor keeps its write access once open — the flag gates
+/// open/unlink/rename, not writes on a live fd — so callers can rewrite
+/// the journal through this fd while it stays locked on disk.
+///
+/// `O_NOFOLLOW` keeps a symlink planted at `path` from being followed
+/// (a locked file can't be replaced, so this only fires on never-locked
+/// leftovers); the link is removed and the caller gets the error it
+/// would have seen for a missing file.
+fn open_locked_rw(path: &Path) -> Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    unlock(path);
+    match fs::File::options()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+    {
+        Ok(f) => {
+            set_locked(path, true)?;
+            Ok(f)
+        }
+        Err(e) if e.raw_os_error() == Some(libc::ELOOP) => {
+            fs::remove_file(path)
+                .with_context(|| format!("failed to remove planted link {}", path.display()))?;
+            bail!("{} was a symlink — removed it", path.display());
+        }
+        Err(e) => Err(e).with_context(|| format!("failed to open {}", path.display())),
+    }
+}
+
+/// `state_dir()/journalized` — the one-time migration marker. Its
+/// presence + `uchg` flag means the pre-journal migration pass already
+/// ran; the flag can't be set through a shared home, so an unlocked
+/// marker is forged and the pass runs anyway.
+fn migrated_marker() -> Result<PathBuf> {
+    state_dir().map(|d| d.join("journalized"))
+}
+
+/// Auto-adoption sunsets after the 1.1 line — drop the pass in 1.2.0.
+/// `CARGO_PKG_VERSION` may carry a `-dev` prerelease.
+fn auto_adoption_supported() -> bool {
+    auto_adoption_supported_in(env!("CARGO_PKG_VERSION"))
+}
+
+fn auto_adoption_supported_in(version: &str) -> bool {
+    let mut it = version
+        .split('-')
+        .next()
+        .unwrap_or("0.0.0")
+        .split('.')
+        .map(|s| s.parse::<u64>().unwrap_or(0));
+    match (it.next().unwrap_or(0), it.next().unwrap_or(0)) {
+        (0, _) => true,
+        (1, m) => m <= 1,
+        _ => false,
+    }
+}
+
+/// Basenames of staged `preserved/<name>.{json,ext4}` files — either
+/// half of an interrupted `set`'s staging.
+fn staged_preserved_names() -> Result<Vec<String>> {
+    let dir = preserved_dir()?;
+    let mut names = Vec::new();
+    for e in fs::read_dir(&dir).with_context(|| format!("failed to read {}", dir.display()))? {
+        let p = e?.path();
+        if p.extension().is_some_and(|x| x == "json" || x == "ext4")
+            && let Some(n) = p.file_stem().and_then(|s| s.to_str())
+            && !names.iter().any(|m| m == n)
+        {
+            names.push(n.to_string());
+        }
+    }
+    Ok(names)
+}
+
+/// The one-time pre-journal migration, marker-gated: while the marker
+/// is absent, journal-less distro containers and staged `preserved/`
+/// pairs are still legitimately ours — the world pre-journal builds
+/// left behind — so they're folded in wholesale and the marker is
+/// written `uchg`-locked. Afterwards a journal-less labeled container
+/// can only be planted (a guest can write `containers/<name>/` through
+/// a shared home, but can't set `uchg` — and can't forge the marker),
+/// so [`ensure_journal`] refuses it and [`adopt`] is the explicit
+/// opt-in. Past the version sunset no auto-adoption runs at all.
+fn migrate_once() -> Result<()> {
+    let marker = migrated_marker()?;
+    if marker.exists() {
+        if is_locked(&marker) {
+            return Ok(());
+        }
+        let _ = fs::remove_file(&marker);
+        eprintln!(
+            "container-distro: removed a forged migration marker (unlocked — guests can't set uchg)"
+        );
+    }
+    ensure_state_locked()?;
+    // The pass needs `container list`; if the daemon can't be queried
+    // there's nothing to enumerate — retry next run rather than close
+    // the window early.
+    let Ok(containers) = distros() else {
+        return Ok(());
+    };
+    if auto_adoption_supported() {
+        for name in staged_preserved_names()? {
+            migrate_legacy_preserved(&name)?;
+        }
+        for c in containers {
+            let name = c.id().to_string();
+            if journal_present(&name) {
+                continue;
+            }
+            match DistroSpec::from_container(&c, &host_home()?)
+                .map(|spec| write_journal(&name, &spec))
+            {
+                Ok(Ok(())) => eprintln!("container-distro: adopted pre-journal distro `{name}`"),
+                _ => eprintln!(
+                    "container-distro: couldn't adopt `{name}` automatically — \
+                     `container distro migrate {name}` (or `rm {name}`)"
+                ),
+            }
+        }
+    }
+    write_nofollow(&marker, b"journal migration done\n")?;
+    set_locked(&marker, true)?;
+    Ok(())
+}
+
+/// Lock the state directories and run the one-time migration — what
+/// ops call before trusting journal state.
+fn ensure_state() -> Result<()> {
+    ensure_state_locked()?;
+    migrate_once()
+}
+
+/// Fold a legacy `preserved/<name>.{json,ext4}` pair — the pre-journal
+/// `set` staging — into `name`'s journal. The `.json` holds the spec
+/// the interrupted recreate was heading for. No-op when nothing is
+/// staged; a staged `.json` without `uchg` can't be ours (the dir is
+/// locked at rest and guests can't set the flag) — dropped, not read.
+fn migrate_legacy_preserved(name: &str) -> Result<()> {
+    let staged = preserved_rootfs(name)?;
+    let journal = preserved_journal(name)?;
+    if !staged.exists() && !journal.exists() {
+        return Ok(());
+    }
+    // The `.json` is the spec the interrupted `set` was heading for.
+    // Missing — the `set` died between staging the disk and writing
+    // it — or unlocked — planted, guests can't set `uchg` — it can't
+    // be trusted. A surviving container supersedes the staged disk
+    // (adoption covers it), so the leftovers go; otherwise keep the
+    // disk for `list`/`rm` to surface rather than silently deleting
+    // someone's filesystem.
+    if !journal.exists() || !is_locked(&journal) {
+        if journal.exists() {
+            eprintln!(
+                "container-distro: ignoring `{name}`'s unlocked staged journal — \
+                 a guest can't set `uchg`, so it wasn't written by a `set`"
+            );
+        }
+        if find(name).is_ok() {
+            cleanup_preserved(name);
+        } else {
+            with_preserved_unlocked(|| {
+                unlock(&journal);
+                let _ = fs::remove_file(&journal);
+                Ok(())
+            })?;
+        }
+        return Ok(());
+    }
+    let spec: DistroSpec = serde_json::from_slice(
+        &fs::read(&journal)
+            .with_context(|| format!("`{name}`'s interrupted `set` journal is unreadable"))?,
+    )
+    .context("invalid `set` journal")?;
+    if spec.name != name {
+        bail!(
+            "`set` journal for `{name}` names `{}` — refusing to trust it",
+            spec.name
+        );
+    }
+    write_journal(name, &spec)?;
+    with_preserved_unlocked(|| {
+        unlock(&journal);
+        let _ = fs::remove_file(&journal);
+        if staged.exists() {
+            unlock(&staged);
+            let dst = journal_fs_path(name)?;
+            with_journal_dir_unlocked(name, || {
+                fs::rename(&staged, &dst)
+                    .with_context(|| format!("failed to move {}", staged.display()))?;
+                set_locked(&dst, true)
+            })?;
+        }
+        Ok(())
+    })?;
+    eprintln!("container-distro: folded `{name}`'s staged filesystem into its journal");
+    Ok(())
+}
+
+/// Bring `name`'s journal into existence when the distro predates it.
+/// The one-time migration ([`migrate_once`]) folded everything ours
+/// already; anything still journal-less here is foreign — a planted
+/// "old-style" distro would be trusted verbatim, so it isn't.
+/// [`adopt`] is the explicit opt-in. A journal dir that exists but
+/// isn't `uchg`-locked is refused — the flag can't be set through a
+/// shared mount, so it wasn't written by us. Errors when `name` is no
+/// distro at all.
+fn ensure_journal(name: &str) -> Result<()> {
+    ensure_state()?;
+    if journal_present(name) {
+        return Ok(());
+    }
+    if find(name).is_ok() {
+        bail!(
+            "`{name}` predates journaled state — `container distro migrate {name}` \
+             records its current config, `container distro rm {name}` deletes it"
+        );
+    }
+    let dir = journal_dir(name)?;
+    if dir.exists() {
+        bail!(
+            "`{name}`'s journal at {} is unusable ({}); `container distro rm {name}` removes it",
+            dir.display(),
+            if is_locked(&dir) {
+                "never finished being written"
+            } else {
+                "not host-locked"
+            }
+        );
+    }
+    bail!("no distro named `{name}`")
+}
+
+/// Journal a pre-journal distro's live configuration under the user's
+/// explicit say-so (`container distro migrate NAME`, `cm --migrate`).
+/// This is the only trust-the-container path past the one-time
+/// migration — running it on a name is blessing whatever that
+/// container's recorded config says, same trust posture as
+/// `--import`-ing a tarball.
+pub fn adopt(name: &str) -> Result<()> {
+    ensure_started()?;
+    container::warn_unverified_version();
+    ensure_state()?;
+    if journal_present(name) {
+        println!("`{name}` is already journaled");
+        return Ok(());
+    }
+    let info = find(name)?;
+    write_journal(name, &DistroSpec::from_container(&info, &host_home()?)?)?;
+    println!("adopted `{name}` — its live config is now the journal");
+    Ok(())
+}
+
 /// Proof the per-distro `flock` is held. Only obtainable via
 /// [`DistroLock::acquire`], so functions that must run under the lock
 /// take `&DistroLock` — the compiler enforces it. The lock releases
 /// when the wrapped descriptor closes (drop or process death), so an
 /// interrupted operation can never leave a stale lock.
-struct DistroLock(#[allow(dead_code)] fs::File);
+///
+/// The lockfile *is* the journal's `spec.json`: the fd is opened
+/// `O_RDWR|O_NOFOLLOW` while the `uchg` flag is cleared and the file is
+/// re-locked immediately — the flag gates open/unlink/rename, not
+/// writes on a live fd, so the same descriptor serializes operations
+/// and rewrites the journal while it stays locked and unlinkable. A
+/// guest could unlink a freestanding `locks/` file mid-operation and
+/// silently void exclusion; it can't unlink this one.
+struct DistroLock {
+    file: fs::File,
+    name: String,
+}
 
 impl DistroLock {
-    /// An advisory `flock` on a per-distro lockfile, serializing `set`,
-    /// boot, and delete so concurrent invocations can't interleave a
-    /// recreate.
+    /// Serialize operations on `name`. The journal must already exist —
+    /// [`ensure_journal`] or [`write_journal`] ran first.
     fn acquire(name: &str) -> Result<Self> {
-        let dir = state_dir()?.join("locks");
-        fs::create_dir_all(&dir)?;
-        let f = fs::File::create(dir.join(format!("{name}.lock")))?;
-        f.lock()?;
-        Ok(Self(f))
+        let file = open_locked_rw(&journal_spec_path(name)?)
+            .with_context(|| format!("no distro named `{name}`"))?;
+        file.lock().context("failed to lock the distro journal")?;
+        Ok(Self {
+            file,
+            name: name.to_string(),
+        })
+    }
+
+    /// The journaled spec — the trusted desired configuration.
+    fn spec(&self) -> Result<DistroSpec> {
+        read_journal(&self.name)
+    }
+
+    /// Rewrite the spec in place through the lock fd: the journal file
+    /// stays `uchg`-locked — and the same inode, so the `flock` isn't
+    /// disturbed — the whole time.
+    fn write_spec(&mut self, spec: &DistroSpec) -> Result<()> {
+        let data = serde_json::to_vec_pretty(spec)?;
+        self.file.seek(SeekFrom::Start(0))?;
+        self.file.write_all(&data)?;
+        self.file.set_len(data.len() as u64)?;
+        self.file.sync_all()?;
+        Ok(())
     }
 }
 
-/// Whether another process holds `name`'s lock — a `set` recreate in
-/// flight. Probe-only: never creates a lockfile.
+/// Whether another process holds `name`'s journal lock — a mutation is
+/// in flight. Probe-only; `O_RDONLY` opens a locked journal fine.
 fn distro_busy(name: &str) -> bool {
-    let Ok(path) = state_dir().map(|d| d.join("locks").join(format!("{name}.lock"))) else {
+    let Ok(path) = journal_spec_path(name) else {
         return false;
     };
-    let Ok(f) = fs::File::options().read(true).write(true).open(path) else {
+    let Ok(f) = fs::File::open(path) else {
         return false;
     };
     matches!(f.try_lock(), Err(fs::TryLockError::WouldBlock))
-}
-
-/// Journal `spec` and clone `src` (a container's or machine's ext4
-/// rootfs) into `preserved/`, for a later [`restore_rootfs`] to move
-/// into a fresh container.
-///
-/// The journal is written before the filesystem so a staged filesystem
-/// is never left without the spec needed to recreate its distro. Both
-/// are `uchg`-locked once written — through a shared home, a guest
-/// could otherwise rewrite the spec `recover_interrupted` recreates
-/// from or the filesystem it puts back.
-fn stage_rootfs(id: &str, spec: &DistroSpec, src: &Path, _lock: &DistroLock) -> Result<PathBuf> {
-    let dir = preserved_dir()?;
-    fs::create_dir_all(&dir)?;
-    let staged = dir.join(format!("{id}.ext4"));
-    if staged.exists() {
-        bail!(
-            "an earlier interrupted operation left {} — remove it (or `container distro rm {id}`) before retrying",
-            staged.display()
-        );
-    }
-    let journal = dir.join(format!("{id}.json"));
-    with_preserved_unlocked(|| {
-        unlock(&journal);
-        write_nofollow(&journal, &serde_json::to_vec(spec)?)?;
-        set_locked(&journal, true)?;
-        // Copy (`fs::copy` uses clonefile on APFS) rather than move: the
-        // original stays in place, so an interruption leaves a bootable
-        // source plus a spare.
-        fs::copy(src, &staged).with_context(|| format!("failed to preserve {}", src.display()))?;
-        set_locked(&staged, true)
-    })?;
-    Ok(staged)
-}
-
-/// Move a container's `rootfs.ext4` out of its data directory so
-/// `container delete` doesn't take it with it, and write a journal of
-/// `spec` next to it. The file only exists once the container has booted
-/// — `None` for a never-started distro, whose filesystem is still the
-/// pristine image (and which `container export` cannot snapshot for the
-/// same reason).
-fn preserve_rootfs(id: &str, spec: &DistroSpec, lock: &DistroLock) -> Result<Option<PathBuf>> {
-    let rootfs = container_dir(id)?.join("rootfs.ext4");
-    if !rootfs.exists() {
-        return Ok(None);
-    }
-    stage_rootfs(id, spec, &rootfs, lock).map(Some)
 }
 
 /// Mark `rootfs` as the container's root filesystem via `rootFsOverride`
@@ -1189,230 +1799,248 @@ fn set_rootfs_override(dir: &Path, rootfs: &Path) -> Result<()> {
         .with_context(|| format!("failed to write {}", cfg.display()))
 }
 
-/// Move a preserved rootfs back into a freshly created container and mark
-/// it as the container's root filesystem. Removes the `set` journal once
-/// the filesystem is safely back in place.
-fn restore_rootfs(id: &str, staged: Option<&Path>, _lock: &DistroLock) -> Result<()> {
-    let Some(staged) = staged else { return Ok(()) };
-    let dir = container_dir(id)?;
-    let rootfs = dir.join("rootfs.ext4");
-    let journal = preserved_journal(id)?;
-    with_preserved_unlocked(|| {
-        unlock(staged);
-        fs::rename(staged, &rootfs).with_context(|| {
-            format!(
-                "failed to restore {} — the preserved copy is at {}",
-                rootfs.display(),
-                staged.display()
-            )
-        })?;
-        unlock(&journal);
-        let _ = fs::remove_file(&journal);
-        Ok(())
-    })?;
-    set_rootfs_override(&dir, &rootfs)?;
+/// Create `name`'s container fresh from `spec` and attach the journaled
+/// disk — the machine model's materialization. The disk is unlocked for
+/// as long as the container exists (the daemon mounts it read-write);
+/// the journaled spec and journal dir never become mutable.
+///
+/// A failure leaves the distro stopped with journal and disk intact:
+/// like `machine boot`, there is no stale recorded configuration to
+/// fall back to — the next start retries a fresh materialization.
+fn materialize(name: &str, spec: &DistroSpec, _lock: &DistroLock) -> Result<()> {
+    create_container(spec)?;
+    let fs_path = journal_fs_path(name)?;
+    if fs_path.is_file() {
+        set_rootfs_override(&container_dir(name)?, &fs_path)?;
+        set_locked(&fs_path, false)?;
+    }
     Ok(())
 }
 
-/// Complete an interrupted `set` for `name`, if one left a filesystem
-/// staged under `preserved/`. The container missing means the recreate
-/// never happened, so the journaled spec rebuilds it; the container
-/// present just needs its rootfs back — unless it already has one, in
-/// which case the staged copy is kept (it may be someone's only data).
-fn recover_interrupted(name: &str, _lock: &DistroLock) -> Result<()> {
-    ensure_preserved_locked()?;
-    let staged = preserved_rootfs(name)?;
-    let journal = preserved_journal(name)?;
-    if !staged.exists() {
-        // A journal with no filesystem is a stale marker.
-        let _ = with_preserved_unlocked(|| {
-            unlock(&journal);
-            fs::remove_file(&journal).map_err(Into::into)
-        });
-        return Ok(());
-    }
-    eprintln!(
-        "warning: an interrupted `set`/`migrate` staged `{name}`'s filesystem — restoring it"
-    );
-    if !container_dir(name)?.is_dir() {
-        let spec: DistroSpec = serde_json::from_slice(&fs::read(&journal).with_context(|| {
-            format!(
-                "`{name}` was deleted by an interrupted `set` and its journal is unreadable; \
-                 its filesystem is preserved at {}",
-                staged.display()
-            )
-        })?)
-        .context("invalid `set` journal")?;
-        if spec.name != name {
-            bail!(
-                "`set` journal for `{name}` names `{}` — refusing to recreate",
-                spec.name
-            );
-        }
-        create_container(&spec)
-            .with_context(|| format!("failed to recreate `{name}` from its `set` journal"))?;
-    }
+/// Dismantle `name`'s stopped container: move the disk into the journal
+/// when it still lives under `containers/` (first boot, or a distro
+/// that predates the journal), then delete the container. Whatever the
+/// runtime configuration recorded — fields `DistroSpec` models and ones
+/// it doesn't — is discarded with the container. Afterwards the distro
+/// is its journal alone.
+fn dismantle(name: &str, _lock: &DistroLock) -> Result<()> {
     let dir = container_dir(name)?;
-    let rootfs = dir.join("rootfs.ext4");
-    if rootfs.exists() {
-        // The container already has a filesystem — the staged copy may
-        // be the only copy of someone's data, so keep it rather than
-        // silently discarding it.
-        eprintln!(
-            "warning: staged filesystem kept at {} (`container distro rm` clears it with the distro)",
-            staged.display()
-        );
-    } else {
-        with_preserved_unlocked(|| {
-            unlock(&staged);
-            fs::rename(&staged, &rootfs)
-                .with_context(|| format!("failed to restore {}", staged.display()))?;
-            unlock(&journal);
-            let _ = fs::remove_file(&journal);
-            Ok(())
+    let jfs = journal_fs_path(name)?;
+    // The journal path is the disk's home once the container mounted it
+    // via override — nothing to move. An un-overridden container's disk
+    // still lives at the conventional path.
+    let mounted_journal = fs::read_to_string(dir.join("runtime-configuration.json"))
+        .ok()
+        .and_then(|s| rootfs_override_source(&s))
+        .is_some_and(|s| s == jfs);
+    let conv = dir.join("rootfs.ext4");
+    if !mounted_journal && conv.is_file() {
+        with_journal_dir_unlocked(name, || {
+            unlock(&jfs);
+            if jfs.exists() {
+                // A journal disk can't have been mounted while the
+                // container carried its own — the container's is the
+                // truth; replace.
+                fs::remove_file(&jfs)
+                    .with_context(|| format!("failed to remove stale {}", jfs.display()))?;
+            }
+            fs::rename(&conv, &jfs)
+                .with_context(|| format!("failed to move {} into the journal", conv.display()))
         })?;
-        set_rootfs_override(&dir, &rootfs)?;
+    }
+    run_container_quiet(&["delete", name])?;
+    // The disk rests locked while nothing mounts it.
+    if jfs.is_file() {
+        set_locked(&jfs, true)?;
     }
     Ok(())
 }
 
-/// Pseudo-summaries for filesystems staged by `set`s whose distro no
-/// longer exists, so `list` can surface them instead of a stderr
-/// warning: "recreating" while another process holds the lock (a `set`
-/// is in flight), "interrupted" once it is orphaned and needs `set` or
-/// `rm` to resolve.
-fn staged_summaries() -> Vec<DistroSummary> {
-    let Ok(dir) = preserved_dir() else {
-        return Vec::new();
-    };
-    let Ok(entries) = fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    entries
-        .flatten()
-        .filter_map(|e| {
-            e.file_name()
-                .to_str()
-                .and_then(|n| n.strip_suffix(".ext4"))
-                .map(String::from)
-        })
-        .map(|id| {
-            let status = if distro_busy(&id) {
-                "recreating"
-            } else {
-                "interrupted"
-            };
-            let image = preserved_journal(&id)
-                .ok()
-                .and_then(|p| fs::read(p).ok())
-                .and_then(|b| serde_json::from_slice::<DistroSpec>(&b).ok())
-                .map(|s| s.image);
-            DistroSummary {
-                id,
-                status: status.into(),
-                image,
-                ..Default::default()
+/// Field-level differences between the journaled `want` and `actual`,
+/// a spec reconstructed from a live container — one human-readable line
+/// each, empty when they agree. List fields compare as sets (`inspect`
+/// ordering isn't stable); memory compares as bytes so `4G` and `4096M`
+/// don't read as drift.
+fn spec_diff(want: &DistroSpec, actual: &DistroSpec) -> Vec<String> {
+    let mut out = Vec::new();
+    macro_rules! field {
+        ($name:literal, $w:expr, $a:expr) => {
+            if $w != $a {
+                out.push(format!("{}: journal {}, running {}", $name, $w, $a))
             }
-        })
-        .collect()
+        };
+    }
+    fn opt(o: &Option<String>) -> &str {
+        o.as_deref().unwrap_or("default")
+    }
+    let user = |u: &HostUser| format!("{}({}:{})", u.name, u.uid, u.gid);
+    field!("image", want.image, actual.image);
+    field!(
+        "cpus",
+        want.cpus.map_or("default".to_string(), |c| c.to_string()),
+        actual.cpus.map_or("default".to_string(), |c| c.to_string())
+    );
+    // Both sides of a memory compare go through `size_bytes` so unit
+    // spelling doesn't matter; an unparseable side falls back to a
+    // string compare.
+    let mem = |o: &Option<String>| o.as_deref().and_then(size_bytes);
+    if match (mem(&want.memory), mem(&actual.memory)) {
+        (Some(w), Some(a)) => w != a,
+        _ => want.memory != actual.memory,
+    } {
+        out.push(format!(
+            "memory: journal {}, running {}",
+            opt(&want.memory),
+            opt(&actual.memory)
+        ));
+    }
+    field!(
+        "home-mount",
+        want.home_mount.as_str(),
+        actual.home_mount.as_str()
+    );
+    field!(
+        "automount",
+        want.automount.as_str(),
+        actual.automount.as_str()
+    );
+    field!("network", opt(&want.network), opt(&actual.network));
+    field!("ssh", want.ssh, actual.ssh);
+    field!("admin", want.admin, actual.admin);
+    field!("admin-grant", want.admin_grant, actual.admin_grant);
+    field!("user", user(&want.user), user(&actual.user));
+    let mut list = |name: &str, w: Vec<String>, a: Vec<String>| {
+        for m in w.iter().filter(|m| !a.contains(m)) {
+            out.push(format!("{name}: journal has `{m}`, running doesn't"));
+        }
+        for m in a.iter().filter(|m| !w.contains(m)) {
+            out.push(format!("{name}: running has `{m}` the journal doesn't"));
+        }
+    };
+    list(
+        "mounts",
+        want.mounts.iter().map(ToString::to_string).collect(),
+        actual.mounts.iter().map(ToString::to_string).collect(),
+    );
+    list(
+        "publish",
+        want.publish.iter().map(ToString::to_string).collect(),
+        actual.publish.iter().map(ToString::to_string).collect(),
+    );
+    out
 }
 
-/// Recreate `name`'s container with `new` settings, keeping its
-/// filesystem: the ext4 rootfs is cloned aside, the container deleted
-/// and recreated, then the filesystem moved back via `rootFsOverride`.
-/// A running distro is stopped first and rebooted. On failure the old
-/// settings are restored onto the preserved filesystem. Shared by `set`
-/// and the start-time automount refresh.
-fn recreate_locked(
-    name: &str,
-    old: &DistroSpec,
-    new: &DistroSpec,
-    was_running: bool,
-    lock: &DistroLock,
-) -> Result<()> {
-    if was_running {
-        run_container_quiet(&["stop", name])?;
-    }
-    let preserved = preserve_rootfs(name, old, lock)?;
-    run_container_quiet(&["delete", name])?;
-    if let Err(e) =
-        create_container(new).and_then(|()| restore_rootfs(name, preserved.as_deref(), lock))
-    {
-        // Restore the old settings on the preserved rootfs; nothing is lost.
-        let _ = run_container_quiet(&["delete", name]);
-        let rollback =
-            create_container(old).and_then(|()| restore_rootfs(name, preserved.as_deref(), lock));
-        if let Err(r) = rollback {
-            return Err(e.context(format!(
-                "failed to recreate the distro; restoring the previous settings failed too: {r:#}"
-            )));
+/// A container already running when the lock was taken may predate the
+/// journal's last write — an interrupted `set`, or tampering with the
+/// recorded config. Reconstruct its spec and diff it against the
+/// journal so drift is loud rather than silently adopted.
+fn warn_spec_drift(name: &str, info: &ContainerInfo, lock: &DistroLock) {
+    let want = lock.spec();
+    let actual = host_home().and_then(|home| DistroSpec::from_container(info, &home));
+    match (want, actual) {
+        (Ok(want), Ok(actual)) => {
+            for d in spec_diff(&want, &actual) {
+                eprintln!("container-distro: warning: `{name}` drifted from its journal: {d}");
+            }
         }
+        (Err(e), _) => {
+            eprintln!("container-distro: warning: can't check `{name}` against its journal: {e:#}")
+        }
+        (_, Err(e)) => eprintln!(
+            "container-distro: warning: `{name}`'s running container can't be \
+             verified against its journal ({e:#}) — its config isn't trusted"
+        ),
+    }
+}
+
+/// Converge `name` to its canonical resting state under the lock: a
+/// leftover stopped container — a bare `container stop`, a crash, an
+/// interrupted `set` — is dismantled, its disk rejoining the journal.
+/// Returns the container only when it is *running*.
+fn converge(name: &str, lock: &DistroLock) -> Result<Option<ContainerInfo>> {
+    match find(name).ok() {
+        Some(info) if info.is_running() => {
+            warn_spec_drift(name, &info, lock);
+            Ok(Some(info))
+        }
+        Some(_) => {
+            eprintln!(
+                "container-distro: `{name}` has a leftover container — \
+                 regenerating it from the journal"
+            );
+            dismantle(name, lock)?;
+            Ok(None)
+        }
+        None => Ok(None),
+    }
+}
+
+/// Re-resolve an enabled `--automount` against the currently attached
+/// `/Volumes`, journaling the result when it changed — a plugged or
+/// ejected volume shouldn't need a manual `set`. Returns the spec to
+/// materialize.
+fn refresh_automounts(name: &str, lock: &mut DistroLock) -> Result<DistroSpec> {
+    let mut spec = lock.spec()?;
+    if !spec.automount.enabled() {
+        return Ok(spec);
+    }
+    let before = spec.mounts.clone();
+    reconcile_automounts(&mut spec)?;
+    if spec.mounts != before {
+        eprintln!("container-distro: refreshing `{name}`'s automounts for the attached /Volumes");
+        lock.write_spec(&spec)?;
+    }
+    Ok(spec)
+}
+
+/// `container distro set`: update `name`'s journaled spec. A running
+/// distro is stopped and rebooted under the new settings; a stopped one
+/// is just re-journaled — its container is fresh-created at the next
+/// start either way. Conceptually stop → update → start, so an
+/// interruption lands in the same resting state a normal stop does.
+/// Like `machine boot`, a failed materialize leaves the distro stopped
+/// with the new spec committed; there is no stale config to fall back
+/// to.
+pub fn set(name: &str, changes: &SpecChanges) -> Result<()> {
+    ensure_started()?;
+    container::warn_unverified_version();
+    if changes.is_empty() {
+        bail!("nothing to change (see `container distro set --help`)");
+    }
+    ensure_journal(name)?;
+    let mut lock = DistroLock::acquire(name)?;
+    let old = lock.spec()?;
+    let mut new = changes.apply(&old)?;
+    warn_public_publish(&changes.add_publish);
+    // An enabled automount is always reconciled, not just when
+    // `--automount` was passed.
+    if new.automount.enabled() {
+        reconcile_automounts(&mut new)?;
+    }
+    check_sources(&new)?;
+    let info = find(name).ok();
+    let was_running = info.as_ref().is_some_and(|i| i.is_running());
+    if info.is_some() {
         if was_running {
-            boot(name, lock)?;
+            run_container_quiet(&["stop", name])?;
         }
-        return Err(e.context("failed to recreate the distro; previous settings restored"));
+        dismantle(name, &lock)?;
     }
+    lock.write_spec(&new)?;
     if was_running {
-        boot(name, lock)?;
+        materialize(name, &new, &lock)?;
+        boot(name, &lock)?;
     }
     remove_snapshot_images(name, Some(new.image.as_str()));
     Ok(())
 }
 
-/// `container distro set`: recreate the container with new settings,
-/// keeping its filesystem.
-pub fn set(name: &str, changes: &SpecChanges) -> Result<()> {
-    ensure_started()?;
-    // Serialize the whole preserve → recreate → restore sequence, then
-    // finish any previous `set` interrupted after its filesystem was
-    // staged — which may recreate `name` — before anything else.
-    let lock = DistroLock::acquire(name)?;
-    container::warn_unverified_version();
-    recover_interrupted(name, &lock)?;
-    if changes.is_empty() {
-        bail!("nothing to change (see `container distro set --help`)");
-    }
-    let info = find(name)?;
-    let old = DistroSpec::from_container(&info, &host_home()?)?;
-    let mut new = changes.apply(&old)?;
-    warn_public_publish(&changes.add_publish);
-    // An enabled automount is always reconciled, not just when
-    // `--automount` was passed — the recreate happens anyway.
-    if new.automount.enabled() {
-        reconcile_automounts(&mut new)?;
-    }
-    check_sources(&new)?;
-    recreate_locked(name, &old, &new, info.is_running(), &lock)
-}
-
-/// Re-resolve `info`'s automounts against the currently attached
-/// `/Volumes`, recreating the distro when they changed — an attached or
-/// ejected volume shouldn't need a manual `set` first. Only runs for
-/// stopped distros that opted in; no-op for anything else.
-fn refresh_automounts(info: &ContainerInfo, lock: &DistroLock) -> Result<()> {
-    let Ok(home) = host_home() else { return Ok(()) };
-    let Ok(spec) = DistroSpec::from_container(info, &home) else {
-        return Ok(());
-    };
-    if !spec.automount.enabled() {
-        return Ok(());
-    }
-    let mut new = spec.clone();
-    reconcile_automounts(&mut new)?;
-    if new.mounts == spec.mounts {
-        return Ok(());
-    }
-    eprintln!(
-        "container-distro: refreshing `{}`'s automounts for the attached /Volumes",
-        spec.name
-    );
-    recreate_locked(&spec.name, &spec, &new, false, lock)
-}
-
 pub fn set_default(name: Option<&str>) -> Result<()> {
     if let Some(n) = name {
         ensure_started()?;
-        find(n)?;
+        if !distro_exists(n)? {
+            bail!("no distro named `{n}`");
+        }
     }
     write_default(name)?;
     Ok(())
@@ -1427,20 +2055,54 @@ fn check_export_output(o: &Path) -> Result<()> {
     Ok(())
 }
 
+/// `container distro export`. `container export` snapshots
+/// `containers/<id>/rootfs.ext4` literally — a distro mounts its disk
+/// from the journal via `rootFsOverride`, so export can't see it (the
+/// same gap `export_machine` works around). The workaround is the same
+/// too: clone the journaled disk into a scratch container that exports
+/// normally, then delete it. A running distro is stopped for a
+/// crash-consistent clone, then restarted.
 pub fn export(name: &str, output: Option<&Path>) -> Result<()> {
     ensure_started()?;
-    find(name)?;
+    container::warn_unverified_version();
+    ensure_journal(name)?;
+    let mut lock = DistroLock::acquire(name)?;
     if let Some(o) = output {
         check_export_output(o)?;
     }
-    let mut args = vec!["export".to_string(), name.to_string()];
+    let scratch = ScratchContainer::create(
+        &export_scratch_name(name),
+        &scratch_image(lock.spec()?.image.as_str())?,
+        name,
+    )?;
+    // Stop + converge before cloning — a running disk's clone would
+    // only be crash-consistent.
+    let was_running = find(name).ok().is_some_and(|i| i.is_running());
+    if was_running {
+        run_container_quiet(&["stop", name])?;
+    }
+    converge(name, &lock)?;
+    let cloned = (|| -> Result<()> {
+        let src = journal_fs_path(name)?;
+        if !src.is_file() {
+            bail!("distro `{name}` has no root filesystem to export (it has never been started)");
+        }
+        // `fs::copy` is a clonefile on APFS — instant and copy-on-write.
+        fs::copy(&src, container_dir(&scratch.0)?.join("rootfs.ext4"))
+            .with_context(|| format!("failed to clone {}", src.display()))?;
+        Ok(())
+    })();
+    if was_running && let Err(e) = ensure_running_locked(name, &mut lock) {
+        eprintln!("container-distro: warning: failed to restart distro `{name}`: {e:#}");
+    }
+    cloned?;
+    let mut args = vec!["export".to_string(), scratch.0.clone()];
     if let Some(o) = output {
         args.push("--output".into());
         args.push(o.to_string_lossy().into_owned());
     }
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    run_container(&args)?;
-    Ok(())
+    run_container(&args)
 }
 
 /// Where an imported rootfs came from, recorded in the loaded image's
@@ -1463,10 +2125,10 @@ pub fn import(
 ) -> Result<String> {
     validate_name(name)?;
     ensure_started()?;
-    if distros()?.iter().any(|c| c.id() == name) {
+    if distro_exists(name)? {
         bail!("distro `{name}` already exists");
     }
-    // Checked here too so a staged distro doesn't orphan the image
+    // Checked here too so leftover state doesn't orphan the image
     // `load_rootfs` is about to create; `create_from_spec` re-checks
     // under the distro lock.
     bail_if_staged(name)?;
@@ -1538,27 +2200,24 @@ impl Drop for ScratchContainer {
     }
 }
 
-/// The scratch container's name: the machine's (truncated to fit the
-/// 63-char `container` limit with the `-export-<timestamp>` suffix) so
-/// a leftover is recognizable.
-fn export_scratch_name(machine: &str) -> String {
-    let base: String = machine.chars().take(44).collect();
+/// The scratch container's name: the export target's (truncated to fit
+/// the 63-char `container` limit with the `-export-<timestamp>` suffix)
+/// so a leftover is recognizable.
+fn export_scratch_name(of: &str) -> String {
+    let base: String = of.chars().take(44).collect();
     format!("{}-export-{}", base.trim_end_matches('-'), timestamp())
 }
 
-/// The image a scratch export container is created from: the machine's
-/// own image when still local, else any local image — the container is
-/// never booted, so the image only has to exist. Fails when the daemon
-/// holds no images at all.
-fn scratch_image(detail: &MachineDetail) -> Result<String> {
+/// The image a scratch export container is created from: `prefer` — the
+/// target's own image — when still local, else any local image. The
+/// container is never booted, so the image only has to exist. Fails
+/// when the daemon holds no images at all.
+fn scratch_image(prefer: &str) -> Result<String> {
     let images = container::list_images().unwrap_or_default();
-    let want = detail.image.as_ref().map(|i| i.reference.as_str());
     let is = |n: &str| {
-        want.is_some_and(|w| {
-            n == w
-                || n.strip_prefix("docker.io/") == Some(w)
-                || n.strip_prefix("docker.io/library/") == Some(w)
-        })
+        n == prefer
+            || n.strip_prefix("docker.io/") == Some(prefer)
+            || n.strip_prefix("docker.io/library/") == Some(prefer)
     };
     if let Some(i) = images.iter().find(|i| is(&i.configuration.name)) {
         return Ok(i.configuration.name.clone());
@@ -1588,7 +2247,13 @@ pub fn export_machine(machine: &str, output: Option<&Path>) -> Result<()> {
     }
     let scratch = ScratchContainer::create(
         &export_scratch_name(machine),
-        &scratch_image(&detail)?,
+        &scratch_image(
+            detail
+                .image
+                .as_ref()
+                .map(|i| i.reference.as_str())
+                .unwrap_or_default(),
+        )?,
         machine,
     )?;
     let was_running = detail.is_running();
@@ -1629,7 +2294,7 @@ pub fn import_machine(name: &str, file: &Path) -> Result<()> {
         bail!("a machine named `{name}` already exists");
     }
     // A same-named distro would shadow the machine everywhere in `cm`.
-    if find(name).is_ok() {
+    if distro_exists(name)? {
         bail!(
             "`{name}` is a distro — `cm` resolves that name to the distro; \
              pick another name, or use `cm --import --distro`"
@@ -1718,8 +2383,29 @@ pub fn migrate(
     opts: &CreateOptions,
 ) -> Result<String> {
     ensure_started()?;
+    // A journaled distro is already home; a journal-less labeled
+    // container is pre-journal — adopted, not migrated. Naming it is
+    // the explicit opt-in the journal gate asks for; `-n`/create
+    // options don't apply since its live config is recorded as-is.
+    // The journal check comes first: a stopped distro has no container
+    // for `find` to see.
+    if journal_present(machine) {
+        bail!("`{machine}` is already a distro");
+    }
+    if find(machine).is_ok() {
+        if target.is_some() || *opts != CreateOptions::default() {
+            bail!(
+                "`{machine}` is a pre-journal distro — `migrate` adopts its \
+                 live config as-is; name and create options don't apply"
+            );
+        }
+        adopt(machine)?;
+        return Ok(format!(
+            "`{machine}` adopted — its live config is now the journal"
+        ));
+    }
     if !container::list_machines()?.iter().any(|m| m.id == machine) {
-        bail!("no machine named `{machine}`");
+        bail!("no machine or distro named `{machine}`");
     }
     let target = target.unwrap_or_else(|| machine.to_string());
     migrate_to_distro(machine, &target, keep, opts)
@@ -1852,9 +2538,8 @@ fn boot_machine(name: &str) -> Result<()> {
         .with_context(|| format!("failed to boot machine `{name}`"))
 }
 
-/// Machine → distro: clone the machine's rootfs into a new distro
-/// container through the same `preserved/` staging `set` uses, so an
-/// interruption is finished by the usual recovery path.
+/// Machine → distro: clone the machine's rootfs into the new distro's
+/// journal — its resting state — then materialize and boot.
 fn migrate_to_distro(
     machine: &str,
     name: &str,
@@ -1864,7 +2549,7 @@ fn migrate_to_distro(
     validate_name(name)?;
     // Fail fast, before the machine is stopped or its disk cloned.
     bail_if_staged(name)?;
-    if distros()?.iter().any(|c| c.id() == name) {
+    if distro_exists(name)? {
         bail!("distro `{name}` already exists");
     }
     let detail = container::inspect_machine(machine)?;
@@ -1874,33 +2559,39 @@ fn migrate_to_distro(
     if was_running {
         run_container_quiet(&["machine", "stop", machine])?;
     }
-    let lock = DistroLock::acquire(name)?;
     container::warn_unverified_version();
-    let staged = match machine_rootfs(&detail)? {
-        Some(src) => Some(stage_rootfs(name, &spec, &src, &lock)?),
+    write_journal(name, &spec)?;
+    let lock = DistroLock::acquire(name)?;
+    match machine_rootfs(&detail)? {
+        Some(src) => {
+            let dst = journal_fs_path(name)?;
+            with_journal_dir_unlocked(name, || {
+                // `fs::copy` is a clonefile on APFS — instant and
+                // copy-on-write.
+                fs::copy(&src, &dst)
+                    .with_context(|| format!("failed to clone {}", src.display()))?;
+                set_locked(&dst, true)
+            })?;
+        }
         None => {
             eprintln!(
                 "container-distro: machine `{machine}` has no rootfs to carry — the distro starts from its image"
             );
-            None
         }
-    };
-    if let Err(e) =
-        create_container(&spec).and_then(|()| restore_rootfs(name, staged.as_deref(), &lock))
-    {
+    }
+    if let Err(e) = materialize(name, &spec, &lock).and_then(|()| {
+        if opts.no_boot {
+            dismantle(name, &lock)
+        } else {
+            boot(name, &lock)
+        }
+    }) {
         let _ = run_container_quiet(&["delete", name]);
-        cleanup_preserved(name, &lock);
+        let _ = remove_journal_dir(name);
         if was_running {
             let _ = boot_machine(machine);
         }
         return Err(e);
-    }
-    if !opts.no_boot
-        && let Err(e) = boot(name, &lock)
-    {
-        return Err(e.context(format!(
-            "distro `{name}` holds the migrated filesystem but failed to boot; machine `{machine}` left stopped"
-        )));
     }
     if !keep {
         if let Err(e) = run_container_quiet(&["machine", "rm", machine]) {
@@ -1928,12 +2619,16 @@ fn migrate_to_distro(
     Ok(name.to_string())
 }
 
-/// A distro's ext4 rootfs: the `rootFsOverride` source when the runtime
-/// configuration records one, else the conventional
-/// `containers/<id>/rootfs.ext4`. `None` before the first boot — the
-/// filesystem is still the pristine image (and `container export` has
-/// nothing to snapshot either).
+/// A distro's ext4 rootfs: the journaled `rootfs.ext4` (its resting
+/// home) first, then — for a first boot or a pre-journal distro — the
+/// conventional `containers/<id>/rootfs.ext4` or an override source.
+/// `None` before the first boot: the filesystem is still the pristine
+/// image.
 fn distro_rootfs(id: &str) -> Result<Option<PathBuf>> {
+    let jfs = journal_fs_path(id)?;
+    if jfs.is_file() {
+        return Ok(Some(jfs));
+    }
     let dir = container_dir(id)?;
     if let Some(src) = fs::read_to_string(dir.join("runtime-configuration.json"))
         .ok()
@@ -2054,18 +2749,24 @@ pub fn migrate_to_machine(
     if container::list_machines()?.iter().any(|m| m.id == name) {
         bail!("a machine named `{name}` already exists (use `-n` to pick another)");
     }
-    // Serialize against a concurrent `set`/`start`/`rm` on the distro,
-    // then finish any interrupted `set` before reading its filesystem.
-    let lock = DistroLock::acquire(distro)?;
+    // A pre-journal distro named for `--out` is explicit opt-in —
+    // adopt its live config first, then carry the disk out.
+    if !journal_present(distro) && find(distro).is_ok() {
+        adopt(distro)?;
+    } else {
+        ensure_journal(distro)?;
+    }
+    // Serialize against a concurrent `set`/`start`/`rm`, then converge
+    // the distro to its resting state before cloning its disk.
+    let mut lock = DistroLock::acquire(distro)?;
     container::warn_unverified_version();
-    recover_interrupted(distro, &lock)?;
-    let info = find(distro)?;
-    let spec = DistroSpec::from_container(&info, &host_home()?)?;
-    let was_running = info.is_running();
+    let spec = lock.spec()?;
+    let was_running = find(distro).ok().is_some_and(|i| i.is_running());
     if was_running {
         run_container_quiet(&["stop", distro])?;
     }
-    let src = distro_rootfs(info.id())?;
+    converge(distro, &lock)?;
+    let src = distro_rootfs(distro)?;
     if src.is_none() {
         eprintln!(
             "container-distro: distro `{distro}` has no rootfs to carry — the machine starts from its image"
@@ -2074,7 +2775,7 @@ pub fn migrate_to_machine(
     let image = machine_create_image(&spec.image, src.is_some())?;
     if let Err(e) = create_machine(&name, &image, &spec, opts) {
         if was_running {
-            let _ = boot(distro, &lock);
+            let _ = ensure_running_locked(distro, &mut lock);
         }
         return Err(e);
     }
@@ -2102,7 +2803,7 @@ pub fn migrate_to_machine(
             eprintln!("container-distro: removing incomplete machine `{name}` failed: {r:#}");
         }
         if was_running {
-            let _ = boot(distro, &lock);
+            let _ = ensure_running_locked(distro, &mut lock);
         }
         return Err(e.context(format!(
             "failed to move `{distro}`'s filesystem into machine `{name}`"
@@ -2120,7 +2821,7 @@ pub fn migrate_to_machine(
         });
         if !booted {
             if was_running {
-                let _ = boot(distro, &lock);
+                let _ = ensure_running_locked(distro, &mut lock);
             }
             bail!(
                 "machine `{name}` holds the migrated filesystem but failed to boot; \
@@ -2129,7 +2830,14 @@ pub fn migrate_to_machine(
         }
     }
     if !keep {
-        delete_stopped_locked(distro, &lock)?;
+        // The distro is already converged (container dismantled);
+        // remove the journal, its images, and the default marker.
+        remove_journal_dir(distro)?;
+        cleanup_preserved(distro);
+        remove_snapshot_images(distro, None);
+        if default_name().as_deref() == Some(distro) {
+            write_default(None)?;
+        }
     } else {
         if name == distro {
             eprintln!(
@@ -2137,7 +2845,7 @@ pub fn migrate_to_machine(
             );
         }
         if was_running {
-            let _ = boot(distro, &lock);
+            let _ = ensure_running_locked(distro, &mut lock);
         }
     }
     if opts.set_default
@@ -2418,6 +3126,160 @@ mod tests {
             [ -f /etc/.distro.admin.daphne ]
         "#;
         assert_eq!(sh_in_guest(&image, &["-c", script]), Some(0));
+    }
+
+    #[test]
+    fn size_bytes_parses_container_sizes() {
+        assert_eq!(size_bytes("4096M"), Some(4096 << 20));
+        assert_eq!(size_bytes("8G"), Some(8 << 30));
+        assert_eq!(size_bytes("512K"), Some(512 << 10));
+        assert_eq!(size_bytes("1024"), Some(1024));
+        assert_eq!(size_bytes("garbage"), None);
+        assert_eq!(size_bytes(""), None);
+    }
+
+    fn spec() -> DistroSpec {
+        DistroSpec {
+            name: "d1".into(),
+            image: "alpine:latest".into(),
+            cpus: Some(2),
+            memory: Some("4G".into()),
+            home_mount: HomeMount::Rw,
+            mounts: vec!["/a:/b:ro".parse().unwrap()],
+            automount: Automount::None,
+            publish: vec!["8080:80".parse().unwrap()],
+            network: None,
+            ssh: true,
+            admin: true,
+            admin_grant: false,
+            user: HostUser {
+                name: "dp".into(),
+                uid: 501,
+                gid: 20,
+            },
+        }
+    }
+
+    /// The start-time integrity check: identical specs produce no diff;
+    /// drifted fields name themselves; `4G` vs `4096M` is not drift.
+    #[test]
+    fn spec_diff_names_drifted_fields() {
+        let want = spec();
+        // `from_container` normalizes memory to `NM` — same bytes is
+        // not drift.
+        let mut actual = spec();
+        actual.memory = Some("4096M".into());
+        assert!(spec_diff(&want, &actual).is_empty());
+
+        let mut actual = spec();
+        actual.cpus = Some(8);
+        actual.ssh = false;
+        actual.home_mount = HomeMount::Ro;
+        let diff = spec_diff(&want, &actual);
+        assert!(diff.iter().any(|d| d.starts_with("cpus:")), "{diff:?}");
+        assert!(diff.iter().any(|d| d.starts_with("ssh:")), "{diff:?}");
+        assert!(
+            diff.iter().any(|d| d.starts_with("home-mount:")),
+            "{diff:?}"
+        );
+
+        // List fields diff per-entry, unordered.
+        let mut actual = spec();
+        actual.mounts.pop();
+        actual.mounts.push("/x:/y".parse().unwrap());
+        let diff = spec_diff(&want, &actual);
+        assert!(
+            diff.iter()
+                .any(|d| d == "mounts: journal has `/a:/b:ro`, running doesn't"),
+            "{diff:?}"
+        );
+        assert!(
+            diff.iter()
+                .any(|d| d == "mounts: running has `/x:/y` the journal doesn't"),
+            "{diff:?}"
+        );
+    }
+
+    /// The journal lock contract: `spec.json` is `uchg`-locked at rest
+    /// yet rewritable through the fd the flock is held on — verified
+    /// behavior on macOS (the flag gates open/unlink/rename, not writes
+    /// on a live descriptor).
+    #[test]
+    fn journal_lock_writes_through_uchg() {
+        let dir = tempfile::tempdir().unwrap();
+        let spec_p = dir.path().join("spec.json");
+        fs::write(&spec_p, "{}").unwrap();
+        set_locked(&spec_p, true).unwrap();
+        assert!(is_locked(&spec_p));
+        // The boundary a guest sees: no write, no unlink.
+        assert!(fs::write(&spec_p, "tampered").is_err());
+        assert!(fs::remove_file(&spec_p).is_err());
+        assert!(fs::File::options().write(true).open(&spec_p).is_err());
+
+        let spec = DistroSpec {
+            name: "d1".into(),
+            image: "alpine:latest".into(),
+            cpus: Some(2),
+            memory: Some("4G".into()),
+            home_mount: HomeMount::Rw,
+            mounts: vec![],
+            automount: Automount::None,
+            publish: vec![],
+            network: None,
+            ssh: true,
+            admin: true,
+            admin_grant: true,
+            user: HostUser {
+                name: "dp".into(),
+                uid: 501,
+                gid: 20,
+            },
+        };
+        let mut lock = DistroLock {
+            file: open_locked_rw(&spec_p).unwrap(),
+            name: "d1".into(),
+        };
+        lock.file.lock().unwrap();
+        // The file is re-locked under the open fd, and a second locker
+        // blocks — exclusion survives the unlock window.
+        assert!(is_locked(&spec_p));
+        assert!(matches!(
+            fs::File::open(&spec_p).unwrap().try_lock(),
+            Err(fs::TryLockError::WouldBlock)
+        ));
+        // Rewrites through the held fd are honored under `uchg`.
+        lock.write_spec(&spec).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<DistroSpec>(&fs::read(&spec_p).unwrap()).unwrap(),
+            spec
+        );
+        drop(lock);
+        assert!(fs::File::open(&spec_p).unwrap().try_lock().is_ok());
+        unlock(&spec_p);
+    }
+
+    /// Auto-adoption of pre-journal distros is a sunsetted migration
+    /// path — supported through the 1.1 line, gone in 1.2.
+    #[test]
+    fn adoption_sunset_version_gate() {
+        for v in ["0.4.2", "0.5.0-dev", "1.0.0", "1.1.0", "1.1.9"] {
+            assert!(auto_adoption_supported_in(v), "{v}");
+        }
+        for v in ["1.2.0", "2.0.0"] {
+            assert!(!auto_adoption_supported_in(v), "{v}");
+        }
+    }
+
+    /// A symlink planted where the journal spec belongs is removed
+    /// rather than followed — the file can't have been locked, so it
+    /// was never ours.
+    #[test]
+    fn open_locked_rw_rejects_planted_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let spec_p = dir.path().join("spec.json");
+        std::os::unix::fs::symlink("/etc/passwd", &spec_p).unwrap();
+        assert!(open_locked_rw(&spec_p).is_err());
+        assert!(!spec_p.exists());
     }
 
     #[test]

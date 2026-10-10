@@ -32,6 +32,15 @@ Support/container-distro/` -- see [naming.md]. The `container`
 daemon is exercised through its CLI plus a few `appRoot` internals; a
 once-per-process warning appears on unverified `container` releases.
 
+Like `container machine`, a stopped distro is just durable state: a
+*journal* directory `distros/<name>/` holding `spec.json` (the desired
+configuration, and the per-distro lock) and `rootfs.ext4` (the disk).
+The container exists only while running — `start` materializes a fresh
+one from the journal and attaches the journaled disk via
+`rootFsOverride`, `stop` folds the disk back and deletes the
+container, so tampered runtime configuration never survives a
+stop/start. Journal files are `uchg`-locked at rest (security.md T6).
+
 ## Subcommands
 
 ### `create [-n NAME] [OPTIONS] IMAGE`
@@ -91,9 +100,8 @@ Uses `container exec`, so argv is exact -- nothing is re-split.
 | `--format`    | `table` (default) or `json` |
 
 The table shows NAME, IMAGE, CREATED, STATE, IP, CPUS, MEMORY, DISK,
-MOUNTS, PORTS, and a `*` in DEFAULT. Orphaned filesystems from an
-interrupted `set` appear as pseudo-rows with state `recreating` (a
-recovery is in flight) or `interrupted` (waiting for one).
+MOUNTS, PORTS, and a `*` in DEFAULT. Stopped distros list from their
+journals — no CREATED time, since there is no container.
 
 ### `inspect NAME...`
 
@@ -107,15 +115,17 @@ mounts with what's actually attached.
 
 ### `delete` (alias `rm`) `-f|--force NAME...`
 
-Delete distros and their storage; `-f` stops them first. Also deletes
-staged `set` state when the container itself is already gone.
+Delete distros and their storage; `-f` stops them first. Deletes
+journal state even when the container itself is already gone.
 
 ### `set NAME [OPTIONS]`
 
-Change settings after creation. Recreates the container while keeping
-its filesystem: the ext4 rootfs is cloned to a staging area and the
-recreated container boots from it via `rootFsOverride` -- no image
-round-trip. A per-distro lock serializes `set` against boot/delete.
+Change settings after creation: stop, update the journal, start — the
+same stop/update/start cycle a hand-edited restart would follow, so an
+interrupted `set` and a deliberate stop are the same on-disk state.
+The journaled `rootfs.ext4` reattaches via `rootFsOverride` — no image
+round-trip. The journal's `spec.json` is the per-distro flock target,
+serializing `set` against start/delete.
 
 | Option                                        | Description                                                                                                                     |
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
@@ -131,16 +141,15 @@ round-trip. A per-distro lock serializes `set` against boot/delete.
 | `--publish`                                   | Add a published port (replaces one on the same host port)                                                                       |
 | `--unpublish`                                 | `HOST_PORT` stop publishing that host port                                                                                      |
 
-A **never-booted** distro has no `rootfs.ext4` yet, so `set` recreates
-it from its recorded image instead.
+A **never-booted** distro has no `rootfs.ext4` yet — the disk
+materializes on first boot, so `set` just rewrites the journal.
 
 #### Interrupted `set` recovery
 
-If a `set` is killed mid-recreate, the staged filesystem heals itself:
-the next `set`, `run`/`exec`, or `start` finishes or rolls back the
-recovery; `list` marks the orphan `recreating`/`interrupted`; `rm`
-discards it; `create`/`import` of the same name refuse until it's
-resolved.
+There is no distinct interrupted state: killing a `set` mid-flight
+leaves the same journal-plus-disk rest state a clean stop does. The
+next operation converges it — any leftover container is dismantled and
+a fresh one materializes from the journal.
 
 ### `set-default [NAME] | --clear`
 
@@ -165,18 +174,21 @@ with your identity -- see security.md.
 
 Migrate between a `container machine` and a distro without an
 export/import round-trip: the source's `rootfs.ext4` is cloned onto the
-target — staged through the same `preserved/` machinery as `set` going
-in, and written over the new machine's plugin-state disk going out. The
-source is removed unless `--keep`.
+target — the journaled disk going in, written over the new machine's
+plugin-state disk going out. The source is removed unless `--keep`.
 
 `--in` (the default) turns a machine into a distro carrying the
 machine's cpus/memory/home-mount/user; it accepts `create` options as
-overrides. `--out` creates a machine from the distro's image, boots it
-once to materialize its disk, then replaces that disk with a clone of
-the distro's rootfs; only the `machine create` subset applies (`--cpus`,
-`--memory`, `--home-mount`, `--no-boot`, `--set-default`) and other
-`create` options are refused. A never-booted source has no filesystem
-to carry, so the target starts from the image.
+overrides. Naming a pre-journal distro container instead *adopts* it:
+its live configuration becomes the journal — the explicit opt-in for
+distros the one-time upgrade pass didn't (or couldn't) adopt, and the
+only trust-the-container path afterwards. `--out` creates a machine
+from the distro's image, boots it once to materialize its disk, then
+replaces that disk with a clone of the distro's rootfs; only the
+`machine create` subset applies (`--cpus`, `--memory`, `--home-mount`,
+`--no-boot`, `--set-default`) and other `create` options are refused. A
+never-booted source has no filesystem to carry, so the target starts
+from the image.
 
 ### `install-plugin [--plugin-dir DIR] [--from BIN]`
 
