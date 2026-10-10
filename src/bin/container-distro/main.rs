@@ -69,13 +69,15 @@ fn render_man(cmd: &clap::Command, base: &str, pages: &mut Vec<(String, String)>
     Ok(())
 }
 
-/// Write the man pages into `dir`, or the binary-relative default.
+/// Write the man pages into `dir`, or the binary-relative default —
+/// then prune pages left behind by subcommands that no longer exist.
 fn install_man(dir: Option<PathBuf>) -> Result<()> {
     let dir = dir.map_or_else(container_distro::man::default_man_dir, Ok)?;
-    for path in container_distro::man::write_pages(&dir, &man_pages()?)? {
+    let pages = man_pages()?;
+    for path in container_distro::man::write_pages(&dir, &pages)? {
         println!("Installed {}", path.display());
     }
-    Ok(())
+    container_distro::man::remove_stale_pages(&dir, "container-distro-", &pages)
 }
 
 /// The completion scripts, generated from the clap definition so they
@@ -276,7 +278,9 @@ fn run(cli: Cli) -> Result<()> {
         Command::InstallMan { dir } => install_man(dir)?,
         Command::UninstallMan { dir } => {
             let dir = dir.map_or_else(container_distro::man::default_man_dir, Ok)?;
-            container_distro::man::remove_pages(&dir, &man_pages()?)?;
+            let pages = man_pages()?;
+            container_distro::man::remove_pages(&dir, &pages)?;
+            container_distro::man::remove_stale_pages(&dir, "container-distro-", &pages)?;
         }
         Command::InstallCompletions { dir } => install_completions(dir)?,
         Command::UninstallCompletions { dir } => {

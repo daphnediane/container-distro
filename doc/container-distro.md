@@ -218,12 +218,16 @@ Write `container-distro(1)` plus one page per subcommand
 (`container-distro-create(1)`, …), generated from the CLI definition.
 Default location: `share/man/man1` of the binary's install prefix --
 `$CARGO_HOME/share/man/man1` after `cargo install`. See [install.md].
+Pages for subcommands removed since the last install are pruned as well
+(only files that still look like our generated pages).
 
 ### `uninstall-man [--dir DIR]`
 
-Remove the pages `install-man` wrote. Only files that still look like
-our generated pages are removed -- a foreign or edited page of the same
-name is left in place with a warning.
+Remove the pages `install-man` wrote, including stale
+`container-distro-*.1` pages for subcommands that no longer exist.
+Only files that still look like our generated pages are removed -- a
+foreign or edited page of the same name is left in place with a
+warning.
 
 ### `install-completions [--dir DIR]`
 

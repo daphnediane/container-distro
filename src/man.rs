@@ -106,6 +106,63 @@ pub fn remove_pages(dir: &Path, pages: &[(String, String)]) -> Result<()> {
     Ok(())
 }
 
+/// Whether `existing` is a page we generated for a subcommand that no
+/// longer exists — `is_our_page` can't run here because there's nothing
+/// left to render. The clap_mangen `\(aq` fingerprint plus a `.TH`/
+/// NAME pair naming the page keeps this to generated pages in our own
+/// namespace.
+fn is_our_stale_page(existing: &str, page_name: &str) -> bool {
+    let stem = page_name.strip_suffix(".1").unwrap_or(page_name);
+    let escaped = stem.replace('-', "\\-");
+    existing.contains("\\(aq")
+        && existing.contains(&format!(".TH {stem} "))
+        && existing
+            .lines()
+            .any(|l| l.starts_with(&format!("{escaped} \\-")))
+}
+
+/// Remove `<prefix>*.1` files in `dir` that aren't in `pages` — stale
+/// pages left behind by subcommands that have since been removed
+/// (write/remove only ever see the current set, so without this a
+/// dropped subcommand's page would linger through both install and
+/// uninstall). Only files that still look like our generated pages are
+/// touched; anything else is left in place with a warning. A missing
+/// directory is not an error.
+pub fn remove_stale_pages(dir: &Path, prefix: &str, pages: &[(String, String)]) -> Result<()> {
+    let current: std::collections::HashSet<&str> =
+        pages.iter().map(|(name, _)| name.as_str()).collect();
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e).with_context(|| format!("failed to read {}", dir.display())),
+    };
+    for entry in entries {
+        let entry = entry.with_context(|| format!("failed to read {}", dir.display()))?;
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        if !name.starts_with(prefix) || !name.ends_with(".1") || current.contains(name.as_str()) {
+            continue;
+        }
+        let path = entry.path();
+        match fs::read_to_string(&path) {
+            Ok(existing) if !is_our_stale_page(&existing, &name) => {
+                eprintln!(
+                    "not removing {}: not one of our generated pages",
+                    path.display()
+                );
+            }
+            Ok(_) => {
+                fs::remove_file(&path)
+                    .with_context(|| format!("failed to remove {}", path.display()))?;
+                println!("Removed stale {}", path.display());
+            }
+            Err(e) => eprintln!("not removing {}: {e}", path.display()),
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,5 +212,51 @@ mod tests {
         )];
         remove_pages(&dir, &pages).unwrap();
         assert!(foreign.exists());
+    }
+
+    #[test]
+    fn remove_stale_pages_prunes_gone_subcommands() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        let pages = vec![(
+            "container-distro.1".to_string(),
+            ".TH container-distro 1".to_string(),
+        )];
+        // A page for a subcommand that no longer exists — ours-shaped.
+        let stale = dir.join("container-distro-gone.1");
+        fs::write(
+            &stale,
+            ".ie \\n(.g .ds Aq \\(aq\n.TH container-distro-gone 1 \
+             \"container-distro 0.1.0\" \"Container Distro Manual\"\n\
+             .SH NAME\ncontainer\\-distro\\-gone \\- removed subcommand",
+        )
+        .unwrap();
+        // Current page — never a prune candidate even though it's in dir.
+        fs::write(dir.join("container-distro.1"), ".TH container-distro 1").unwrap();
+        remove_stale_pages(&dir, "container-distro-", &pages).unwrap();
+        assert!(!stale.exists());
+        assert!(dir.join("container-distro.1").exists());
+        // Missing dir is a no-op, not an error.
+        remove_stale_pages(&dir.join("nope"), "container-distro-", &pages).unwrap();
+    }
+
+    #[test]
+    fn remove_stale_pages_leaves_foreign_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        let pages: Vec<(String, String)> = vec![];
+        // Matching name but hand-written — no clap_mangen fingerprint.
+        let foreign = dir.join("container-distro-thing.1");
+        fs::write(
+            &foreign,
+            ".TH container-distro-thing 1\n.SH NAME\ncontainer\\-distro\\-thing \\- hand-maintained",
+        )
+        .unwrap();
+        // Outside the prefix entirely — never even examined.
+        let other = dir.join("cm.1");
+        fs::write(&other, ".TH cm 1").unwrap();
+        remove_stale_pages(&dir, "container-distro-", &pages).unwrap();
+        assert!(foreign.exists());
+        assert!(other.exists());
     }
 }

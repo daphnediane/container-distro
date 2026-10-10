@@ -158,3 +158,10 @@ Installing the plugin needs root:
 Man pages are generated from the clap definitions by `clap_mangen`:
 `cm --install-man` / `container-distro install-man` write to
 `<bin>/../share/man/man1` for the invoking binary (`--dir` overrides).
+`container-distro`'s install-man and uninstall-man also prune stale
+`container-distro-*.1` pages for removed subcommands (files that still
+look generated — `\(aq` fingerprint + matching `.TH`/NAME). `cm` stays
+out of the `cm-*` namespace — two letters isn't unambiguously ours,
+and `cm` has no subcommand pages to go stale anyway.
+`scripts/install-local.sh` runs the full maintainer reinstall:
+`cargo install --path .` + `sudo install-plugin` + both `install-man`s.

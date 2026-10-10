@@ -80,7 +80,9 @@ interface as `container distro`.
 
 Man pages are generated at runtime by `clap_mangen` from the clap
 definitions -- they cannot drift from `--help`, and re-running the
-install command after an upgrade rewrites them.
+install command after an upgrade rewrites them. Pages for subcommands
+that no longer exist are pruned at the same time (only files that
+still look like our generated pages are touched).
 
 The default target directory is `share/man/man1` of the prefix the
 binary is installed under -- derived from the binary's own path, so it
@@ -160,7 +162,9 @@ Same commands again -- `cargo install` replaces the binaries, the
 scripts (they're rendered from the new binary, so they're always
 current), and `install-plugin` refreshes the registered copy (or
 `container-distro install-plugin --from <installed>` from a newer
-build).
+build). From a checkout, `scripts/install-local.sh` bundles the
+maintainer version of this: `cargo install --path .`, `sudo
+container-distro install-plugin`, and both `install-man` runs.
 
 Upgrading from ≤0.4.1 needs `--force` once: the `cm` binary was owned
 by a separate `cm` package then, and cargo won't overwrite a binary
