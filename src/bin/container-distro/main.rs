@@ -126,7 +126,10 @@ fn print_table(rows: &[DistroSummary]) {
     for r in rows {
         table.push(vec![
             r.id.clone(),
-            r.image.clone().unwrap_or_else(dash),
+            r.source
+                .clone()
+                .or_else(|| r.image.clone())
+                .unwrap_or_else(dash),
             r.created_date
                 .as_deref()
                 .and_then(local_datetime)

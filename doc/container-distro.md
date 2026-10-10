@@ -34,12 +34,16 @@ once-per-process warning appears on unverified `container` releases.
 
 Like `container machine`, a stopped distro is just durable state: a
 *journal* directory `distros/<name>/` holding `spec.json` (the desired
-configuration, and the per-distro lock) and `rootfs.ext4` (the disk).
-The container exists only while running — `start` materializes a fresh
-one from the journal and attaches the journaled disk via
-`rootFsOverride`, `stop` folds the disk back and deletes the
+configuration, creation `origin` metadata, and the per-distro lock),
+`rootfs.ext4` (the disk), and `sbin.distro/` (the distro's own copy of
+the init assets). The container exists only while running — `start`
+materializes a fresh one from the journal and attaches the journaled
+disk via `rootFsOverride`, `stop` folds the disk back and deletes the
 container, so tampered runtime configuration never survives a
-stop/start. Journal files are `uchg`-locked at rest (security.md T6).
+stop/start. The materialized container is named `<name>-<6hex>` and
+gets a fresh suffix each time — our ops find it by its distro label,
+so `container ls` shows e.g. `alpine-f4f8a1` rather than `alpine`.
+Journal files are `uchg`-locked at rest (security.md T6).
 
 ## Subcommands
 
@@ -101,7 +105,11 @@ Uses `container exec`, so argv is exact -- nothing is re-split.
 
 The table shows NAME, IMAGE, CREATED, STATE, IP, CPUS, MEMORY, DISK,
 MOUNTS, PORTS, and a `*` in DEFAULT. Stopped distros list from their
-journals — no CREATED time, since there is no container.
+journals — CREATED is the distro's real creation time (the journal's
+`origin`), not the container's. For distros created from a file or
+catalog import, IMAGE shows the origin instead of the generated
+`local/distro-*` snapshot reference (`file:<basename>`, `catalog:<name>`;
+`--format json` carries the full `origin` object).
 
 ### `inspect NAME...`
 

@@ -24,21 +24,21 @@ project domain, `io.github.<user>.<project>` is the usual choice.
 
 ## Where names persist
 
-| What                     | Where                                                                                                                                                                          | Derived from                                      |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------- |
-| Distro marker label      | `<LABEL_PREFIX>.distro=<name>` on each distro container                                                                                                                        | `LABEL_PREFIX`                                    |
-| Home-mount label         | `<LABEL_PREFIX>.home-mount=rw\|ro\|none`                                                                                                                                       | `LABEL_PREFIX`                                    |
-| Admin label              | `<LABEL_PREFIX>.admin=true\|false\|never` (sudo/doas grant policy)                                                                                                             | `LABEL_PREFIX`                                    |
-| User label               | `<LABEL_PREFIX>.user=<name>:<uid>:<gid>`                                                                                                                                       | `LABEL_PREFIX`                                    |
-| Automount label          | `<LABEL_PREFIX>.automount=rw\|ro\|none` -- how the distro auto-manages `/Volumes` mounts                                                                                       | `LABEL_PREFIX`                                    |
-| State directory          | `~/Library/Application Support/<APP_NAME>/` (`sbin.distro*/` init assets, `default-distro`, `journalized` marker — all `uchg`-locked; see T6)                                  | `APP_NAME`                                        |
-| Journal directory        | `~/Library/Application Support/<APP_NAME>/distros/<name>/` (`spec.json` — the flock target — and `rootfs.ext4`; dir and files `uchg`-locked at rest)                           | `APP_NAME`                                        |
-| Plugin metadata          | `<prefix>/libexec/container-plugins/distro/` (`config.toml` with `author`, `abstract`, plus the `sbin.distro*/` init assets distros prefer when installed)                     | `APP_NAME`                                        |
-| Plugin / subcommand name | `container distro`, `bin/distro`                                                                                                                                               | `plugin::PLUGIN_NAME`                             |
-| Snapshot / import images | `local/distro-<name>:imported-<timestamp>` (plus pre-0.2 `:<timestamp>` `set` snapshots); image labels `<LABEL_PREFIX>.distro=<name>` and `<LABEL_PREFIX>.imported-from=<tar>` | `LABEL_PREFIX` (labels), hard-coded `ops` (names) |
-| Machine import images    | `local/machine-<name>:imported-<timestamp>` from `cm --import`; image labels `<LABEL_PREFIX>.machine=<name>` and `<LABEL_PREFIX>.imported-from=<tar>`                          | `LABEL_PREFIX` (labels), hard-coded `ops` (names) |
-| Export scratch label     | `<LABEL_PREFIX>.export-scratch=<machine>` on the short-lived scratch container `cm --export` creates for a machine export                                                      | `LABEL_PREFIX`                                    |
-| In-guest files           | `/sbin.distro` mount, `/etc/.distro.initialized`, `/etc/.distro.user.<name>`, `/etc/.distro.admin.<name>`, `/etc/sudoers.d/<name>`, `/etc/doas.d/<name>.conf`                  | hard-coded in `spec`/assets                       |
+| What                     | Where                                                                                                                                                                           | Derived from                                      |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| Distro marker label      | `<LABEL_PREFIX>.distro=<name>` on each distro container — the _logical_ name; the container's own id is ephemeral (see below)                                                   | `LABEL_PREFIX`                                    |
+| Home-mount label         | `<LABEL_PREFIX>.home-mount=rw\|ro\|none`                                                                                                                                        | `LABEL_PREFIX`                                    |
+| Admin label              | `<LABEL_PREFIX>.admin=true\|false\|never` (sudo/doas grant policy)                                                                                                              | `LABEL_PREFIX`                                    |
+| User label               | `<LABEL_PREFIX>.user=<name>:<uid>:<gid>`                                                                                                                                        | `LABEL_PREFIX`                                    |
+| Automount label          | `<LABEL_PREFIX>.automount=rw\|ro\|none` -- how the distro auto-manages `/Volumes` mounts                                                                                        | `LABEL_PREFIX`                                    |
+| State directory          | `~/Library/Application Support/<APP_NAME>/` (`default-distro`, `journalized` marker, legacy shared `sbin.distro*/` assets — all `uchg`-locked; see T6)                          | `APP_NAME`                                        |
+| Journal directory        | `~/Library/Application Support/<APP_NAME>/distros/<name>/` (`spec.json` — the flock target — `rootfs.ext4`, and the distro's own `sbin.distro/` init assets; all `uchg`-locked) | `APP_NAME`                                        |
+| Plugin metadata          | `<prefix>/libexec/container-plugins/distro/` (`config.toml` with `author`, `abstract`; uninstall also cleans the `sbin.distro*/` assets pre-per-distro installs wrote there)    | `APP_NAME`                                        |
+| Plugin / subcommand name | `container distro`, `bin/distro`                                                                                                                                                | `plugin::PLUGIN_NAME`                             |
+| Snapshot / import images | `local/distro-<name>:imported-<timestamp>` (plus pre-0.2 `:<timestamp>` `set` snapshots); image labels `<LABEL_PREFIX>.distro=<name>` and `<LABEL_PREFIX>.imported-from=<tar>`  | `LABEL_PREFIX` (labels), hard-coded `ops` (names) |
+| Machine import images    | `local/machine-<name>:imported-<timestamp>` from `cm --import`; image labels `<LABEL_PREFIX>.machine=<name>` and `<LABEL_PREFIX>.imported-from=<tar>`                           | `LABEL_PREFIX` (labels), hard-coded `ops` (names) |
+| Export scratch label     | `<LABEL_PREFIX>.export-scratch=<machine>` on the short-lived scratch container `cm --export` creates for a machine export                                                       | `LABEL_PREFIX`                                    |
+| In-guest files           | `/sbin.distro` mount, `/etc/.distro.initialized`, `/etc/.distro.user.<name>`, `/etc/.distro.admin.<name>`, `/etc/sudoers.d/<name>`, `/etc/doas.d/<name>.conf`                   | hard-coded in `spec`/assets                       |
 
 The plugin subcommand (`container distro`) and the in-guest paths are
 user-facing and baked into existing containers. Renaming them is a
@@ -46,6 +46,13 @@ larger decision than renaming the project.
 
 ## Names that are _not_ persistent (rename freely)
 
+- **Runtime container ids** — a distro's materialized container is
+  `<name>-<6 lowercase hex>` (arc4random, like `container machine`'s
+  `poc-a07fee`), fresh on every materialize and never recorded in the
+  journal. Everything keys off the `<LABEL_PREFIX>.distro` label
+  instead, so the id's shape is an implementation detail — users only
+  see it in `container list`, `container inspect <id>`, and the
+  container's `containers/` dir.
 - The Cargo package name (`container-distro`) and the repository name
 - Prose in `README.md`, `doc/`, and `--help` text
 - Temp-file prefixes (`cm-import-`, `distro-set-`, …)

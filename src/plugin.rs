@@ -118,21 +118,11 @@ pub fn install(root: Option<PathBuf>, from: Option<&Path>) -> Result<()> {
     fs::create_dir_all(&bin_dir).map_err(|e| permission_hint(e, &bin_dir))?;
     let config = dir.join("config.toml");
     fs::write(&config, config_toml()).map_err(|e| permission_hint(e, &config))?;
-    // Init assets live next to the binary: outside `$HOME`, root-owned
-    // for a standard install, so no share into a guest can reach what
-    // runs as PID 1. `assets_dir` prefers this copy when it matches the
-    // running build; the per-user copies are the fallback, so a failed
-    // write here (e.g. a `--plugin-dir` the user can't own) is a
-    // warning, not a failure.
-    for admin in [true, false] {
-        let assets = dir.join(ops::assets_flavor(admin));
-        if let Err(e) = ops::write_assets(&assets, admin) {
-            eprintln!(
-                "container-distro: warning: cannot install init assets ({e:#}); \
-                 distros will use the per-user copies"
-            );
-        }
-    }
+    // Init assets are no longer installed next to the binary: each
+    // distro keeps its own `sbin.distro` inside its journal dir, which
+    // `uchg` protects just as well. Older installs may still carry the
+    // plugin-dir copies — uninstall removes them; a stale set only
+    // costs a boot-time warning until `set` recreates the distro.
     // Copy, not symlink: the plugin dir is typically root-owned while the
     // build output is user-writable — a link would let whoever owns the
     // binary replace what other users exec via `container distro`.
@@ -203,7 +193,8 @@ pub fn uninstall(root: Option<PathBuf>) -> Result<()> {
     // Delete only what install writes — the files, then the dirs iff
     // they end up empty. Check-then-`remove_dir_all` could take out
     // whatever a renamed directory held (C11); this can't. The assets
-    // are `uchg`-locked, so unlock before removing.
+    // are `uchg`-locked, so unlock before removing. The `sbin.distro*`
+    // dirs only exist on installs from before assets moved per-distro.
     let bin_dir = dir.join("bin");
     remove_file(&bin_dir.join(PLUGIN_NAME));
     remove_file(&config);
@@ -228,7 +219,6 @@ pub fn uninstall(root: Option<PathBuf>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::ffi::OsStrExt;
 
     #[test]
     fn plugin_root_from_bin() {
@@ -245,14 +235,6 @@ mod tests {
         assert!(!c.contains("servicesConfig"));
     }
 
-    /// Whether `path` carries the user-immutable flag (uchg).
-    fn is_locked(path: &Path) -> bool {
-        let c = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
-        // SAFETY: `c` is a valid NUL-terminated path; stat only reads it.
-        let mut st = unsafe { std::mem::zeroed::<libc::stat>() };
-        (unsafe { libc::stat(c.as_ptr(), &mut st) } == 0) && st.st_flags & libc::UF_IMMUTABLE != 0
-    }
-
     #[test]
     fn install_and_uninstall_in_temp_root() {
         let root = tempfile::tempdir().unwrap();
@@ -263,25 +245,9 @@ mod tests {
             fs::metadata(&bin).unwrap().permissions().mode() & 0o111,
             0o111
         );
-        // Both init-assets flavors are installed, and locked so a guest
-        // can't rewrite them through a shared home.
-        for flavor in ["sbin.distro", "sbin.distro.restricted"] {
-            let dir = root.path().join("distro").join(flavor);
-            assert!(dir.join("init").is_file());
-            assert!(dir.join("create-user.sh").is_file());
-            assert!(is_locked(&dir) && is_locked(&dir.join("init")));
-        }
-        assert!(
-            root.path()
-                .join("distro/sbin.distro/grant-admin.sh")
-                .is_file()
-        );
-        assert!(
-            !root
-                .path()
-                .join("distro/sbin.distro.restricted/grant-admin.sh")
-                .exists()
-        );
+        // Init assets are per-distro now — nothing but bin/ and
+        // config.toml lands in the plugin dir.
+        assert!(!root.path().join("distro/sbin.distro").exists());
         // Re-installing from the installed binary is a no-op, not a
         // delete-then-fail.
         install(Some(root.path().to_path_buf()), Some(&bin)).unwrap();

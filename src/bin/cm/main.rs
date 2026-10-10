@@ -657,6 +657,7 @@ fn install(opts: &InstallOpts) -> Result<ExitCode> {
                 distro::ImportSource::Download {
                     url: &url,
                     sha256: &sha256,
+                    name: &name,
                 },
             );
         }

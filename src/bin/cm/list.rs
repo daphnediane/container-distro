@@ -67,7 +67,7 @@ impl Entry {
             disk: d.disk_size,
             platform: d.platform.clone(),
             home: d.home_mount.clone(),
-            image: d.image.clone(),
+            image: d.source.clone().or_else(|| d.image.clone()),
         }
     }
 }

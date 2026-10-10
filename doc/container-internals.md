@@ -105,6 +105,10 @@ missing ones fall back to defaults.
   `machine create` writes the plugin-state dir (including a materialized
   `rootfs.ext4`) but `machine inspect` reports no `containerId` until
   the machine has run.
+- The backing container's id is `<machine-name>-<6 lowercase hex>` --
+  e.g. `poc-a07fee` for a machine named `poc` -- generated fresh each
+  time the plugin creates it, not the machine's name itself. Our
+  runtime distro ids use the same scheme.
 - With no `-n`, `machine run`/`inspect` target the **default machine**.
 - **`exec -w` silently creates missing directories** in the guest --
   `machine_workdir` therefore only ever returns paths guaranteed to
@@ -145,6 +149,28 @@ missing ones fall back to defaults.
   disk (details: [gaps/export-import]).
 - `container create`'s stdout is the container ID -- discarded via
   `run_container_quiet`.
+- A distro's *container* id is ephemeral: `<name>-<6 lowercase hex>`
+  (`runtime_id`, arc4random), fresh on every materialize and never
+  recorded in the journal. Every op resolves the logical name through
+  the `<prefix>.distro` label instead, so the id only surfaces in
+  `container list`, `container inspect <id>`, and `containers/<id>/`.
+- **`com.apple.container.plugin=machine` hides a container** --
+  upstream's `ContainerListFilters.withoutMachines()` excludes
+  containers carrying that label value, and `container list`,
+  `stop`/`kill`/`delete --all`, `prune`, and `system status` all apply
+  the filter (verified on 1.5.0: a container so labeled is invisible to
+  `list` while `inspect`/`start`/`stop`/`rm` by id still work).
+  `machine` is the only value excluded -- it's a hard-coded carve-out,
+  not general plugin-owner filtering. **To hide distro containers the
+  same way**, add `--label com.apple.container.plugin=machine` in
+  `spec.rs create_args` -- nothing else is needed, since all our ops
+  already go through the distro label. Deferred for now: it's an
+  upstream-internal label, and `container list -a` no longer showing
+  your distro containers could surprise users (and would exempt them
+  from `delete --all`, which may or may not be what we want).
+  We would still not copy machines' `autoRemove: true`: a
+  never-dismantled distro's disk lives in `containers/<id>/` and
+  autoRemove would delete it before `dismantle` folds it back.
 - `image load -i` accepts an OCI image-layout tar; we tag manifests with
   all three name annotations -- `org.opencontainers.image.ref.name`,
   `io.containerd.image.name`, and Apple's

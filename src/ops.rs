@@ -24,6 +24,11 @@
 //!   `rootFsOverride` pointing at this path (the daemon needs it
 //!   unlocked then, which is fine — a running guest owns its disk
 //!   anyway, and the locked journal dir keeps it from being unlinked).
+//! - `sbin.distro/`: the init assets the container mounts read-only at
+//!   `/sbin.distro` — the distro's own copy, like a machine bundle's
+//!   `sbin.machine`, written for this build and the spec's admin
+//!   flavor on every materialize. No shared or plugin-installed copy
+//!   can drift out from under it.
 //!
 //! A *stopped* distro is exactly this directory: its container exists
 //! only while running (or transiently between `container create` and
@@ -66,12 +71,10 @@ use crate::oci;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::plugin;
-
 use crate::spec::{
-    Automount, DistroSpec, HomeMount, HostUser, INIT_DIR, LABEL_DISTRO, LABEL_EXPORT_SCRATCH,
-    LABEL_HOME_MOUNT, LABEL_IMPORTED_FROM, LABEL_MACHINE, LABEL_ROOTFS_SHA256, MountSpec,
-    PublishSpec, SpecChanges, automounts,
+    Automount, DistroOrigin, DistroSpec, HomeMount, HostUser, INIT_DIR, LABEL_DISTRO,
+    LABEL_EXPORT_SCRATCH, LABEL_HOME_MOUNT, LABEL_IMPORTED_FROM, LABEL_MACHINE,
+    LABEL_ROOTFS_SHA256, MountSpec, OriginSource, PublishSpec, SpecChanges, automounts,
 };
 
 /// One distro, as reported by [`summaries`] (and `list --format json`).
@@ -110,6 +113,15 @@ pub struct DistroSummary {
     /// `--restricted` produces.
     #[serde(default)]
     pub restricted: bool,
+    /// Provenance — what the distro was created from (journal `origin`).
+    #[serde(default)]
+    pub origin: Option<DistroOrigin>,
+    /// Display form of the source for imported distros (`file:x.wsl`,
+    /// `catalog:Name`) — set when `image` is a generated
+    /// `local/distro-*` snapshot that hides where it really came from.
+    /// List output prefers it over `image`.
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 impl DistroSummary {
@@ -445,9 +457,18 @@ pub(crate) fn write_assets(dir: &Path, admin: bool) -> Result<()> {
     set_locked(dir, true)
 }
 
-/// Refresh both init-assets flavors in the per-user state dir, and
-/// re-lock the default-distro marker if one exists (it's only locked
-/// when written, so an older build may have left it open).
+/// The init-assets dir inside `name`'s journal — every journaled
+/// distro mounts its own `sbin.distro`, like a machine bundle's
+/// `sbin.machine`. Written fresh at each materialize, it can never
+/// drift from this build the way a shared copy could.
+fn journal_assets_dir(name: &str) -> Result<PathBuf> {
+    Ok(journal_dir(name)?.join("sbin.distro"))
+}
+
+/// Refresh both legacy init-assets flavors in the per-user state dir,
+/// and re-lock the default-distro marker if one exists (it's only
+/// locked when written, so an older build may have left it open). Only
+/// containers a pre-journal-assets build materialized still mount these.
 fn refresh_assets() -> Result<()> {
     let state = state_dir()?;
     write_assets(&state.join(assets_flavor(true)), true)?;
@@ -459,58 +480,15 @@ fn refresh_assets() -> Result<()> {
     Ok(())
 }
 
-/// Whether `dir` holds exactly this build's assets — installed copies
-/// are only trusted when they match what this binary would write.
-fn assets_match(dir: &Path, admin: bool) -> bool {
-    dir.is_dir()
-        && asset_files(admin)
-            .iter()
-            .all(|(n, b)| fs::read(dir.join(n)).ok().as_deref() == Some(b.as_bytes()))
-        && (admin || !dir.join("grant-admin.sh").exists())
-}
-
-/// The init assets `install-plugin` wrote next to the plugin binary
-/// (`<prefix>/libexec/container-plugins/distro/`), if they match this
-/// build byte-for-byte. They live outside `$HOME` — root-owned for a
-/// standard install — so no home share can reach them. A stale copy
-/// warns once and falls back to the per-user assets: a newer build's
-/// fixes should land rather than keep running an old init.
-fn installed_assets(admin: bool) -> Option<PathBuf> {
-    let dir = plugin::plugin_dir(None).ok()?.join(assets_flavor(admin));
-    if !dir.is_dir() {
-        return None;
-    }
-    if assets_match(&dir, admin) {
-        return Some(dir);
-    }
-    static WARN: std::sync::Once = std::sync::Once::new();
-    WARN.call_once(|| {
-        eprintln!(
-            "container-distro: warning: the installed init assets differ from this build — \
-             using per-user copies; re-run `container-distro install-plugin` to update"
-        );
-    });
-    None
-}
-
-/// The host directory a distro mounts at `/sbin.distro`: the installed
-/// copy when it is current, else the refreshed per-user copy.
-fn assets_dir(admin: bool) -> Result<PathBuf> {
-    if let Some(dir) = installed_assets(admin) {
-        return Ok(dir);
-    }
-    refresh_assets()?;
-    Ok(state_dir()?.join(assets_flavor(admin)))
-}
-
 /// Refresh the init assets the distro will actually mount at boot.
 ///
-/// A per-user mount source is rewritten in place (upgrading to this
-/// build and re-locking). An installed mount source can't be rewritten
-/// from here — it is only ever stale, so a drifted `init` warns once;
-/// `set` recreates onto per-user assets, or `install-plugin` refreshes
-/// the installed copy.
-fn refresh_mounted_assets(name: &str) -> Result<()> {
+/// A per-distro mount source is rewritten in place (upgrading to this
+/// build and the spec's admin flavor, and re-locking). Legacy mount
+/// sources predate the per-distro assets: a shared per-user copy is
+/// refreshed in place; an installed (plugin-dir) copy can't be
+/// rewritten from here — a drifted `init` warns once, and `set` moves
+/// the distro onto its own assets.
+fn refresh_mounted_assets(name: &str, admin: bool) -> Result<()> {
     ensure_state_locked()?;
     let mounted = find(name).ok().and_then(|info| {
         info.configuration
@@ -519,21 +497,24 @@ fn refresh_mounted_assets(name: &str) -> Result<()> {
             .find(|m| m.destination == INIT_DIR)
             .map(|m| PathBuf::from(&m.source))
     });
+    let own = journal_assets_dir(name)?;
     match mounted {
+        Some(src) if src == own => with_journal_dir_unlocked(name, || write_assets(&own, admin)),
         Some(src) if !src.starts_with(state_dir()?) => {
             if fs::read(src.join("init")).ok().as_deref() != Some(INIT_SCRIPT.as_bytes()) {
                 static WARN: std::sync::Once = std::sync::Once::new();
                 WARN.call_once(|| {
                     eprintln!(
                         "container-distro: warning: `{name}`'s init assets differ from this build \
-                         ({}) — re-run install-plugin or `set` the distro",
+                         ({}) — `set` the distro to move it onto its journal's assets",
                         src.display()
                     );
                 });
             }
             Ok(())
         }
-        _ => refresh_assets(),
+        Some(_) => refresh_assets(),
+        None => Ok(()),
     }
 }
 
@@ -577,10 +558,33 @@ pub fn distros() -> Result<Vec<ContainerInfo>> {
         .collect())
 }
 
+/// The distro a labeled container belongs to — its *logical* name.
+/// `c.id()` is the ephemeral runtime id (`<name>-<suffix>`); the label
+/// value is what the journal, `cm`, and the user know the distro by.
+fn distro_name(c: &ContainerInfo) -> Option<&str> {
+    label_lookup(&c.configuration.labels, LABEL_DISTRO).map(String::as_str)
+}
+
+/// The runtime container id for `name`: `<name>-<6 hex>`, like a
+/// machine's backing container (`poc-a07fee`). The suffix keeps the
+/// ephemeral container out of the logical namespace — a fresh id each
+/// materialize, so nothing can address tomorrow's container by
+/// yesterday's assumption. Truncated to `container`'s 63-char id
+/// budget.
+fn runtime_id(name: &str) -> String {
+    let mut b = [0u8; 3];
+    // SAFETY: arc4random_buf fills the buffer; it cannot fail.
+    unsafe { libc::arc4random_buf(b.as_mut_ptr().cast(), b.len()) };
+    let suffix = format!("{:02x}{:02x}{:02x}", b[0], b[1], b[2]);
+    let budget = 63usize.saturating_sub(suffix.len() + 1);
+    let base: String = name.chars().take(budget).collect();
+    format!("{}-{suffix}", base.trim_end_matches('-'))
+}
+
 pub fn find(name: &str) -> Result<ContainerInfo> {
     distros()?
         .into_iter()
-        .find(|c| c.id() == name)
+        .find(|c| distro_name(c) == Some(name))
         .with_context(|| format!("no distro named `{name}`"))
 }
 
@@ -697,6 +701,7 @@ fn build_spec(name: String, image: String, opts: &CreateOptions) -> Result<Distr
         admin,
         admin_grant: admin,
         user: host_user()?,
+        origin: None,
     };
     if spec.network.as_deref() == Some("none") && !spec.publish.is_empty() {
         eprintln!("container-distro: published ports have no effect without a network");
@@ -725,19 +730,21 @@ fn check_sources(spec: &DistroSpec) -> Result<()> {
     Ok(())
 }
 
-fn create_container(spec: &DistroSpec) -> Result<()> {
-    let assets = assets_dir(spec.admin)?;
-    let args = spec.create_args(&assets.to_string_lossy(), &host_home()?);
+/// Create `spec`'s container under the ephemeral runtime `id`.
+fn create_container(spec: &DistroSpec, id: &str) -> Result<()> {
+    let assets = journal_assets_dir(&spec.name)?;
+    let args = spec.create_args(id, &assets.to_string_lossy(), &host_home()?);
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     run_container_quiet(&args)
 }
 
-/// Boot a distro and (idempotently) provision the user account.
-fn boot(name: &str, _lock: &DistroLock) -> Result<()> {
-    refresh_mounted_assets(name)?;
-    run_container_quiet(&["start", name])?;
+/// Boot distro `name`'s container `id` and (idempotently) provision
+/// the user account.
+fn boot(name: &str, id: &str, lock: &DistroLock) -> Result<()> {
+    refresh_mounted_assets(name, lock.spec()?.admin)?;
+    run_container_quiet(&["start", id])?;
     let init = format!("{INIT_DIR}/init");
-    run_container(&["exec", "--user", "0:0", name, &init, "-u"])
+    run_container(&["exec", "--user", "0:0", id, &init, "-u"])
         .with_context(|| format!("user setup failed in `{name}`"))?;
     report_ports(name);
     Ok(())
@@ -769,8 +776,8 @@ fn ensure_running_locked(name: &str, lock: &mut DistroLock) -> Result<ContainerI
         return Ok(info);
     }
     let spec = refresh_automounts(name, lock)?;
-    materialize(name, &spec, lock)?;
-    boot(name, lock)?;
+    let id = materialize(name, &spec, lock)?;
+    boot(name, &id, lock)?;
     find(name)
 }
 
@@ -788,7 +795,8 @@ fn no_default(
     distros: &[ContainerInfo],
     machines: &[Machine],
 ) -> bool {
-    let distro_set = distro_default.is_some_and(|d| distros.iter().any(|c| c.id() == d));
+    let distro_set =
+        distro_default.is_some_and(|d| distros.iter().any(|c| distro_name(c) == Some(d)));
     !distro_set && !machines.iter().any(|m| m.default)
 }
 
@@ -817,19 +825,21 @@ fn create_from_spec(spec: &DistroSpec, no_boot: bool, set_default: bool) -> Resu
     let r = (|| -> Result<()> {
         // The create is validated now — `--no-boot` lands the same
         // resting state as a stopped distro: journal only.
-        materialize(&spec.name, spec, &lock)?;
+        let id = materialize(&spec.name, spec, &lock)?;
         if no_boot {
-            dismantle(&spec.name, &lock)?;
+            dismantle(&spec.name, &id, &lock)?;
         } else {
-            boot(&spec.name, &lock)?;
+            boot(&spec.name, &id, &lock)?;
         }
         Ok(())
     })();
     if let Err(e) = r {
         // Leave the journal in place — a stopped distro. `start`
         // retries the materialization, `rm` discards it.
-        if find(&spec.name).ok().is_some_and(|i| !i.is_running()) {
-            let _ = dismantle(&spec.name, &lock);
+        if let Ok(info) = find(&spec.name)
+            && !info.is_running()
+        {
+            let _ = dismantle(&spec.name, info.id(), &lock);
         }
         return Err(e);
     }
@@ -853,7 +863,8 @@ fn create_from_spec(spec: &DistroSpec, no_boot: bool, set_default: bool) -> Resu
 pub fn create(name: Option<String>, opts: &CreateOptions, image: &str) -> Result<String> {
     ensure_started()?;
     let name = name.unwrap_or_else(|| default_machine_name(image));
-    let spec = build_spec(name, image.to_string(), opts)?;
+    let mut spec = build_spec(name, image.to_string(), opts)?;
+    spec.origin = Some(stamped_origin(OriginSource::Image));
     create_from_spec(&spec, opts.no_boot, opts.set_default)
 }
 
@@ -861,15 +872,25 @@ fn summarize(c: &ContainerInfo, default: Option<&str>, app_root: Option<&Path>) 
     let cfg = &c.configuration;
     let home = host_home().unwrap_or_default();
     let spec = DistroSpec::from_container(c, &home).ok();
+    let name = distro_name(c).unwrap_or_else(|| c.id());
+    let journal = read_journal(name).ok();
+    let origin = journal.as_ref().and_then(|s| s.origin.clone());
+    // The journal's `origin.created` is the distro's real creation
+    // date; a recreated container's `creationDate` would say "when it
+    // last materialized" instead.
+    let created_date = origin
+        .as_ref()
+        .map(|o| o.created.clone())
+        .or_else(|| cfg.creation_date.clone());
     DistroSummary {
-        id: c.id().to_string(),
+        id: name.to_string(),
         status: c.status.state.clone(),
-        default: default == Some(c.id()),
+        default: default == Some(name),
         ip_address: c.ipv4().map(str::to_string),
         cpus: cfg.resources.as_ref().and_then(|r| r.cpus),
         memory: cfg.resources.as_ref().and_then(|r| r.memory_in_bytes),
         disk_size: app_root.and_then(|r| container::container_disk_usage(r, c.id())),
-        created_date: cfg.creation_date.clone(),
+        created_date,
         image: cfg.image.as_ref().map(|i| i.reference.clone()),
         platform: cfg.platform.as_ref().map(ToString::to_string),
         home_mount: label_lookup(&cfg.labels, LABEL_HOME_MOUNT).cloned(),
@@ -882,6 +903,10 @@ fn summarize(c: &ContainerInfo, default: Option<&str>, app_root: Option<&Path>) 
             .map(|s| s.publish.iter().map(ToString::to_string).collect())
             .unwrap_or_default(),
         restricted: spec.as_ref().is_some_and(DistroSpec::is_restricted),
+        source: origin
+            .as_ref()
+            .and_then(|o| origin_source_display(&o.source)),
+        origin,
     }
 }
 
@@ -927,8 +952,69 @@ fn journal_summary(name: &str, default: Option<&str>) -> Option<DistroSummary> {
         mounts: spec.mounts.iter().map(ToString::to_string).collect(),
         ports: spec.publish.iter().map(ToString::to_string).collect(),
         restricted: spec.is_restricted(),
+        created_date: spec.origin.as_ref().map(|o| o.created.clone()),
+        source: spec
+            .origin
+            .as_ref()
+            .and_then(|o| origin_source_display(&o.source)),
+        origin: spec.origin.clone(),
         ..Default::default()
     })
+}
+
+/// The `list` source string for a journal `origin` — `file:`/`catalog:`
+/// prefixes make a replaced image ref self-documenting. `Image`,
+/// `Machine`, and `Adopted` keep the image reference (a real ref is
+/// the better description).
+fn origin_source_display(s: &OriginSource) -> Option<String> {
+    match s {
+        OriginSource::File { path } => Some(format!("file:{}", source_basename(path))),
+        OriginSource::Download { name, .. } => Some(format!("catalog:{name}")),
+        _ => None,
+    }
+}
+
+/// The trailing component of a recorded source — a local path's file
+/// name or a URL's last segment; `-` (stdin) reads as `stdin`.
+fn source_basename(s: &str) -> String {
+    if s == "-" {
+        return "stdin".to_string();
+    }
+    s.rsplit('/')
+        .next()
+        .filter(|b| !b.is_empty())
+        .unwrap_or(s)
+        .to_string()
+}
+
+/// Whether `image` is one of `import`'s generated refs
+/// (`local/distro-<name>:imported-<ts>`) — a name that carries no
+/// provenance, so `list` shows the source instead.
+fn is_generated_image(image: Option<&str>) -> bool {
+    image.is_some_and(|i| i.starts_with("local/distro-") && i.contains(":imported-"))
+}
+
+/// Journals predating `origin`: a generated `local/distro-*` image
+/// ref hides the real source — the imported image's own
+/// `imported-from` label still knows it (a local path or the catalog
+/// URL). One `image list` for however many rows need it.
+fn fill_legacy_sources(rows: &mut [DistroSummary]) {
+    let needs = |r: &DistroSummary| r.source.is_none() && is_generated_image(r.image.as_deref());
+    if !rows.iter().any(needs) {
+        return;
+    }
+    let Some(images) = container::list_images() else {
+        return;
+    };
+    for r in rows.iter_mut().filter(|r| needs(r)) {
+        if let Some(from) = images
+            .iter()
+            .find(|i| Some(&i.configuration.name) == r.image.as_ref())
+            .and_then(|i| i.labels().get(&label_key(LABEL_IMPORTED_FROM)).cloned())
+        {
+            r.source = Some(format!("file:{}", source_basename(&from)));
+        }
+    }
 }
 
 /// All distros, sorted by name — running or stopped-with-container from
@@ -959,6 +1045,7 @@ pub fn summaries(running_only: bool) -> Result<Vec<DistroSummary>> {
             .collect();
         rows.extend(orphans);
     }
+    fill_legacy_sources(&mut rows);
     rows.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(rows)
 }
@@ -1006,9 +1093,9 @@ fn peek(name: &str) -> Result<()> {
         return Ok(()); // running — inspectable as-is
     }
     let spec = lock.spec()?;
-    materialize(name, &spec, &lock)?;
-    let r = run_container(&["inspect", name]);
-    dismantle(name, &lock)?;
+    let id = materialize(name, &spec, &lock)?;
+    let r = run_container(&["inspect", &id]);
+    dismantle(name, &id, &lock)?;
     r
 }
 
@@ -1019,8 +1106,8 @@ pub fn inspect(names: &[String]) -> Result<()> {
         // A running distro inspects as-is; anything else converges to
         // the journal view first so the output shows the configuration
         // the next start will actually apply.
-        if find(n).ok().is_some_and(|i| i.is_running()) {
-            run_container(&["inspect", n])?;
+        if let Some(info) = find(n).ok().filter(|i| i.is_running()) {
+            run_container(&["inspect", info.id()])?;
         } else if distro_exists(n)? {
             peek(n)?;
         } else {
@@ -1035,13 +1122,16 @@ pub fn start(name: &str) -> Result<()> {
     container::warn_unverified_version();
     ensure_journal(name)?;
     let mut lock = DistroLock::acquire(name)?;
-    if converge(name, &lock)?.is_none() {
-        let spec = refresh_automounts(name, &mut lock)?;
-        materialize(name, &spec, &lock)?;
-    }
+    let id = match converge(name, &lock)? {
+        Some(info) => info.id().to_string(),
+        None => {
+            let spec = refresh_automounts(name, &mut lock)?;
+            materialize(name, &spec, &lock)?
+        }
+    };
     // Runs on an already-running distro too — `init -u` and the port
     // report are idempotent.
-    boot(name, &lock)
+    boot(name, &id, &lock)
 }
 
 /// `container distro stop` / `cm -t`: stop the container and dismantle
@@ -1054,9 +1144,9 @@ pub fn stop(names: &[String]) -> Result<()> {
         let lock = DistroLock::acquire(n)?;
         if let Ok(info) = find(n) {
             if info.is_running() {
-                run_container_quiet(&["stop", n])?;
+                run_container_quiet(&["stop", info.id()])?;
             }
-            dismantle(n, &lock)?;
+            dismantle(n, info.id(), &lock)?;
         }
     }
     Ok(())
@@ -1091,6 +1181,14 @@ fn remove_journal_dir(name: &str) -> Result<()> {
         return Ok(());
     }
     with_journal_root_unlocked(|| {
+        // Every entry the journal can hold — `uchg` blocks removal.
+        let assets = dir.join("sbin.distro");
+        if let Ok(entries) = fs::read_dir(&assets) {
+            for e in entries.flatten() {
+                unlock(&e.path());
+            }
+        }
+        unlock(&assets);
         for f in ["rootfs.ext4", "spec.json"] {
             unlock(&dir.join(f));
         }
@@ -1131,9 +1229,9 @@ pub fn delete(force: bool, names: &[String]) -> Result<()> {
                 if !force {
                     bail!("distro `{n}` is running (stop it first or use --force)");
                 }
-                run_container_quiet(&["stop", n])?;
+                run_container_quiet(&["stop", info.id()])?;
             }
-            run_container_quiet(&["delete", n])?;
+            run_container_quiet(&["delete", info.id()])?;
         }
         remove_journal_dir(n)?;
         cleanup_preserved(n);
@@ -1177,7 +1275,7 @@ pub fn run_command(o: RunOpts) -> Result<Command> {
         container::validate_user(u)?;
     }
     let name = resolve(o.name)?;
-    ensure_running(&name)?;
+    let info = ensure_running(&name)?;
     let home = host_home()?;
     let spec = read_journal(&name)?;
     let me = &spec.user;
@@ -1209,7 +1307,7 @@ pub fn run_command(o: RunOpts) -> Result<Command> {
     for e in &o.env {
         cmd.args(["--env", e]);
     }
-    cmd.arg(&name);
+    cmd.arg(info.id());
     let init = format!("{INIT_DIR}/init");
     if o.command.is_empty() {
         cmd.arg(&init).arg(if o.no_login { "-s" } else { "-l" });
@@ -1225,6 +1323,37 @@ fn timestamp() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
+}
+
+/// The current time as ISO 8601 UTC — the same `YYYY-MM-DDTHH:MM:SSZ`
+/// shape `container` writes as `creationDate`. A libc call rather than
+/// a time crate for one formatted string.
+fn iso_now() -> String {
+    // SAFETY: time() writes through a null pointer (returns the value)
+    // and gmtime_r fills a valid out-param.
+    let t = unsafe { libc::time(std::ptr::null_mut()) };
+    let mut tm = unsafe { std::mem::zeroed::<libc::tm>() };
+    unsafe { libc::gmtime_r(&t, &mut tm) };
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        tm.tm_year + 1900,
+        tm.tm_mon + 1,
+        tm.tm_mday,
+        tm.tm_hour,
+        tm.tm_min,
+        tm.tm_sec
+    )
+}
+
+/// Journal provenance stamped at creation: when, what build, and from
+/// what. `set` rewrites the spec but clones this field through — the
+/// recorded version stays the *creating* build's.
+fn stamped_origin(source: OriginSource) -> DistroOrigin {
+    DistroOrigin {
+        created: iso_now(),
+        created_with: env!("CARGO_PKG_VERSION").to_string(),
+        source,
+    }
 }
 
 fn snapshot_repo(name: &str) -> String {
@@ -1456,7 +1585,11 @@ fn distro_exists(name: &str) -> Result<bool> {
 /// `cm` resolves names against.
 pub fn distro_names() -> Result<Vec<String>> {
     let mut names: Vec<String> = journal_names()?;
-    names.extend(distros()?.iter().map(|c| c.id().to_string()));
+    names.extend(
+        distros()?
+            .iter()
+            .filter_map(|c| distro_name(c).map(String::from)),
+    );
     names.sort();
     names.dedup();
     Ok(names)
@@ -1571,7 +1704,9 @@ fn migrate_once() -> Result<()> {
             migrate_legacy_preserved(&name)?;
         }
         for c in containers {
-            let name = c.id().to_string();
+            let Some(name) = distro_name(&c).map(String::from) else {
+                continue;
+            };
             if journal_present(&name) {
                 continue;
             }
@@ -1713,7 +1848,9 @@ pub fn adopt(name: &str) -> Result<()> {
         return Ok(());
     }
     let info = find(name)?;
-    write_journal(name, &DistroSpec::from_container(&info, &host_home()?)?)?;
+    let mut spec = DistroSpec::from_container(&info, &host_home()?)?;
+    spec.origin = Some(stamped_origin(OriginSource::Adopted));
+    write_journal(name, &spec)?;
     println!("adopted `{name}` — its live config is now the journal");
     Ok(())
 }
@@ -1799,32 +1936,40 @@ fn set_rootfs_override(dir: &Path, rootfs: &Path) -> Result<()> {
         .with_context(|| format!("failed to write {}", cfg.display()))
 }
 
-/// Create `name`'s container fresh from `spec` and attach the journaled
-/// disk — the machine model's materialization. The disk is unlocked for
-/// as long as the container exists (the daemon mounts it read-write);
-/// the journaled spec and journal dir never become mutable.
+/// Create `name`'s container fresh from `spec` under a new randomized
+/// runtime id and attach the journaled disk — the machine model's
+/// materialization (`<name>-<6hex>`, like `poc-a07fee`). The disk is
+/// unlocked for as long as the container exists (the daemon mounts it
+/// read-write); the journaled spec and journal dir never become
+/// mutable. Returns the container's runtime id.
 ///
 /// A failure leaves the distro stopped with journal and disk intact:
 /// like `machine boot`, there is no stale recorded configuration to
 /// fall back to — the next start retries a fresh materialization.
-fn materialize(name: &str, spec: &DistroSpec, _lock: &DistroLock) -> Result<()> {
-    create_container(spec)?;
+fn materialize(name: &str, spec: &DistroSpec, _lock: &DistroLock) -> Result<String> {
+    // The init assets a distro mounts live in its own journal dir —
+    // written fresh for this build and the spec's admin flavor, so no
+    // shared or plugin-installed copy can drift out from under it.
+    let assets = journal_assets_dir(name)?;
+    with_journal_dir_unlocked(name, || write_assets(&assets, spec.admin))?;
+    let id = runtime_id(name);
+    create_container(spec, &id)?;
     let fs_path = journal_fs_path(name)?;
     if fs_path.is_file() {
-        set_rootfs_override(&container_dir(name)?, &fs_path)?;
+        set_rootfs_override(&container_dir(&id)?, &fs_path)?;
         set_locked(&fs_path, false)?;
     }
-    Ok(())
+    Ok(id)
 }
 
-/// Dismantle `name`'s stopped container: move the disk into the journal
-/// when it still lives under `containers/` (first boot, or a distro
-/// that predates the journal), then delete the container. Whatever the
-/// runtime configuration recorded — fields `DistroSpec` models and ones
-/// it doesn't — is discarded with the container. Afterwards the distro
-/// is its journal alone.
-fn dismantle(name: &str, _lock: &DistroLock) -> Result<()> {
-    let dir = container_dir(name)?;
+/// Dismantle `name`'s stopped container `id`: move the disk into the
+/// journal when it still lives under `containers/` (first boot, or a
+/// distro that predates the journal), then delete the container.
+/// Whatever the runtime configuration recorded — fields `DistroSpec`
+/// models and ones it doesn't — is discarded with the container.
+/// Afterwards the distro is its journal alone.
+fn dismantle(name: &str, id: &str, _lock: &DistroLock) -> Result<()> {
+    let dir = container_dir(id)?;
     let jfs = journal_fs_path(name)?;
     // The journal path is the disk's home once the container mounted it
     // via override — nothing to move. An un-overridden container's disk
@@ -1848,7 +1993,7 @@ fn dismantle(name: &str, _lock: &DistroLock) -> Result<()> {
                 .with_context(|| format!("failed to move {} into the journal", conv.display()))
         })?;
     }
-    run_container_quiet(&["delete", name])?;
+    run_container_quiet(&["delete", id])?;
     // The disk rests locked while nothing mounts it.
     if jfs.is_file() {
         set_locked(&jfs, true)?;
@@ -1963,12 +2108,12 @@ fn converge(name: &str, lock: &DistroLock) -> Result<Option<ContainerInfo>> {
             warn_spec_drift(name, &info, lock);
             Ok(Some(info))
         }
-        Some(_) => {
+        Some(info) => {
             eprintln!(
                 "container-distro: `{name}` has a leftover container — \
                  regenerating it from the journal"
             );
-            dismantle(name, lock)?;
+            dismantle(name, info.id(), lock)?;
             Ok(None)
         }
         None => Ok(None),
@@ -2020,16 +2165,16 @@ pub fn set(name: &str, changes: &SpecChanges) -> Result<()> {
     check_sources(&new)?;
     let info = find(name).ok();
     let was_running = info.as_ref().is_some_and(|i| i.is_running());
-    if info.is_some() {
+    if let Some(info) = &info {
         if was_running {
-            run_container_quiet(&["stop", name])?;
+            run_container_quiet(&["stop", info.id()])?;
         }
-        dismantle(name, &lock)?;
+        dismantle(name, info.id(), &lock)?;
     }
     lock.write_spec(&new)?;
     if was_running {
-        materialize(name, &new, &lock)?;
-        boot(name, &lock)?;
+        let id = materialize(name, &new, &lock)?;
+        boot(name, &id, &lock)?;
     }
     remove_snapshot_images(name, Some(new.image.as_str()));
     Ok(())
@@ -2077,10 +2222,12 @@ pub fn export(name: &str, output: Option<&Path>) -> Result<()> {
     )?;
     // Stop + converge before cloning — a running disk's clone would
     // only be crash-consistent.
-    let was_running = find(name).ok().is_some_and(|i| i.is_running());
-    if was_running {
-        run_container_quiet(&["stop", name])?;
-    }
+    let was_running = if let Some(info) = find(name).ok().filter(|i| i.is_running()) {
+        run_container_quiet(&["stop", info.id()])?;
+        true
+    } else {
+        false
+    };
     converge(name, &lock)?;
     let cloned = (|| -> Result<()> {
         let src = journal_fs_path(name)?;
@@ -2106,14 +2253,20 @@ pub fn export(name: &str, output: Option<&Path>) -> Result<()> {
 }
 
 /// Where an imported rootfs came from, recorded in the loaded image's
-/// labels (`imported-from`, plus `rootfs-sha256` for downloads).
+/// labels (`imported-from`, plus `rootfs-sha256` for downloads) and the
+/// journal's `origin` — a local path for `Local`, the download itself
+/// for `Download`.
 #[derive(Debug, Clone, Copy)]
 pub enum ImportSource<'a> {
     /// A local file path (or `-` for stdin).
     Local,
-    /// A catalog `.wsl` download: the URL and the SHA-256 it was
-    /// verified against.
-    Download { url: &'a str, sha256: &'a str },
+    /// A catalog `.wsl` download: the URL, the SHA-256 it was verified
+    /// against, and the catalog entry's name.
+    Download {
+        url: &'a str,
+        sha256: &'a str,
+        name: &'a str,
+    },
 }
 
 /// Create a distro from a rootfs tar; returns its name.
@@ -2154,13 +2307,23 @@ pub fn import(
                 file.to_string_lossy().into_owned()
             },
         )),
-        ImportSource::Download { url, sha256 } => {
+        ImportSource::Download { url, sha256, .. } => {
             labels.push((label_key(LABEL_IMPORTED_FROM), url.to_string()));
             labels.push((label_key(LABEL_ROOTFS_SHA256), sha256.to_string()));
         }
     }
     oci::load_rootfs(rootfs, &reference, &labels)?;
-    let spec = build_spec(name.to_string(), reference, opts)?;
+    let mut spec = build_spec(name.to_string(), reference, opts)?;
+    spec.origin = Some(stamped_origin(match source {
+        ImportSource::Local => OriginSource::File {
+            path: file.to_string_lossy().into_owned(),
+        },
+        ImportSource::Download { url, sha256, name } => OriginSource::Download {
+            url: url.to_string(),
+            sha256: sha256.to_string(),
+            name: name.to_string(),
+        },
+    }));
     create_from_spec(&spec, opts.no_boot, opts.set_default)
 }
 
@@ -2467,6 +2630,7 @@ fn spec_from_machine(name: &str, m: &MachineDetail, opts: &CreateOptions) -> Res
         admin,
         admin_grant: admin,
         user,
+        origin: None,
     };
     warn_public_publish(&spec.publish);
     Ok(spec)
@@ -2553,7 +2717,10 @@ fn migrate_to_distro(
         bail!("distro `{name}` already exists");
     }
     let detail = container::inspect_machine(machine)?;
-    let spec = spec_from_machine(name, &detail, opts)?;
+    let mut spec = spec_from_machine(name, &detail, opts)?;
+    spec.origin = Some(stamped_origin(OriginSource::Machine {
+        name: machine.to_string(),
+    }));
     check_sources(&spec)?;
     let was_running = detail.is_running();
     if was_running {
@@ -2579,14 +2746,16 @@ fn migrate_to_distro(
             );
         }
     }
-    if let Err(e) = materialize(name, &spec, &lock).and_then(|()| {
+    if let Err(e) = materialize(name, &spec, &lock).and_then(|id| {
         if opts.no_boot {
-            dismantle(name, &lock)
+            dismantle(name, &id, &lock)
         } else {
-            boot(name, &lock)
+            boot(name, &id, &lock)
         }
     }) {
-        let _ = run_container_quiet(&["delete", name]);
+        if let Ok(info) = find(name) {
+            let _ = run_container_quiet(&["delete", info.id()]);
+        }
         let _ = remove_journal_dir(name);
         if was_running {
             let _ = boot_machine(machine);
@@ -2624,12 +2793,14 @@ fn migrate_to_distro(
 /// conventional `containers/<id>/rootfs.ext4` or an override source.
 /// `None` before the first boot: the filesystem is still the pristine
 /// image.
-fn distro_rootfs(id: &str) -> Result<Option<PathBuf>> {
-    let jfs = journal_fs_path(id)?;
+fn distro_rootfs(name: &str) -> Result<Option<PathBuf>> {
+    let jfs = journal_fs_path(name)?;
     if jfs.is_file() {
         return Ok(Some(jfs));
     }
-    let dir = container_dir(id)?;
+    let Some(dir) = find(name).ok().and_then(|i| container_dir(i.id()).ok()) else {
+        return Ok(None);
+    };
     if let Some(src) = fs::read_to_string(dir.join("runtime-configuration.json"))
         .ok()
         .and_then(|s| rootfs_override_source(&s))
@@ -2761,10 +2932,12 @@ pub fn migrate_to_machine(
     let mut lock = DistroLock::acquire(distro)?;
     container::warn_unverified_version();
     let spec = lock.spec()?;
-    let was_running = find(distro).ok().is_some_and(|i| i.is_running());
-    if was_running {
-        run_container_quiet(&["stop", distro])?;
-    }
+    let was_running = if let Some(info) = find(distro).ok().filter(|i| i.is_running()) {
+        run_container_quiet(&["stop", info.id()])?;
+        true
+    } else {
+        false
+    };
     converge(distro, &lock)?;
     let src = distro_rootfs(distro)?;
     if src.is_none() {
@@ -2864,11 +3037,18 @@ pub fn migrate_to_machine(
 mod tests {
     use super::*;
 
-    fn distro(id: &str) -> ContainerInfo {
+    /// A distro container: `name` is its logical name — the `distro`
+    /// label — while `id` is the ephemeral runtime id.
+    fn distro_id(id: &str, name: &str) -> ContainerInfo {
         serde_json::from_str(&format!(
-            r#"{{"configuration":{{"id":"{id}"}},"id":"{id}"}}"#
+            r#"{{"configuration":{{"id":"{id}","labels":{{"{}":"{name}"}}}}}}"#,
+            label_key(LABEL_DISTRO)
         ))
         .unwrap()
+    }
+
+    fn distro(name: &str) -> ContainerInfo {
+        distro_id(&format!("{name}-a1b2c3"), name)
     }
 
     fn machine(id: &str, default: bool) -> Machine {
@@ -2876,6 +3056,59 @@ mod tests {
             r#"{{"id":"{id}","status":"running","default":{default}}}"#
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn runtime_id_shape() {
+        let id = runtime_id("alpine");
+        let (base, suffix) = id.rsplit_once('-').unwrap();
+        assert_eq!(base, "alpine");
+        assert_eq!(suffix.len(), 6);
+        assert!(suffix.bytes().all(|b| b.is_ascii_hexdigit()));
+        // Long names truncate to `container`'s 63-char budget, never
+        // leaving a dangling `-` before the suffix.
+        let long = runtime_id(&"x".repeat(63));
+        assert_eq!(long.len(), 63);
+        assert!(long.chars().nth(56) == Some('-'));
+        // Two ids for the same name differ.
+        assert_ne!(runtime_id("alpine"), runtime_id("alpine"));
+    }
+
+    #[test]
+    fn source_display() {
+        let disp = |s: &OriginSource| origin_source_display(s).unwrap();
+        assert_eq!(
+            disp(&OriginSource::File {
+                path: "/tmp/Rocky-9.wsl".into()
+            }),
+            "file:Rocky-9.wsl"
+        );
+        assert_eq!(disp(&OriginSource::File { path: "-".into() }), "file:stdin");
+        assert_eq!(
+            disp(&OriginSource::Download {
+                url: "https://x/d.wsl".into(),
+                sha256: "ab".into(),
+                name: "RLCPlus-9".into()
+            }),
+            "catalog:RLCPlus-9"
+        );
+        // Real references stay in the image column.
+        for s in [
+            OriginSource::Image,
+            OriginSource::Machine { name: "poc".into() },
+            OriginSource::Adopted,
+        ] {
+            assert!(origin_source_display(&s).is_none());
+        }
+        // Basenames: URLs and paths alike.
+        assert_eq!(
+            source_basename("https://x/y/RLCPlus-9.aarch64.wsl"),
+            "RLCPlus-9.aarch64.wsl"
+        );
+        assert_eq!(source_basename("/a/b/rootfs.tar.gz"), "rootfs.tar.gz");
+        assert!(is_generated_image(Some("local/distro-r9:imported-1")));
+        assert!(!is_generated_image(Some("local/distro-r9:snap-1")));
+        assert!(!is_generated_image(Some("docker.io/library/alpine:latest")));
     }
 
     #[test]
@@ -3157,6 +3390,7 @@ mod tests {
                 uid: 501,
                 gid: 20,
             },
+            origin: None,
         }
     }
 
@@ -3234,6 +3468,7 @@ mod tests {
                 uid: 501,
                 gid: 20,
             },
+            origin: None,
         };
         let mut lock = DistroLock {
             file: open_locked_rw(&spec_p).unwrap(),

@@ -146,19 +146,19 @@ daemon as the user, so no macOS layer intervened (verified on a running
 distro). There is no standard per-user location outside `$HOME`, so the
 answer was to take the files out of reach rather than move them:
 
-- `install-plugin` writes both asset flavors next to the plugin binary
-  (`<prefix>/libexec/container-plugins/distro/sbin.distro*`) -- outside
-  `$HOME`, root-owned for the standard `/usr/local` install, so no share
-  can reach them unless a user mounts that path on purpose.
-- `assets_dir()` uses the installed copies only when byte-identical to
-  this build's; a stale plugin copy warns once and falls back, so a
-  newer binary never runs an older init.
-- The per-user fallback (what `cm`-only installs use) is locked with the
-  macOS user-immutable flag `uchg`, directory and files: guests get
-  EPERM on write/unlink/rename, and virtiofs exposes no flag operations
-  to clear it (verified on a running distro). Refresh unlocks, writes,
-  re-locks; writes use `O_NOFOLLOW`, so a planted symlink can't turn a
-  refresh into a clobber of an arbitrary user file.
+- Each distro's init assets live **inside its journal dir** at
+  `distros/<name>/sbin.distro/` -- refreshed on every materialize from
+  this build's embedded copies, so every distro mounts assets that
+  match the running binary. Like a machine bundle's `sbin.machine`,
+  the assets are per-distro, not shared: nothing outside the journal
+  needs to agree with the installed version, and the restricted
+  flavor is just that same dir without `grant-admin.sh`.
+- The per-distro assets are locked with the macOS user-immutable flag
+  `uchg`, directory and files: guests get EPERM on write/unlink/rename,
+  and virtiofs exposes no flag operations to clear it (verified on a
+  running distro). Refresh unlocks, writes, re-locks; writes use
+  `O_NOFOLLOW`, so a planted symlink can't turn a refresh into a
+  clobber of an arbitrary user file.
 - The same flag covers each distro's journal —
   `~/Library/Application Support/container-distro/distros/<name>/`
   (`spec.json` + `rootfs.ext4`), all `uchg`-locked at rest. (Not
@@ -173,8 +173,11 @@ answer was to take the files out of reach rather than move them:
   could be unlinked under the lock, voiding exclusion). `default-distro`
   is locked on write/refresh.
 - `boot` refreshes whichever directory the container actually mounts:
-  per-user copies upgrade (and lock) in place; installed copies warn
-  once on drift.
+  the per-distro `sbin.distro` is refreshed in place (and re-locked);
+  containers materialized before the change may still mount the legacy
+  shared copies (per-user `sbin.distro*/` or the plugin-dir installs),
+  which get the old upgrade-and-lock or warn-on-drift treatment until a
+  `set`/recreate moves them onto per-distro assets.
 
 The pre-journal world gets exactly one trusted upgrade: a
 `journalized` marker (itself `uchg`-locked, so unforgeable) gates a

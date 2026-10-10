@@ -284,6 +284,46 @@ impl fmt::Display for PublishSpec {
     }
 }
 
+/// What a distro was created from, recorded in the journal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum OriginSource {
+    /// `create` / `cm --install` from an OCI image (`image` is the
+    /// reference).
+    Image,
+    /// `import` / `cm --from-file` / `cm --import` of a local rootfs
+    /// tar or `.wsl` package — the path as given (`-` for stdin).
+    File { path: String },
+    /// A catalog `.wsl` download: the URL, the SHA-256 the download
+    /// was verified against, and the catalog entry's name.
+    Download {
+        url: String,
+        sha256: String,
+        name: String,
+    },
+    /// `migrate --in` from a `container machine` of this name.
+    Machine { name: String },
+    /// `migrate` adopting a pre-journal distro container — its live
+    /// configuration became the journal under explicit opt-in.
+    Adopted,
+}
+
+/// Provenance written once at journal creation and never rewritten —
+/// `set` clones it through untouched. Informational only: nothing keys
+/// behavior off it. `created`/`created_with` record the *initial*
+/// creation, not the last writer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DistroOrigin {
+    /// ISO 8601 UTC creation time (matches `container`'s
+    /// `creationDate` format).
+    pub created: String,
+    /// The container-distro version that created the distro.
+    pub created_with: String,
+    /// What the distro was made from.
+    pub source: OriginSource,
+}
+
 /// Everything needed to (re)create a distro container.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -316,6 +356,11 @@ pub struct DistroSpec {
     /// deliberately removed — only an explicit `set --sudo` does.
     pub admin_grant: bool,
     pub user: HostUser,
+    /// Where the distro came from — written once at creation. Absent on
+    /// journals that predate it (and on specs reconstructed from a live
+    /// container, which can't recover it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<DistroOrigin>,
 }
 
 impl DistroSpec {
@@ -337,8 +382,12 @@ impl DistroSpec {
     /// configures a machine: our init as the entrypoint, all capabilities,
     /// no masked or read-only paths, SSH agent forwarding, and the host
     /// account passed through the `CONTAINER_*` environment.
-    pub fn create_args(&self, assets_dir: &str, host_home: &str) -> Vec<String> {
-        let mut a: Vec<String> = ["create", "--name", &self.name].map(String::from).to_vec();
+    /// The `container create` argv for this spec. `runtime_id` is the
+    /// ephemeral container's id (`<name>-<suffix>`) — the distro's
+    /// logical `name` only reaches the container through labels and
+    /// `CONTAINER_MACHINE_ID` (which `init` writes to /etc/hostname).
+    pub fn create_args(&self, runtime_id: &str, assets_dir: &str, host_home: &str) -> Vec<String> {
+        let mut a: Vec<String> = ["create", "--name", runtime_id].map(String::from).to_vec();
         let mut push = |k: &str, v: String| {
             a.push(k.to_string());
             a.push(v);
@@ -505,6 +554,9 @@ impl DistroSpec {
             admin,
             admin_grant,
             user,
+            // A live container can't tell us how the distro was made;
+            // adoption stamps its own origin.
+            origin: None,
         })
     }
 }
@@ -711,6 +763,7 @@ mod tests {
             admin: true,
             admin_grant: true,
             user: user(),
+            origin: None,
         }
     }
 
@@ -756,11 +809,14 @@ mod tests {
 
     #[test]
     fn create_args_mirror_machine_config() {
-        let a = spec().create_args("/state/sbin.distro", "/Users/dp");
+        let a = spec().create_args("d1-a1b2c3", "/state/sbin.distro", "/Users/dp");
         let joined = a.join(" ");
+        // The runtime id names the container; the distro label and
+        // CONTAINER_MACHINE_ID keep the logical name.
         assert!(joined.starts_with(
-            "create --name d1 --label io.github.daphnediane.container-distro.distro=d1"
+            "create --name d1-a1b2c3 --label io.github.daphnediane.container-distro.distro=d1"
         ));
+        assert!(joined.contains("--env CONTAINER_MACHINE_ID=d1"));
         for want in [
             "--label io.github.daphnediane.container-distro.home-mount=ro",
             "--label io.github.daphnediane.container-distro.user=dp:501:20",
@@ -783,7 +839,7 @@ mod tests {
     fn create_args_home_none_has_no_home_volume() {
         let mut s = spec();
         s.home_mount = HomeMount::None;
-        let joined = s.create_args("/s", "/Users/dp").join(" ");
+        let joined = s.create_args("id", "/s", "/Users/dp").join(" ");
         assert!(!joined.contains("/Users/dp:/Users/dp"));
     }
 
@@ -798,7 +854,7 @@ mod tests {
         s.admin = false;
         s.admin_grant = false;
         assert!(s.is_restricted());
-        let joined = s.create_args("/s", "/Users/dp").join(" ");
+        let joined = s.create_args("id", "/s", "/Users/dp").join(" ");
         for want in [
             "--label io.github.daphnediane.container-distro.admin=false",
             "--label io.github.daphnediane.container-distro.home-mount=none",
@@ -820,6 +876,52 @@ mod tests {
         let s = spec();
         let round: DistroSpec = serde_json::from_slice(&serde_json::to_vec(&s).unwrap()).unwrap();
         assert_eq!(round, s);
+    }
+
+    /// `origin` round-trips through the journal JSON and is omitted
+    /// entirely when absent — journals written before it existed read
+    /// back with `None`.
+    #[test]
+    fn origin_round_trip_and_default() {
+        let mut s = spec();
+        s.origin = Some(DistroOrigin {
+            created: "2026-10-10T05:00:00Z".into(),
+            created_with: "0.5.0-dev".into(),
+            source: OriginSource::Download {
+                url: "https://example.com/d.wsl".into(),
+                sha256: "ab12".into(),
+                name: "Catalog-9".into(),
+            },
+        });
+        let json = serde_json::to_vec(&s).unwrap();
+        let round: DistroSpec = serde_json::from_slice(&json).unwrap();
+        assert_eq!(round, s);
+        let v: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        assert_eq!(v["origin"]["source"]["type"], "download");
+        assert_eq!(v["origin"]["source"]["sha256"], "ab12");
+        assert_eq!(v["origin"]["createdWith"], "0.5.0-dev");
+        // No origin → no key at all, and it still parses.
+        let bare = serde_json::to_vec(&spec()).unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bare).unwrap();
+        assert!(v.get("origin").is_none());
+        assert_eq!(serde_json::from_slice::<DistroSpec>(&bare).unwrap(), spec());
+        for src in [
+            OriginSource::Image,
+            OriginSource::File {
+                path: "/tmp/r.wsl".into(),
+            },
+            OriginSource::Machine { name: "m".into() },
+            OriginSource::Adopted,
+        ] {
+            s.origin = Some(DistroOrigin {
+                created: "x".into(),
+                created_with: "y".into(),
+                source: src.clone(),
+            });
+            let round: DistroSpec =
+                serde_json::from_slice(&serde_json::to_vec(&s).unwrap()).unwrap();
+            assert_eq!(round.origin, s.origin);
+        }
     }
 
     #[test]
@@ -891,7 +993,7 @@ mod tests {
         assert!(back.admin && !back.admin_grant);
         // The recreated container is labeled `never`: still allowed,
         // still not armed — and it stays that way across plain `set`s.
-        let joined = back.create_args("/s", "/h").join(" ");
+        let joined = back.create_args("id", "/s", "/h").join(" ");
         assert!(joined.contains("container-distro.admin=never"), "{joined}");
         assert!(!joined.contains("CONTAINER_ADMIN"));
         // An explicit `set --sudo` is what re-arms the grant env.
@@ -902,7 +1004,7 @@ mod tests {
         .apply(&back)
         .unwrap();
         assert!(rearmed.admin_grant);
-        let joined = rearmed.create_args("/s", "/h").join(" ");
+        let joined = rearmed.create_args("id", "/s", "/h").join(" ");
         assert!(joined.contains("container-distro.admin=true"), "{joined}");
         assert!(joined.contains("CONTAINER_ADMIN=1"), "{joined}");
     }
