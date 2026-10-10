@@ -140,7 +140,17 @@ The positional argument is resolved against the curated catalog first
 an image reference — catalog names contain no `/`/`:`/`@`, so a
 fully-qualified ref always bypasses the catalog, and `--from-image`
 skips name resolution entirely. A bare `cm --install` installs the
-catalog default, Ubuntu, matching `wsl --install`.
+catalog default, Ubuntu, matching `wsl --install`. Like
+`wsl --install <Distro>`, the optional positional binds only directly
+after the flag — `cm --install --no-launch Ubuntu` leaves `Ubuntu`
+dangling as a command line — so put it first or write
+`--install=Ubuntu`.
+
+The created distro is named `--name` if given, else the catalog
+entry's NAME sanitized to a lowercase DNS-style name: `wsl --install`
+registers `Ubuntu`, and cm registers `ubuntu`. An install from a bare
+image reference (or `--from-image`) derives the name from the image
+instead (`alpine:latest` → `alpine-latest`).
 
 The catalog is a compiled-in list (`src/catalog.json`)
 whose schema is Microsoft's `DistributionInfo.json` — the file behind
@@ -187,12 +197,17 @@ the listing.
 package (WSL 2.4.4+ tar format) as a **distro** — machines can't boot a
 bare rootfs, so it's rejected with `--machine`. The name comes from
 `--name`, then the package's `etc/wsl-distribution.conf`
-`oobe.defaultName`, then the file stem. Other manifest keys are
+`oobe.defaultName`, then the catalog NAME for catalog downloads, then
+the file stem. Other manifest keys are
 ignored: distros provision the host user rather than honoring
 `oobe.defaultUid`, and `oobe.command` never runs (security.md T4).
 
 `--install` creates a **distro** (`container distro create`), then
-opens a shell in it (`--no-launch` skips the shell). `--machine` runs
+opens a shell in it (`--no-launch` skips the shell). There is no
+first-run setup: `wsl --install` launches an OOBE prompt asking for a
+new Unix username and password, while cm distros and machines
+provision your macOS account automatically (same name/uid/gid), so a
+fresh install drops straight into a shell. `--machine` runs
 `container machine create` instead — for WSL-parity testing and
 upstream comparisons — and is rejected alongside the distro-only
 options `--share`/`--publish`/`--restricted`/`--from-file`, which have

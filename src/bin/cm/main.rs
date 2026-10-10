@@ -575,8 +575,11 @@ fn shutdown(system: bool) -> Result<ExitCode> {
 
 /// What `--install` resolved to on this host.
 enum Resolved {
-    /// An OCI image to create a machine or distro from.
-    Image(String),
+    /// An OCI image to create a machine or distro from; `name` is the
+    /// catalog entry's NAME when one matched — `wsl --install`
+    /// registers the distro under that name (`Ubuntu`), not a
+    /// derivation of the image.
+    Image { image: String, name: Option<String> },
     /// A catalog `.wsl` download (URL + SHA-256); the entry's NAME is
     /// the last-resort distro name after the package's own manifest.
     Wsl {
@@ -592,19 +595,34 @@ enum Resolved {
 /// bypasses the catalog, as does `--from-image` explicitly. A catalog
 /// entry resolves to its `Image` or to the `.wsl` download for the
 /// host arch; an entry with neither is un-installable here (like WSL
-/// on ARM rejecting amd64-only distributions).
+/// on ARM rejecting amd64-only distributions). An image matched
+/// through the catalog keeps the entry's NAME as the default distro
+/// name — a bare image reference derives one from the ref instead.
 fn resolve(cat: &catalog::Catalog, source: &InstallSource) -> Result<Resolved> {
     let entry = match source {
         InstallSource::Default => cat.default_entry().context("the distro catalog is empty")?,
         InstallSource::CatalogOrImage(a) => match catalog::lookup(&cat.entries, a) {
             Some(e) => e,
-            None => return Ok(Resolved::Image(a.clone())),
+            None => {
+                return Ok(Resolved::Image {
+                    image: a.clone(),
+                    name: None,
+                });
+            }
         },
-        InstallSource::Image(r) => return Ok(Resolved::Image(r.clone())),
+        InstallSource::Image(r) => {
+            return Ok(Resolved::Image {
+                image: r.clone(),
+                name: None,
+            });
+        }
         InstallSource::File(_) => bail!("internal error: file source resolved as image"),
     };
     match entry.source(oci::host_arch()) {
-        Some(catalog::Source::Image(i)) => Ok(Resolved::Image(i.to_string())),
+        Some(catalog::Source::Image(i)) => Ok(Resolved::Image {
+            image: i.to_string(),
+            name: Some(entry.name.clone()),
+        }),
         Some(catalog::Source::Wsl(d)) => Ok(Resolved::Wsl {
             url: d.url.clone(),
             sha256: d.sha256.clone(),
@@ -635,8 +653,8 @@ fn install(opts: &InstallOpts) -> Result<ExitCode> {
         return install_from_file(opts, &create, file, None, distro::ImportSource::Local);
     }
     let cat = catalog::load(opts.catalog.as_deref())?;
-    let image = match resolve(&cat, &opts.source)? {
-        Resolved::Image(i) => i,
+    let (image, hint) = match resolve(&cat, &opts.source)? {
+        Resolved::Image { image, name } => (image, name),
         Resolved::Wsl { url, sha256, name } => {
             // Machines boot from images — a catalog entry that only
             // ships a rootfs download can't satisfy `--machine`.
@@ -662,10 +680,14 @@ fn install(opts: &InstallOpts) -> Result<ExitCode> {
             );
         }
     };
+    // --name is used verbatim; otherwise a catalog install takes the
+    // entry's NAME (sanitized: `Ubuntu` → `ubuntu`, like `wsl --install`
+    // registering `Ubuntu`) and a bare image install derives one from
+    // the image ref (`alpine:latest` → `alpine-latest`).
     let name = opts
         .name
         .clone()
-        .unwrap_or_else(|| container::default_machine_name(&image));
+        .unwrap_or_else(|| container::default_machine_name(hint.as_deref().unwrap_or(&image)));
     container::validate_name(&name)?;
     if !opts.wants_machine() {
         if !backend::distros_enabled() {
@@ -940,4 +962,67 @@ fn uninstall_completions(dir: Option<PathBuf>) -> Result<ExitCode> {
     let dir = dir.map_or_else(container_distro::completions::default_share_dir, Ok)?;
     container_distro::completions::remove_files(&dir, "cm", &completions())?;
     Ok(ExitCode::SUCCESS)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn builtin() -> catalog::Catalog {
+        catalog::load(None).unwrap()
+    }
+
+    #[test]
+    fn catalog_install_names_after_the_entry() {
+        let cat = builtin();
+        // `wsl --install` registers `Ubuntu` — a catalog install takes
+        // the entry's NAME, not an image-derived `ubuntu-latest`.
+        let Resolved::Image { image, name } = resolve(&cat, &InstallSource::Default).unwrap()
+        else {
+            panic!("the catalog default should resolve to an image");
+        };
+        assert_eq!(image, "docker.io/library/ubuntu:latest");
+        assert_eq!(name.as_deref(), Some("Ubuntu"));
+        assert_eq!(
+            container::default_machine_name(name.as_deref().unwrap()),
+            "ubuntu"
+        );
+        for arg in ["ubuntu", "UBUNTU-24.04"] {
+            let Resolved::Image { name, .. } =
+                resolve(&cat, &InstallSource::CatalogOrImage(arg.to_string())).unwrap()
+            else {
+                panic!("{arg} should resolve to an image");
+            };
+            assert!(name.is_some(), "{arg}");
+        }
+    }
+
+    #[test]
+    fn image_installs_have_no_catalog_name() {
+        let cat = builtin();
+        // A qualified ref bypasses the catalog; --from-image skips it.
+        // Both derive the name from the image instead.
+        for source in [
+            InstallSource::CatalogOrImage("quay.io/x/y:1".to_string()),
+            InstallSource::Image("alpine:3".to_string()),
+        ] {
+            let Resolved::Image { name, .. } = resolve(&cat, &source).unwrap() else {
+                panic!("{source:?} should resolve to an image");
+            };
+            assert_eq!(name, None, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn wsl_catalog_entries_keep_their_name() {
+        let cat = builtin();
+        let Resolved::Wsl { name, .. } = resolve(
+            &cat,
+            &InstallSource::CatalogOrImage("rlcplus-9".to_string()),
+        )
+        .unwrap() else {
+            panic!("RLCPlus-9 should resolve to a .wsl download");
+        };
+        assert_eq!(name, "RLCPlus-9");
+    }
 }
