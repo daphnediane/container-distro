@@ -33,7 +33,8 @@ image's `Config` fields than to either config file.
 ## What we have today
 
 Nothing. `cm` parses CLI args and execs `container`; the only knobs are
-per-invocation flags and `CONTAINER_CLI`. Machine settings that do exist
+per-invocation flags and a `--dev`-gated `CONTAINER_CLI`. Machine
+settings that do exist
 (`cpus`, `memory`, `home-mount`) live in `MachineConfig` via
 `container machine set`. `container` itself has
 `container system config` (global defaults -- registry, kernel, image

@@ -1,6 +1,8 @@
 # container-distro docs
 
 User guides first; design and architecture docs live under [design/].
+Working in the repo itself (build/test/scripts/packaging/release) is
+the top-level [DEV.md](../DEV.md).
 
 ## User guides
 

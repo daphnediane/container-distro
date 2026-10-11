@@ -10,6 +10,7 @@ use std::env;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result, bail};
 use serde::de::DeserializeOwned;
@@ -296,9 +297,33 @@ pub fn container_binary() -> &'static str {
     }
 }
 
-/// A `container` CLI invocation; `CONTAINER_CLI` overrides the binary path.
+/// The `CONTAINER_CLI` override, when it may be honored. Values that
+/// can't redirect anything — the bare `container` name (a PATH lookup
+/// is the default anyway) or the installed path spelled exactly —
+/// always apply; any other path or name needs `--dev`, so a variable
+/// planted in a shell profile can't swap the binary every command
+/// execs. Ignored values warn once per process, not per spawn.
+fn cli_override() -> Option<std::ffi::OsString> {
+    static WARNED: AtomicBool = AtomicBool::new(false);
+    let v = env::var_os("CONTAINER_CLI")?;
+    let p = Path::new(&v);
+    if p == Path::new(INSTALLED_CONTAINER_PATH) || p == Path::new("container") || crate::dev_mode()
+    {
+        return Some(v);
+    }
+    if !WARNED.swap(true, Ordering::Relaxed) {
+        eprintln!(
+            "ignoring CONTAINER_CLI={} (pass --dev to honor it)",
+            p.display()
+        );
+    }
+    None
+}
+
+/// A `container` CLI invocation; `CONTAINER_CLI` overrides the binary
+/// path — honor rules in [`cli_override`].
 pub fn container_cmd() -> Command {
-    Command::new(env::var("CONTAINER_CLI").unwrap_or_else(|_| container_binary().into()))
+    Command::new(cli_override().unwrap_or_else(|| container_binary().into()))
 }
 
 /// The `container` release the interactive install offer downloads and
@@ -317,12 +342,12 @@ pub(crate) fn find_on_path(name: &Path) -> Option<PathBuf> {
     })
 }
 
-/// The resolved `container` binary: `CONTAINER_CLI` (a path, or a name
-/// found on PATH), then the installed location, then PATH. `None` when
-/// no `container` can be found — [`require_installed`] turns that into
-/// an install offer or an error.
+/// The resolved `container` binary: a `--dev`-gated `CONTAINER_CLI`
+/// override (a path, or a name found on PATH), then the installed
+/// location, then PATH. `None` when no `container` can be found —
+/// [`require_installed`] turns that into an install offer or an error.
 pub fn resolve_binary() -> Option<PathBuf> {
-    if let Some(name) = env::var_os("CONTAINER_CLI").map(PathBuf::from) {
+    if let Some(name) = cli_override().map(PathBuf::from) {
         return if name.components().count() > 1 {
             name.is_file().then_some(name)
         } else {
@@ -346,7 +371,7 @@ pub fn require_installed() -> Result<()> {
     if resolve_binary().is_some() {
         return Ok(());
     }
-    if env::var_os("CONTAINER_CLI").is_some() {
+    if cli_override().is_some() {
         bail!("`container` not found via $CONTAINER_CLI or on PATH");
     }
     if !crate::install::offer()? {

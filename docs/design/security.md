@@ -14,7 +14,8 @@ unless you publish a port (`cm --forward` binds loopback only, and a
 non-loopback `--publish` warns but is honored), there is no setuid,
 and no daemon of ours (`container`'s services are upstream's).
 Outbound fetches do happen on your behalf: OCI image pulls, catalog
-`.wsl` downloads, and the optional `container` installer.
+`.wsl` downloads, self-update release downloads (`cm --update`), and
+the optional `container` installer.
 Guests are lightweight VMs via Apple Containerization, so the VM
 boundary does real work -- but virtiofs shares, published ports, and the
 forwarded SSH agent are deliberate holes punched through it.
@@ -196,7 +197,11 @@ hijacked `PATH` or `CONTAINER_CLI` runs an arbitrary binary as the user.
 - **Accepted because:** it is the standard Unix tool resolution model
   and `CONTAINER_CLI` is a documented feature for testing.
 - **Mitigations that exist:** the installed location
-  (`/usr/local/bin/container`) is preferred over PATH when present, and
+  (`/usr/local/bin/container`) is preferred over PATH when present;
+  `CONTAINER_CLI` redirects are honored only under `--dev` on that
+  invocation — a value planted in a shell profile is ignored with a
+  warning — except values equal to the default resolution (`container`
+  or the installed path), which can't redirect anything anyway; and
   `id`/`sysctl` are no longer spawned -- `getpwuid_r`,
   `getuid`/`getgid`, and `sysctlbyname` do the lookups in-process (C2).
   If we later need richer system introspection (CPU/memory/processes,
@@ -350,6 +355,45 @@ admin authentication Installer.app collects.
   was pointed at. Once signed: binaries get hardened runtime, the pkg a
   Developer ID Installer signature, and notarization + stapling gate
   both ([packaging]).
+
+### T10. Self-update fetches and installs a root-requiring pkg
+
+`cm --update` / `container distro update` (the `wsl --update` analog)
+download a release `.pkg` from GitHub and hand it to Installer.app.
+Unlike the T8 offer there is no pinned hash — "latest" isn't knowable
+at build time — so this is the largest unpinned trust step we take.
+
+- **Accepted because:** self-update is the expected `wsl --update`
+  surface, the pkg flow is the documented install path anyway, and the
+  request is always explicit — the command exists only because the
+  user typed it.
+- **Mitigations that exist:** the downloaded bytes must match the
+  SHA-256 the GitHub API reports for the asset (so a swapped CDN file
+  fails before anything runs); the signed asset must pass `pkgutil
+  --check-signature` with a Developer ID leaf; the leaf's team ID is
+  compared against the installed binary's `codesign` `TeamIdentifier`
+  — a validly-signed pkg from a *different* developer team prompts
+  instead of installing silently; the unsigned CI build, downgrades,
+  and same-version reinstalls each need an interactive yes (`--force`
+  skips, non-interactive sessions get an error instead of an EOF
+  prompt); running as root is refused; and the handoff is an `exec`
+  into `open -a /System/Library/CoreServices/Installer.app` — the
+  process is replaced, so nothing of ours runs while the privileged
+  install proceeds, and Installer.app re-verifies notarization and
+  collects admin credentials itself. We never invoke `sudo
+  installer` — `installer`(8) can't self-elevate — so a failed `exec`
+  just prints the verified path and the manual command.
+- **Residuals:** the chain of custody rests on api.github.com + GitHub
+  Releases returning the right bytes/digest — a maintainer-account or
+  release compromise is upstream of every check (the team check only
+  helps if the attacker can't sign as the same team). A cargo/dev
+  install has no receipt baseline, so the same-team check is skipped
+  for it (it warns it's installing a pkg next to the cargo copy and
+  asks first). `CONTAINER_DISTRO_RELEASES_URL` redirects release
+  lookups for local testing (DEV.md), honored only behind an explicit
+  `--dev` on that invocation — a bare env var could be planted in a
+  shell profile to steer a later `cm --update` at an untrusted
+  server, so the override must never fire silently.
 
 ## Restricted distros
 

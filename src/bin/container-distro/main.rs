@@ -31,6 +31,9 @@ fn main() -> ExitCode {
         argv.remove(1);
     }
     let cli = Cli::parse_from(argv);
+    if cli.dev {
+        container_distro::enable_dev();
+    }
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -362,6 +365,13 @@ fn run(cli: Cli) -> Result<()> {
             container_distro::completions::remove_files(&dir, "container-distro", &completions())?;
         }
         Command::UninstallPlugin { plugin_dir } => plugin::uninstall(plugin_dir)?,
+        Command::Update {
+            version,
+            force,
+            dry_run,
+        } => {
+            container_distro::update::update(version.as_deref(), force, dry_run)?;
+        }
     }
     Ok(())
 }

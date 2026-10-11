@@ -124,7 +124,7 @@ pub(crate) fn offer() -> Result<bool> {
 }
 
 /// A y/N question on stderr, answered on stdin.
-fn prompt_yes(question: &str) -> Result<bool> {
+pub(crate) fn prompt_yes(question: &str) -> Result<bool> {
     eprint!("{question}");
     io::stderr().flush().ok();
     let mut line = String::new();
@@ -236,7 +236,7 @@ fn installer_pkg() -> Result<PathBuf> {
     Ok(path)
 }
 
-fn sha256_of(path: &Path) -> Result<String> {
+pub(crate) fn sha256_of(path: &Path) -> Result<String> {
     let f = File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
     Ok(crate::oci::hash_reader(f)?.0)
 }
@@ -256,8 +256,10 @@ fn verify_sha256(path: &Path) -> Result<()> {
 /// `pkgutil` sanity on top of the pinned hash: prove it's an
 /// Apple-signed installer before handing it to Installer.app (which
 /// re-runs its own notarization check anyway — this just fails earlier
-/// and louder).
-fn check_signature(pkg: &Path) -> Result<()> {
+/// and louder). Returns the signing team — the `(<TEAMID>)` on the
+/// `Developer ID Installer:` leaf line — so self-update can compare it
+/// against the installed copy's.
+pub(crate) fn check_signature(pkg: &Path) -> Result<Option<String>> {
     let out = Command::new("/usr/sbin/pkgutil")
         .arg("--check-signature")
         .arg(pkg)
@@ -267,10 +269,16 @@ fn check_signature(pkg: &Path) -> Result<()> {
     if !out.status.success() || !text.contains("Status: signed") {
         bail!("{} failed its signature check:\n{text}", pkg.display());
     }
-    if let Some(line) = text.lines().find(|l| l.contains("Developer ID Installer:")) {
+    let line = text.lines().find(|l| l.contains("Developer ID Installer:"));
+    if let Some(line) = line {
         eprintln!("  signed by {}", line.trim());
     }
-    Ok(())
+    Ok(line.and_then(|l| {
+        l.rsplit('(')
+            .next()
+            .and_then(|s| s.strip_suffix(')'))
+            .map(str::to_string)
+    }))
 }
 
 /// Poll for the installed CLI; the installer moves at human speed, so

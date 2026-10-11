@@ -23,7 +23,9 @@ Risk tiers used below:
   (`INSTALLED_CONTAINER_PATH`, `container_binary()`) -- the location
   upstream's installer uses; preferring it blunts PATH hijacking.
 - `CONTAINER_CLI` overrides the binary for everything spawned through
-  `container_cmd()` -- tests and development use this.
+  `container_cmd()` -- honored only with `--dev` unless it names the
+  default resolution (`container` or the installed path), so a planted
+  env var can't swap the binary; tests and development use this.
 - `install-plugin` resolves `container` the same way (plus PATH), then
   derives `<prefix>/libexec/container-plugins/` from its real path
   (`plugin_root_for`) -- assumes the `<prefix>/bin/container` install

@@ -18,6 +18,27 @@
 //! OCI layout writer, port forwarder, table helpers). Distro support in
 //! `cm` comes from here too, so it works without the plugin installed.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// `--dev`: process-wide opt-in for test seams that steer a trust
+/// decision — the `CONTAINER_CLI` binary override and the
+/// `CONTAINER_DISTRO_RELEASES_URL` fixture server. These must hang off
+/// an explicit flag on the invocation, not an env var alone: a
+/// variable planted in a shell profile would otherwise silently
+/// redirect a privileged install or every spawned `container` call.
+static DEV_MODE: AtomicBool = AtomicBool::new(false);
+
+/// Turn on dev-mode overrides; the binaries call this when `--dev`
+/// was parsed.
+pub fn enable_dev() {
+    DEV_MODE.store(true, Ordering::Relaxed);
+}
+
+/// Whether `--dev` was passed on this invocation.
+pub fn dev_mode() -> bool {
+    DEV_MODE.load(Ordering::Relaxed)
+}
+
 pub mod catalog;
 pub mod catalog_ops;
 pub mod completions;
@@ -31,4 +52,5 @@ pub mod ops;
 pub mod plugin;
 pub mod spec;
 pub mod table;
+pub mod update;
 pub mod wsl;

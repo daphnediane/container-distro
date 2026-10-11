@@ -24,25 +24,11 @@ assume good faith, don't be a jerk.
 
 ## Development setup
 
-Full prerequisites and install detail live in docs/install.md. Short
-version:
-
-- macOS with Apple's [`container`] installed and working
-  (`container system start`); development targets `container` 1.5.x
-- a current stable Rust toolchain (edition 2024)
-
-```bash
-cargo build --workspace        # binaries land in target/debug/
-```
-
-The repository is a single crate:
-
-| Path                        | Contents                                                            |
-| --------------------------- | ------------------------------------------------------------------- |
-| `src/`                      | `container_distro` library: shared `container` CLI plumbing         |
-|                             | (naming, OCI, forwarder, …) plus distro spec/ops/plugin logic       |
-| `src/bin/cm/`               | the `cm` binary (WSL-compatible CLI)                                |
-| `src/bin/container-distro/` | the `container-distro` binary (`container distro` plugin front end) |
+Building, testing, packaging, and the repo layout are covered in
+[DEV.md](DEV.md); prerequisites and install detail live in
+[docs/install.md](docs/install.md). Short version: a Mac on Apple
+silicon with Apple's [`container`] working (`container system start`)
+and a current stable Rust toolchain, then `cargo build --workspace`.
 
 ## Before opening a PR
 

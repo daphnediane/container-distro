@@ -217,6 +217,23 @@ pub struct Args {
     #[arg(long = "status")]
     pub status: bool,
 
+    /// Update container-distro itself: download a release .pkg (the
+    /// latest, or VERSION like `0.5.0`) and hand it to Installer.app.
+    /// Downgrades and unsigned packages ask first; --force skips that
+    #[arg(long = "update", num_args = 0..=1, value_name = "VERSION")]
+    pub update: Option<Option<String>>,
+
+    /// Report what --update would install without installing (with
+    /// --update)
+    #[arg(long, requires = "update")]
+    pub dry_run: bool,
+
+    /// Enable dev-mode overrides for this run — a non-default
+    /// CONTAINER_CLI binary and the CONTAINER_DISTRO_RELEASES_URL
+    /// fixture server (testing only — DEV.md)
+    #[arg(long)]
+    pub dev: bool,
+
     /// Delete a machine and its persistent storage
     #[arg(long = "unregister", value_name = "MACHINE")]
     pub unregister: Option<String>,
@@ -415,6 +432,12 @@ pub enum Action {
     Shutdown { system: bool },
     /// `container system status`.
     Status,
+    /// Self-update to a release .pkg via Installer.app.
+    Update {
+        version: Option<String>,
+        force: bool,
+        dry_run: bool,
+    },
     /// `container machine set-default`.
     SetDefault(String),
     /// `container machine stop`.
@@ -478,10 +501,15 @@ impl Args {
         {
             bail!("--catalog only applies to --install and --list --online/--cache");
         }
-        // `--force` only has meaning where a name is created.
-        if self.force && !(self.install.is_some() || self.import.is_some() || self.rename.is_some())
+        // `--force` only has meaning where a name is created or an
+        // update is confirmed.
+        if self.force
+            && !(self.install.is_some()
+                || self.import.is_some()
+                || self.rename.is_some()
+                || self.update.is_some())
         {
-            bail!("--force only applies to --install, --import, and --rename");
+            bail!("--force only applies to --install, --import, --rename, and --update");
         }
         // `--machine` can't satisfy distro-only install options.
         if self.machine
@@ -510,6 +538,12 @@ impl Args {
             Action::UninstallAlias(alias.clone())
         } else if self.status {
             Action::Status
+        } else if let Some(v) = &self.update {
+            Action::Update {
+                version: v.clone(),
+                force: self.force,
+                dry_run: self.dry_run,
+            }
         } else if let Some(m) = &self.set_default {
             Action::SetDefault(m.clone())
         } else if let Some(m) = &self.terminate {
@@ -1022,6 +1056,48 @@ mod tests {
         let args = parse(&["cm", "--shutdown", "--system"]).unwrap();
         assert_eq!(args.action().unwrap(), Action::Shutdown { system: true });
         assert!(parse(&["cm", "--system"]).is_err());
+    }
+
+    #[test]
+    fn update_flag() {
+        let args = parse(&["cm", "--update"]).unwrap();
+        assert_eq!(
+            args.action().unwrap(),
+            Action::Update {
+                version: None,
+                force: false,
+                dry_run: false
+            }
+        );
+        let args = parse(&["cm", "--update", "0.5.0", "--force", "--dry-run", "--dev"]).unwrap();
+        assert_eq!(
+            args.action().unwrap(),
+            Action::Update {
+                version: Some("0.5.0".into()),
+                force: true,
+                dry_run: true
+            }
+        );
+        assert!(args.dev);
+        // --dev is global (it also gates CONTAINER_CLI); --dry-run
+        // still only makes sense with --update
+        assert!(parse(&["cm", "--dev"]).unwrap().dev);
+        assert!(parse(&["cm", "--dry-run"]).is_err());
+        // Run-only options can't combine; bare --force still needs an
+        // action it applies to.
+        assert!(
+            parse(&["cm", "--update", "-d", "x"])
+                .unwrap()
+                .action()
+                .is_err()
+        );
+        assert!(
+            parse(&["cm", "--update", "0.5.0", "ls"])
+                .unwrap()
+                .action()
+                .is_err()
+        );
+        assert!(parse(&["cm", "--force"]).unwrap().action().is_err());
     }
 
     #[test]

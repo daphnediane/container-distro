@@ -41,6 +41,9 @@ fn main() -> ExitCode {
 }
 
 fn run(args: Args) -> Result<ExitCode> {
+    if args.dev {
+        container_distro::enable_dev();
+    }
     let sel = args.backend();
     match args.action()? {
         Action::Version => version(),
@@ -51,6 +54,12 @@ fn run(args: Args) -> Result<ExitCode> {
         Action::InstallAlias(t) => alias::install(&t).map(|()| ExitCode::SUCCESS),
         Action::UninstallAlias(t) => alias::uninstall(&t).map(|()| ExitCode::SUCCESS),
         Action::Status => passthru(&["system", "status"]),
+        Action::Update {
+            version,
+            force,
+            dry_run,
+        } => container_distro::update::update(version.as_deref(), force, dry_run)
+            .map(|()| ExitCode::SUCCESS),
         Action::Shutdown { system } => shutdown(system),
         Action::List {
             running_only,

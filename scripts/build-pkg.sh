@@ -40,8 +40,11 @@ if [ -z "$SKIP_BUILD" ]; then
     cargo build --release
 fi
 
-version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
-R="$PWD/target/release"
+# cargo metadata reports the real target dir — honoring
+# CARGO_TARGET_DIR and .cargo/config.toml overrides.
+META=$(cargo metadata --no-deps --format-version 1)
+version=$(echo "$META" | jq -r '.packages[0].version')
+R="$(echo "$META" | jq -r '.target_directory')/release"
 [ -x "$R/cm" ] && [ -x "$R/container-distro" ] || {
     echo "release binaries missing — run without --skip-build" >&2
     exit 1
@@ -83,7 +86,7 @@ PAYLOAD="$OUT/payload"
 rm -rf "$PAYLOAD"
 mkdir -p "$PAYLOAD/bin" "$PAYLOAD/share/doc/container-distro"
 cp "$R/cm" "$R/container-distro" packaging/uninstall-container-distro.sh \
-    "$PAYLOAD/bin/"
+    packaging/update-container-distro.sh "$PAYLOAD/bin/"
 cp LICENSE THIRD-PARTY-NOTICES.yaml "$PAYLOAD/share/doc/container-distro/"
 # Everything else in the payload is produced by the binaries' own
 # install commands — the same output a manual install writes.

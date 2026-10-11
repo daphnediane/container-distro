@@ -328,6 +328,22 @@ of the same name is left in place with a warning.
 Remove the plugin registration (only if it was installed by
 `container-distro`).
 
+### `update [VERSION] [--force] [--dry-run]`
+
+Update container-distro itself — the same self-update `cm --update`
+runs (`update-container-distro.sh` in the pkg's `bin/` wraps this
+command). Fetches the latest GitHub release — or an explicit `VERSION`
+(`0.5.0`/`v0.5.0`) — prefers the signed
+`container-distro-<ver>.pkg`, verifies the release-reported SHA-256
+plus a Developer ID signature and a signing-team match against the
+installed copy, then `exec`s `open` so Installer.app owns the
+privileged install. Same-version, downgrades, the unsigned CI package,
+a different signing team, and non-pkg installs ask first; `--force`
+skips the asking; running as root is refused; `--dry-run` resolves
+and verifies without installing. (The global `--dev` flag gates the
+`CONTAINER_DISTRO_RELEASES_URL` fixture-server override used for
+testing — DEV.md.) Nothing needs stopping first.
+
 ## Mount and publish spec syntax
 
 - **Mount**: `SRC:DST[:ro]` -- absolute host path, absolute guest path,

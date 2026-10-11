@@ -70,6 +70,18 @@ stays in `container`'s storage: plain machines are `container`'s own
 data and are never touched. `-n` adds a dry run: every command the
 script would run (sudo/user prefixes included) is printed instead.
 
+Update is likewise script-shaped — `update-container-distro.sh` in
+`bin/` — but only as a thin wrapper: the real path is
+`container distro update` / `cm --update` in the binary itself
+(`src/update.rs`). It fetches the latest (or a named) GitHub release,
+prefers the signed pkg, verifies the API-reported SHA-256 plus the
+Developer ID signature and a signing-team match against the installed
+binary's `TeamIdentifier`, then `exec`s `open -a Installer.app` so the
+process is replaced before the privileged install runs. Downgrades,
+the unsigned CI build, a foreign signer, and non-pkg installs prompt
+first (`--force` skips); no `container` services need stopping — the
+installer only swaps files under the install root.
+
 ## The `container` dependency
 
 `container` is a hard prerequisite, but the pkg does **not** install

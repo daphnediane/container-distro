@@ -118,9 +118,13 @@ shell.
 - `cm` resolves one namespace: a distro and a machine can share a name
   only via an explicit `--force`; `-d` resolves distros first. See
   [machine-vs-distro.md].
+- `cm --update [VERSION]` exists and, like `wsl --update`, updates the
+  tooling itself (the release `.pkg`, via Installer.app) -- not
+  installed distros, and not `container` (that's Apple's
+  `update-container.sh`).
 - No GUI app support (WSLg's X11/Wayland) -- see
   [design/notes/gui-apps.md] for what it would take.
-- No equivalents for `--update`, `--manage`, `--mount` (VHDs), or
+- No equivalents for `--manage`, `--mount` (VHDs), or
   `wsl.conf` -- see [design/notes/configuration-files.md] for the
   config-file analysis.
 

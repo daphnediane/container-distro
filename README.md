@@ -34,26 +34,76 @@ parts:
 
 ## Quick start
 
-```bash
-cargo install --locked container-distro   # one crate, both binaries
+The release `.pkg` is the easiest install -- signed, no toolchain,
+and it lays down everything: both binaries, the plugin registration,
+man pages, completions, and the update/uninstall scripts. Download
+`container-distro-<version>.pkg` from the [latest release], then:
 
+```bash
+sudo installer -pkg container-distro-<version>.pkg -target /
+```
+
+(or double-click the pkg -- an `-unsigned` CI build needs
+right-click → Open). `cargo install` and `cargo binstall` work too,
+but they only drop the binaries:
+
+```bash
+cargo install --locked container-distro
+```
+
+Then:
+
+```bash
 cm --install        # install the catalog default (Ubuntu), drop into a shell
 cm -l -v            # list machines and distros, WSL-style
 cm -e uname -a      # run a command
 cm                  # login shell in the default
 ```
 
-Optional extras:
+The pkg already installed these; a cargo install needs them as
+post-steps ([docs/install.md](docs/install.md) has the details):
 
 ```bash
 cm --install-man && container-distro install-man   # man pages
 cm --install-completions                            # bash/zsh/fish completions
-cm --install-alias wsl                              # alias `cm` as `wsl`
 container-distro install-plugin                     # the `container distro` subcommand
+```
+
+Optional either way:
+
+```bash
+cm --install-alias wsl                              # alias `cm` as `wsl`
 ```
 
 If `container` services aren't running, `cm` runs
 `container system start` first -- matching WSL's transparent start.
+
+## Upgrading
+
+A `.pkg` install self-updates -- it downloads the latest (or a named)
+release package, verifies it (release digest, Developer ID, same
+signing team), and hands it to Installer.app:
+
+```bash
+cm --update                    # or: container distro update [VERSION]
+/usr/local/bin/update-container-distro.sh [VERSION]   # same thing
+```
+
+Cargo installs update with `cargo install --locked container-distro`
+(or `cargo binstall`) plus the same post-steps as a fresh install --
+[docs/install.md](docs/install.md#upgrade). Nothing needs stopping
+first. Apple's `container` itself updates separately via its own
+`update-container.sh`.
+
+## Uninstalling
+
+```bash
+/usr/local/bin/uninstall-container-distro.sh -k   # keep distro state
+/usr/local/bin/uninstall-container-distro.sh -d   # delete it too (destroys distros)
+```
+
+Add `-n` to preview every removal first. Cargo and manual installs
+have their own removal path -- [docs/install.md](docs/install.md#uninstall).
 
 ## `cm` -- the WSL command line
 
@@ -103,7 +153,9 @@ container-distro`).
 - `container machine run` (and so `cm`) requires a TTY for interactive
   shells.
 - `container` is resolved from `/usr/local/bin/container`, then
-  `PATH`; set `CONTAINER_CLI` to override.
+  `PATH`; `CONTAINER_CLI` overrides that under `--dev` (values naming
+  the default resolution never need it) -- a dev-mode seam, see
+  [DEV.md](DEV.md).
 - Some features reach into `container` internals that may change on
   newer releases -- a warning appears on unverified versions.
 - Distro names are lowercase DNS-style (`[a-z0-9-]`).
@@ -112,17 +164,18 @@ container-distro`).
 
 ## Documentation
 
-| Document                                               | Contents                                                    |
-| ------------------------------------------------------ | ----------------------------------------------------------- |
-| [docs/install.md](docs/install.md)                     | Build/install/uninstall in full detail                      |
-| [docs/cm.md](docs/cm.md)                               | `cm` command reference                                      |
-| [docs/container-distro.md](docs/container-distro.md)   | `container distro` subcommand reference                     |
-| [docs/cm-vs-wsl.md](docs/cm-vs-wsl.md)                 | Behavioral differences from `wsl.exe`                       |
-| [docs/machine-vs-distro.md](docs/machine-vs-distro.md) | `container machine` vs `container distro` -- which to use   |
-| [docs/security.md](docs/security.md)                   | Security model: not a sandbox, `--restricted`, scoping down |
-| [SECURITY.md](SECURITY.md)                             | Reporting vulnerabilities (draft, pre-1.0)                  |
-| [docs/TODO.md](docs/TODO.md)                           | Roadmap and open items                                      |
-| [docs/design/](docs/design/)                           | Architecture and design documents                           |
+| Document                                               | Contents                                                       |
+| ------------------------------------------------------ | -------------------------------------------------------------- |
+| [docs/install.md](docs/install.md)                     | Build/install/uninstall in full detail                         |
+| [DEV.md](DEV.md)                                       | Working in this repo: build, test, scripts, packaging, release |
+| [docs/cm.md](docs/cm.md)                               | `cm` command reference                                         |
+| [docs/container-distro.md](docs/container-distro.md)   | `container distro` subcommand reference                        |
+| [docs/cm-vs-wsl.md](docs/cm-vs-wsl.md)                 | Behavioral differences from `wsl.exe`                          |
+| [docs/machine-vs-distro.md](docs/machine-vs-distro.md) | `container machine` vs `container distro` -- which to use      |
+| [docs/security.md](docs/security.md)                   | Security model: not a sandbox, `--restricted`, scoping down    |
+| [SECURITY.md](SECURITY.md)                             | Reporting vulnerabilities (draft, pre-1.0)                     |
+| [docs/TODO.md](docs/TODO.md)                           | Roadmap and open items                                         |
+| [docs/design/](docs/design/)                           | Architecture and design documents                              |
 
 ## License
 
@@ -151,4 +204,5 @@ matter the polish of the AI verbiage. Here be dragons.
 [Devin]: https://www.devin.ai/
 [docs/cm-vs-wsl.md]: docs/cm-vs-wsl.md
 [docs/machine-vs-distro.md]: docs/machine-vs-distro.md
+[latest release]: https://github.com/daphnediane/container-distro/releases/latest
 [WSL]: https://github.com/microsoft/WSL

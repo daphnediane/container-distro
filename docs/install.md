@@ -13,7 +13,9 @@ Gatekeeper needs right-click → Open or the same `installer` command;
 [packaging] covers the signing story). It lands under `/usr/local`: `bin/cm` and
 `bin/container-distro`, the `container distro` plugin registration
 (`libexec/container-plugins/distro/`), man pages, bash/zsh/fish
-completions, `bin/uninstall-container-distro.sh`, and
+completions, `bin/uninstall-container-distro.sh`,
+`bin/update-container-distro.sh` (a thin wrapper over
+`container distro update`), and
 `share/doc/container-distro/` (LICENSE + THIRD-PARTY-NOTICES). When
 `container` isn't installed yet, the first `cm` run offers Apple's
 signed installer.
@@ -88,8 +90,8 @@ cm --install-alias ~/.local/bin/wsl
 container-distro install-plugin    # -> /usr/local/libexec/container-plugins/distro
 ```
 
-`install-plugin` resolves `container` (`CONTAINER_CLI`, then
-`/usr/local/bin/container`, then `PATH`) as the invoking user --
+`install-plugin` resolves `container` (`CONTAINER_CLI` under `--dev`,
+then `/usr/local/bin/container`, then `PATH`) as the invoking user --
 offering to install `container` itself first when it's missing and the
 session is interactive. It derives `<prefix>/libexec/container-plugins/`
 from the resolved binary and **copies** itself there -- a symlink would
@@ -190,13 +192,30 @@ page a symlink to `cm.1` -- anything else is refused.
 
 ## Upgrade
 
-Same commands again -- `cargo install` replaces the binaries, the
+For a `.pkg` install, `cm --update` (equivalently `container distro
+update` or `/usr/local/bin/update-container-distro.sh`) fetches a
+release from GitHub -- the latest, or `cm --update 0.5.0` for a
+specific one -- prefers the signed `container-distro-<ver>.pkg` (the
+unsigned CI build needs an explicit yes), verifies the SHA-256 the
+release reports for the asset plus a `pkgutil --check-signature`
+Developer ID and a signing-team match against the installed copy, then
+`exec`s `open` on the result so Installer.app owns the privileged
+install. Downgrades, same-version reinstalls, and non-pkg installs ask
+first (`--force` skips the asking); as root it's refused -- run it
+without `sudo`. `--dry-run` resolves and verifies the package, then
+reports instead of installing. Nothing needs stopping first: the
+binaries are per-invocation, and running distros mount their own
+asset copies.
+
+For a `cargo install`/`cargo binstall` copy the same commands again --
+`cargo install` replaces the binaries, the
 `install-man`/`install-completions` commands rewrite the pages and
 scripts (they're rendered from the new binary, so they're always
 current), and `install-plugin` refreshes the registered copy (or
 `container-distro install-plugin --from <installed>` from a newer
-build). From a checkout, `scripts/install-local.sh` bundles the
-maintainer version of this: `cargo install --path .`, `sudo
+build). `cm --update` on such an install warns and asks before laying
+a pkg down next to it. From a checkout, `scripts/install-local.sh`
+bundles the maintainer version of this: `cargo install --path .`, `sudo
 container-distro install-plugin`, and both `install-man` runs.
 
 Upgrading from ≤0.4.1 needs `--force` once: the `cm` binary was owned

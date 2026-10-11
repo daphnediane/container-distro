@@ -24,6 +24,12 @@ use container_distro::spec::{Automount, HomeMount, MountSpec, PublishSpec};
                   changing settings after creation."
 )]
 pub struct Cli {
+    /// Enable dev-mode overrides for this run — a non-default
+    /// CONTAINER_CLI binary and the CONTAINER_DISTRO_RELEASES_URL
+    /// fixture server (testing only — DEV.md)
+    #[arg(long, global = true)]
+    pub dev: bool,
+
     #[command(subcommand)]
     pub command: Command,
 }
@@ -344,6 +350,22 @@ pub enum Command {
         #[arg(long)]
         plugin_dir: Option<PathBuf>,
     },
+
+    /// Update container-distro itself: download a release .pkg (the
+    /// latest, or VERSION like `0.5.0`) and hand it to Installer.app.
+    /// Downgrades and unsigned packages ask first; --force skips that
+    Update {
+        /// Release to install (default: the latest)
+        #[arg(value_name = "VERSION")]
+        version: Option<String>,
+        /// Skip the interactive confirmations (reinstall, downgrade,
+        /// unsigned package, a different signing team)
+        #[arg(long)]
+        force: bool,
+        /// Report what would be installed without installing it
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[cfg(test)]
@@ -551,5 +573,31 @@ mod tests {
         };
         assert!(out && name == "d1" && target_name.as_deref() == Some("m2"));
         assert!(parse(&["distro", "migrate", "--in", "--out", "x"]).is_err());
+    }
+
+    #[test]
+    fn update_subcommand() {
+        let cli = parse(&["distro", "update"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Update {
+                version: None,
+                force: false,
+                dry_run: false
+            }
+        ));
+        let cli = parse(&["distro", "update", "0.5.0", "--force", "--dry-run", "--dev"]).unwrap();
+        assert!(cli.dev); // global flag — also accepted before the subcommand
+        assert!(parse(&["distro", "--dev", "update"]).unwrap().dev);
+        let Command::Update {
+            version,
+            force,
+            dry_run,
+        } = cli.command
+        else {
+            panic!("expected update");
+        };
+        assert_eq!(version.as_deref(), Some("0.5.0"));
+        assert!(force && dry_run);
     }
 }

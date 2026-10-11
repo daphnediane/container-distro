@@ -51,6 +51,15 @@ any of them.
 - `--forward HOST[:GUEST]` (repeatable, `-d` selects) → foreground
   localhost → machine-IP TCP forwarder
 - `--status` → `container system status`
+- `--update [VERSION] [--force] [--dry-run]` → `src/update.rs`
+  self-update: fetch the latest (or tagged) GitHub release, prefer the
+  signed `.pkg`, verify the API-reported SHA-256 + Developer ID
+  signature + same-team `TeamIdentifier` vs the installed binary, then
+  `exec` `open -a /System/Library/CoreServices/Installer.app`.
+  `container distro update` is the same path; the pkg also ships
+  `bin/update-container-distro.sh` as a thin wrapper. Test seam:
+  `CONTAINER_DISTRO_RELEASES_URL` + `--dev` redirects the release API
+  to a local fixture server (see DEV.md "Testing self-update")
 - `--export NAME FILE` (`-` = stdout) → distro: `container export`;
   machine: `ops::export_machine` — stop, clone `rootfs.ext4` into a
   never-started scratch container (explicit `--entrypoint /bin/sh`;
@@ -150,7 +159,9 @@ machine; `-l` merges both — same-named pairs stay as two rows annotated
 `(machine)`/`(distro)` (KIND column at `-v -v`); shadowing applies only
 to operational resolution; `--install --distro`
 / `--share` / `--publish` create distros. `CM_BACKEND=machine` disables
-distros. Creating a shared name is refused everywhere —
+distros. `--dev` (global, both binaries) opts the invocation into dev
+seams: a non-default `CONTAINER_CLI` binary override and
+`CONTAINER_DISTRO_RELEASES_URL`; env alone is ignored (warned once). Creating a shared name is refused everywhere —
 `ops::bail_machine_shadow` (create/import/catalog install/migrate-in/
 distro rename targets) and `ops::bail_distro_shadow` (`import_machine`,
 `migrate --out`, `rename_machine`, `cm --install --machine`) — unless
@@ -210,7 +221,8 @@ and `cm` has no subcommand pages to go stale anyway.
 `cargo install --path .` + `install-plugin` + both `install-man`s.
 `scripts/build-pkg.sh` builds the release artifacts under
 `scratch/pkg/` — the payload-only macOS .pkg (payload staged by the
-binaries' own `install-*` commands; auto-signs/notarizes when Developer
+binaries' own `install-*` commands plus the uninstall/update scripts;
+auto-signs/notarizes when Developer
 ID identities + `NOTARY_PROFILE` exist) and the `cargo-binstall`
 tarball `[package.metadata.binstall]` points at. The maintainer's
 signed+notarized path is `scripts/build-pkg-signed.sh` (sources

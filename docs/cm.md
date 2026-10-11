@@ -123,6 +123,7 @@ materializes a fresh one (see [container-distro.md]).
 | `--shutdown`          | Stop all running machines and distros; services stay up               |
 | `--shutdown --system` | Also `container system stop` (stops *all* containers, not just ours)  |
 | `--status`            | `container system status`                                             |
+| `--update [VERSION]`  | Update container-distro itself via the release `.pkg` + Installer.app |
 | `--unregister`        | Delete a distro or machine and its storage                            |
 | `--rename OLD NEW`    | Rename a machine or distro; `--machine`/`--distro` selects on a clash |
 | `--migrate NAME`      | Make NAME an instance of the selected backend (see below)             |
@@ -144,6 +145,21 @@ pre-journal distro container is adopted -- its live config becomes the
 journal, the only opt-in past the one-time migration -- and a journaled
 distro is already home. `cm --migrate --machine NAME` goes the other
 way: the distro's disk carries into a new `container machine`.
+
+`--update [VERSION]` is the `wsl --update` analog: it updates
+container-distro itself (not machines or distros, and not `container`
+-- that has Apple's own `update-container.sh`). It fetches the latest
+GitHub release, or an explicit `VERSION` (`0.5.0` or `v0.5.0`),
+prefers the signed `.pkg`, verifies the release-reported SHA-256 plus
+a Developer ID signature and a signing-team match against the
+installed copy, then `exec`s `open` so Installer.app owns the
+privileged install. Same-version, downgrades, the unsigned CI package,
+a different signing team, and non-pkg installs all ask first --
+`--force` skips the asking. `--dry-run` resolves, downloads, and
+verifies the package, then reports instead of installing. Nothing
+needs stopping first.
+`update-container-distro.sh` (installed to `/usr/local/bin` by the
+pkg) is the same update as a script.
 
 ## Installing (`--install`)
 
@@ -304,12 +320,19 @@ man-page link.
 
 ## Environment
 
-| Variable        | Effect                                                                                  |
-| --------------- | --------------------------------------------------------------------------------------- |
-| `CM_BACKEND`    | `machine` → ignore distros                                                              |
-| `CONTAINER_CLI` | Path/name for the `container` binary (default: `/usr/local/bin/container`, then `PATH`) |
-| `SSH_AUTH_SOCK` | Forwarded into guests by the machine plugin / distro init                               |
-| `HOME`          | Source of the shared home mount and the cwd mapping                                     |
+| Variable                        | Effect                                                                                                                 |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `CM_BACKEND`                    | `machine` → ignore distros                                                                                             |
+| `CONTAINER_CLI`                 | `container` binary override — a non-default path/name needs `--dev` (default: `/usr/local/bin/container`, then `PATH`) |
+| `CONTAINER_DISTRO_RELEASES_URL` | Release-API override for `--update` — honored only with `--dev` (see DEV.md fixtures)                                  |
+| `SSH_AUTH_SOCK`                 | Forwarded into guests by the machine plugin / distro init                                                              |
+| `HOME`                          | Source of the shared home mount and the cwd mapping                                                                    |
+
+`--dev` is the opt-in for the test seams in that table — it exists so a
+variable planted in a shell profile can't redirect a privileged
+install or the `container` binary. `CONTAINER_CLI` values equal to the
+defaults (`container`, `/usr/local/bin/container`) never needed it —
+they can't redirect anything.
 
 `cm` forwards the child process's exit code (or 255-clamped status).
 

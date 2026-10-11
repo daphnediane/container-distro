@@ -22,6 +22,19 @@ accidental.
   PID 1 and root, so review them like the Rust, not like config.
 - **Never commit secrets.** No keys, tokens, or credentials in code,
   tests, docs, or commit messages — and don't print them to logs.
+- **Test hooks that touch trust must be opt-in per invocation.** Any
+  seam that redirects downloads, swaps a verification input, or
+  otherwise steers a privileged/integrity-critical operation for
+  testing (fixture servers, alternate release roots, skip-check
+  switches) must sit behind an explicit flag on that invocation —
+  the `--dev` pattern — never an env var alone: a variable planted in
+  a shell profile is a persistent, silent backdoor. Prefer local
+  fixtures that keep the real checks running (version-bumped worktree
+  builds, `python3 -m http.server` trees impersonating the real API)
+  over weakening verification for the test. Env-only seams that merely
+  select a *user*-privilege binary (`CONTAINER_CLI`) are PATH-
+  equivalent — document them in the trade-off table, don't flag-gate
+  them.
 - **Document every new trade-off or shortcoming in `docs/design/security.md`.**
   New accepted risk → trade-off table entry; new violation/panic →
   findings table; new mitigation → note it under the risk it addresses.
