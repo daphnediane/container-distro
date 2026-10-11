@@ -100,16 +100,47 @@ cp LICENSE THIRD-PARTY-NOTICES.yaml "$PAYLOAD/share/doc/container-distro/"
     --dir "$PWD/$PAYLOAD/share"
 
 step "pkgbuild"
+# The component pkg is an intermediate, not a release asset — keep it
+# in a subdir so CI's scratch/pkg/container-distro-*.pkg glob can't
+# pick it up.
+COMPONENT_DIR=$OUT/component
+mkdir -p "$COMPONENT_DIR"
 pkgbuild --root "$PAYLOAD" \
     --identifier "$IDENTIFIER" \
     --version "$version" \
     --install-location /usr/local \
     --ownership recommended \
-    "$OUT/$COMPONENT"
+    "$COMPONENT_DIR/$COMPONENT"
 
 step "productbuild"
 sed -e "s/@VERSION@/$version/g" -e "s/@COMPONENT@/$COMPONENT/" \
     packaging/Distribution.xml > "$OUT/Distribution.xml"
+# productbuild --resources takes a dir — assemble it fresh so the
+# generated license screen can live next to the committed pages.
+RESOURCES=$OUT/resources
+rm -rf "$RESOURCES"
+mkdir -p "$RESOURCES"
+cp packaging/welcome.html packaging/conclusion.html "$RESOURCES/"
+# The installer's license step names every vendored crate's license
+# expression; the full copyright + license texts stay in
+# THIRD-PARTY-NOTICES.yaml (payload + release asset).
+{
+    cat LICENSE
+    echo
+    echo "======================================================================"
+    echo "Third-party components"
+    echo
+    echo "container-distro is built with these Rust crates. The complete"
+    echo "copyright and license texts are reproduced in"
+    echo "THIRD-PARTY-NOTICES.yaml, installed alongside the binaries and"
+    echo "attached to each GitHub Release."
+    echo
+    awk '
+        /^- package_name:/    { name=$NF }
+        /^  package_version:/ { ver=$NF }
+        /^  license: /        { print "  " name " " ver " — " substr($0, index($0, ":") + 2) }
+    ' THIRD-PARTY-NOTICES.yaml
+} > "$RESOURCES/licenses.txt"
 # A signed pkg keeps the clean name; unsigned builds (CI without a
 # keychain) get Apple's own -unsigned convention — the maintainer adds
 # the signed build at draft-review time (docs/design/packaging.md).
@@ -117,12 +148,12 @@ PKGNAME="container-distro-$version"
 [ -n "$PKG_IDENTITY" ] || PKGNAME="$PKGNAME-unsigned"
 if [ -n "$PKG_IDENTITY" ]; then
     productbuild --distribution "$OUT/Distribution.xml" \
-        --resources packaging --package-path "$OUT" \
+        --resources "$RESOURCES" --package-path "$COMPONENT_DIR" \
         --sign "$PKG_IDENTITY" \
         "$OUT/$PKGNAME.pkg"
 else
     productbuild --distribution "$OUT/Distribution.xml" \
-        --resources packaging --package-path "$OUT" \
+        --resources "$RESOURCES" --package-path "$COMPONENT_DIR" \
         "$OUT/$PKGNAME.pkg"
     echo "  (unsigned — see docs/design/packaging.md for the signing setup)"
 fi
@@ -145,7 +176,7 @@ tar -czf "$OUT/$TDIR.tar.gz" -C "$OUT" "$TDIR"
 rm -rf "$OUT/$TDIR"
 
 step "summary"
-pkgutil --payload-files "$OUT/$COMPONENT" | sed 's/^/  /'
+pkgutil --payload-files "$COMPONENT_DIR/$COMPONENT" | sed 's/^/  /'
 shasum -a 256 \
     "$OUT/$PKGNAME.pkg" \
     "$OUT/$TDIR.tar.gz" | sed 's/^/  /'

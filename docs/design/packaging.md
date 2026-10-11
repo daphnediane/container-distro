@@ -33,9 +33,12 @@ crates.io stays a first-class path.
 `pkgbuild` builds a component package from a staged payload root;
 `productbuild --distribution` wraps it in a product archive with a
 Distribution XML (`packaging/Distribution.xml`) that supplies the
-Installer.app UI (welcome/conclusion), the `hostArchitectures="arm64"`
-and macOS ≥ 26 requirements (the floor for `container` itself), and
-`rootVolumeOnly`.
+Installer.app UI (welcome/license/conclusion), the
+`hostArchitectures="arm64"` and macOS ≥ 26 requirements (the floor for
+`container` itself), and `rootVolumeOnly`. The license screen is
+generated at build time: `LICENSE` plus each vendored crate's license
+expression, with the full texts staying in `THIRD-PARTY-NOTICES.yaml`
+(payload + release asset).
 
 The payload is **everything, no scripts**: `cm`, `container-distro`,
 the `container distro` plugin registration

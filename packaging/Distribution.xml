@@ -14,6 +14,7 @@
         </allowed-os-versions>
     </volume-check>
     <welcome file="welcome.html" mime-type="text/html"/>
+    <license file="licenses.txt" mime-type="text/plain"/>
     <conclusion file="conclusion.html" mime-type="text/html"/>
     <choices-outline>
         <line choice="default">
