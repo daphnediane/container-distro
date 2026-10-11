@@ -182,10 +182,13 @@ Boot a stopped distro / stop running ones. For an `automount` distro,
 `start` (and the boot a `run` triggers) first reconciles `/Volumes`
 mounts with what's actually attached.
 
-### `delete` (alias `rm`) `-f|--force NAME...`
+### `delete` (alias `rm`) `-f|--force [--all] NAME...`
 
 Delete distros and their storage; `-f` stops them first. Deletes
 journal state even when the container itself is already gone.
+`--all` deletes every distro — journaled ones (stopped distros exist
+only there) and labeled containers alike — and is what the `.pkg`
+uninstaller's `-d` path invokes before removing the binaries.
 
 ### `set NAME [OPTIONS]`
 

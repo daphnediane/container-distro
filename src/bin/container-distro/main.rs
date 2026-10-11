@@ -240,7 +240,13 @@ fn run(cli: Cli) -> Result<()> {
         Command::Inspect { names } => ops::inspect(&names)?,
         Command::Start { name } => ops::start(&name)?,
         Command::Stop { names } => ops::stop(&names)?,
-        Command::Delete { force, names } => ops::delete(force, &names)?,
+        Command::Delete { force, all, names } => {
+            if all {
+                ops::delete_all(force)?
+            } else {
+                ops::delete(force, &names)?
+            }
+        }
         Command::Run {
             name,
             user,

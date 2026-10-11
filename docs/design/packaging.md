@@ -53,11 +53,22 @@ doesn't — so a removed/renamed subcommand's man page can't go stale.
 for the non-pkg paths.)
 
 Uninstall has no pkg mechanism, so the payload ships
-`uninstall-container-distro.sh` in `bin/` — the same role as Apple's
-own `uninstall-container.sh`. It removes exactly the files the pkg
-receipt owns (`pkgutil --files`), rmdir's now-empty dirs, and
-`--forget`s the receipt; per-user state under `~/Library/Application
-Support/container-distro` is untouched.
+`uninstall-container-distro.sh` in `bin/` — modeled on Apple's own
+`uninstall-container.sh`. It removes exactly the files the pkg receipt
+owns (`pkgutil --only-files`), rmdir's now-empty dirs deepest-first
+(`--only-dirs`), and `--forget`s the receipt. `sudo` is applied
+per-command and only when the target's parent dir isn't already
+writable (sudo_if), so a user-owned prefix never prompts. Like Apple's
+script it requires `-k` (keep) or `-d` (delete) for per-user state
+under `~/Library/Application Support/container-distro`; under `sudo` it
+resolves `SUDO_USER`'s home, not root's. `-d` first runs
+`container-distro delete --all -f` as the invoking user (root's
+`container` sees a different appRoot) — but only when `container`
+services are already running, since `system status` is read-only and a
+stopped service can't be queried anyway. Whatever can't be reached
+stays in `container`'s storage: plain machines are `container`'s own
+data and are never touched. `-n` adds a dry run: every command the
+script would run (sudo/user prefixes included) is printed instead.
 
 ## The `container` dependency
 

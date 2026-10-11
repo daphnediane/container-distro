@@ -76,28 +76,31 @@ if [ -n "$APP_IDENTITY" ]; then
 fi
 
 step "stage payload"
+# Payload is rooted at the install-location — /usr/local, same layout
+# Apple's container pkg uses — so the receipt's file/dir paths and its
+# `location:` field both describe what we actually own.
 PAYLOAD="$OUT/payload"
 rm -rf "$PAYLOAD"
-mkdir -p "$PAYLOAD/usr/local/bin" "$PAYLOAD/usr/local/share/doc/container-distro"
+mkdir -p "$PAYLOAD/bin" "$PAYLOAD/share/doc/container-distro"
 cp "$R/cm" "$R/container-distro" packaging/uninstall-container-distro.sh \
-    "$PAYLOAD/usr/local/bin/"
-cp LICENSE THIRD-PARTY-NOTICES.yaml "$PAYLOAD/usr/local/share/doc/container-distro/"
+    "$PAYLOAD/bin/"
+cp LICENSE THIRD-PARTY-NOTICES.yaml "$PAYLOAD/share/doc/container-distro/"
 # Everything else in the payload is produced by the binaries' own
 # install commands — the same output a manual install writes.
 "$R/container-distro" install-plugin \
-    --plugin-dir "$PWD/$PAYLOAD/usr/local/libexec/container-plugins"
-"$R/cm" --install-man="$PWD/$PAYLOAD/usr/local/share/man/man1"
+    --plugin-dir "$PWD/$PAYLOAD/libexec/container-plugins"
+"$R/cm" --install-man="$PWD/$PAYLOAD/share/man/man1"
 "$R/container-distro" install-man \
-    --dir "$PWD/$PAYLOAD/usr/local/share/man/man1"
-"$R/cm" --install-completions="$PWD/$PAYLOAD/usr/local/share"
+    --dir "$PWD/$PAYLOAD/share/man/man1"
+"$R/cm" --install-completions="$PWD/$PAYLOAD/share"
 "$R/container-distro" install-completions \
-    --dir "$PWD/$PAYLOAD/usr/local/share"
+    --dir "$PWD/$PAYLOAD/share"
 
 step "pkgbuild"
 pkgbuild --root "$PAYLOAD" \
     --identifier "$IDENTIFIER" \
     --version "$version" \
-    --install-location / \
+    --install-location /usr/local \
     --ownership recommended \
     "$OUT/$COMPONENT"
 

@@ -1367,6 +1367,18 @@ pub fn delete(force: bool, names: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// Delete every distro — `delete --all`, the package uninstaller's
+/// cleanup path. Names are the union of journaled distros (stopped
+/// distros exist only there) and labeled containers (pre-journal
+/// leftovers exist only there); `delete` handles both shapes.
+pub fn delete_all(force: bool) -> Result<()> {
+    let mut names = journal_names()?;
+    names.extend(distros()?.iter().filter_map(distro_name).map(String::from));
+    names.sort();
+    names.dedup();
+    delete(force, &names)
+}
+
 /// Default working directory: the host cwd's guest path if it is shared
 /// (via the home mount or an extra mount), else the guest home.
 fn default_workdir(spec: &DistroSpec, home: &str) -> String {

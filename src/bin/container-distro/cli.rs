@@ -139,7 +139,10 @@ pub enum Command {
         /// Stop running distros first
         #[arg(short, long)]
         force: bool,
-        #[arg(required = true)]
+        /// Delete every distro — uninstall-style cleanup
+        #[arg(long, conflicts_with = "names")]
+        all: bool,
+        #[arg(required_unless_present = "all")]
         names: Vec<String>,
     },
 

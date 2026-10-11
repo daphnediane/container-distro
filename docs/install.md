@@ -213,15 +213,24 @@ cm --uninstall-completions && container-distro uninstall-completions
 cargo uninstall container-distro   # removes both binaries
 ```
 
-For a `.pkg` install, `sudo /usr/local/bin/uninstall-container-distro.sh`
+For a `.pkg` install, `sudo /usr/local/bin/uninstall-container-distro.sh -k`
+(add `-n` to preview every command first)
 removes exactly what the receipt owns and forgets it (the manual
 equivalent: `pkgutil --files io.github.daphnediane.container-distro`
 lists the files — all under `/usr/local` — then `sudo pkgutil
 --forget`).
 
-Distro state (`~/Library/Application Support/container-distro/`) and any
-distros/machines you created are left behind; `cm -l` lists them and
-`cm --unregister <name>` deletes them first if you want a clean removal.
+With `-k` (keep), distro state (`~/Library/Application Support/container-distro/`)
+and any distros/machines you created are left behind; `cm -l` lists
+them and `cm --unregister <name>` deletes them first if you want a
+clean removal. Pass `-d` instead: when `container` services are running
+it first deletes every distro container via `container-distro delete
+--all -f` (plain `container` machines are `container`'s own and are
+never touched), then removes the whole state directory.
+
+For dev machines that mix pkg, `cargo install`, and manual `install-*`
+output, `scripts/dev-clean.sh` removes all installed artifacts at once
+(distro state and containers are kept; `-n` previews).
 
 [#14]: https://github.com/daphnediane/container-distro/issues/14
 [`container`]: https://github.com/apple/container
