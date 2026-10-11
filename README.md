@@ -118,6 +118,7 @@ container-distro`).
 | [docs/cm-vs-wsl.md](docs/cm-vs-wsl.md)                 | Behavioral differences from `wsl.exe`                       |
 | [docs/machine-vs-distro.md](docs/machine-vs-distro.md) | `container machine` vs `container distro` -- which to use   |
 | [docs/security.md](docs/security.md)                   | Security model: not a sandbox, `--restricted`, scoping down |
+| [SECURITY.md](SECURITY.md)                             | Reporting vulnerabilities (draft, pre-1.0)                  |
 | [docs/TODO.md](docs/TODO.md)                           | Roadmap and open items                                      |
 | [docs/design/](docs/design/)                           | Architecture and design documents                           |
 

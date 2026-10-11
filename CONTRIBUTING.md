@@ -82,8 +82,8 @@ Machines and distros are *not* sandboxes -- read docs/design/security.md
 before reporting what looks like a hole; several apparent ones are
 documented, deliberate trade-offs.
 
-For genuine vulnerabilities, report privately to
-**[TODO: security contact]** rather than opening a public issue.
+For genuine vulnerabilities, report privately per the
+[security policy](SECURITY.md) rather than opening a public issue.
 
 ## License
 
