@@ -326,6 +326,31 @@ on the user's behalf.
   the user's explicit yes, but the installer's contents are still
   upstream's trust: the pinned hash ties that to what we verified.
 
+### T9. The release .pkg installs root-owned files without prompts
+
+`scripts/build-pkg.sh` produces a payload-only `.pkg`: `cm`,
+`container-distro`, the `container distro` plugin registration, man
+pages, and completions land under `/usr/local` owned by root, on the
+admin authentication Installer.app collects.
+
+- **Accepted because:** it is the same layout `cargo install` +
+  `install-plugin` produces -- the payload is literally staged by those
+  commands, and the plugin copy keeps the copy-not-symlink property
+  (C1). No install scripts ship, so the package adds no code-execution
+  surface beyond the binaries themselves, and the shipped uninstaller
+  is receipt-driven — it removes only what `pkgutil --files` reports
+  and only empty dirs. Installing our files into
+  `libexec/container-plugins/` before `container` exists is inert --
+  nothing scans that dir until Apple's pkg lands.
+- **Residuals:** unsigned until a Developer ID exists, so installing
+  means bypassing Gatekeeper (`sudo installer -pkg` or right-click →
+  Open) -- a user step, like trusting the repo. `cargo binstall`
+  tarballs skip quarantine entirely (CLI downloads carry no quarantine
+  xattr) -- same trust level as `cargo install` compiling the source it
+  was pointed at. Once signed: binaries get hardened runtime, the pkg a
+  Developer ID Installer signature, and notarization + stapling gate
+  both ([packaging]).
+
 ## Restricted distros
 
 The user-facing description of `--restricted` -- what it sets and what
@@ -433,5 +458,6 @@ Each open gap adds attack surface; flagging the traps up front.
 [apple/container#2325]: https://github.com/apple/container/issues/2325
 [configuration-files]: notes/configuration-files.md
 [gui-apps]: notes/gui-apps.md
+[packaging]: packaging.md
 [remote-wsl-interop]: remote-wsl-interop.md
 [Restricted distros]: ../security.md#restricted-distros

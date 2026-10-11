@@ -18,6 +18,7 @@ exclude = [
     "/.vscode/",
     "/.markdownlint.json",
     "/docs/",
+    "/packaging/",
     "/scripts/",
     "/deny.toml",
 ]
@@ -52,6 +53,14 @@ tag-name = "v{{version}}"
 tag-message = "container-distro {{version}}"
 publish = false
 push = false
+
+# Prebuilt binaries land on each GitHub Release (scripts/build-pkg.sh,
+# driven by .github/workflows/release.yml) — `cargo binstall
+# container-distro` fetches the matching tarball instead of compiling.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }-v{ version }{ archive-suffix }"
+pkg-fmt = "tgz"
+bin-dir = "{ name }-{ target }-v{ version }/{ bin }{ binary-ext }"
 
 [profile.release]
 lto = true

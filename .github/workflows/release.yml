@@ -2,8 +2,11 @@ name: release
 
 # Pushing an annotated v* tag verifies it against the package version,
 # re-runs the tests, and drafts the GitHub Release from the CHANGELOG
-# section — the maintainer reviews and publishes the draft. No binaries:
-# install is source-only (#14 owns packaging).
+# section plus the built artifacts (scripts/build-pkg.sh): the macOS
+# installer .pkg, the cargo-binstall tarball, and
+# THIRD-PARTY-NOTICES.yaml — the maintainer reviews and publishes the
+# draft. Artifacts are unsigned unless the runner's keychain holds
+# Developer ID identities (docs/design/packaging.md).
 on:
   push:
     tags: ["v*"]
@@ -34,6 +37,9 @@ jobs:
 
       - run: cargo test --workspace
 
+      - name: Build release artifacts
+        run: scripts/build-pkg.sh --no-sign
+
       - name: Extract CHANGELOG notes
         env:
           TAG: ${{ github.ref_name }}
@@ -62,4 +68,7 @@ jobs:
           gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
             --notes-file notes.md \
             --title "container-distro ${GITHUB_REF_NAME#v}" \
-            $prerelease
+            $prerelease \
+            scratch/pkg/container-distro-*.pkg \
+            scratch/pkg/container-distro-*.tar.gz \
+            THIRD-PARTY-NOTICES.yaml

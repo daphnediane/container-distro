@@ -1,0 +1,12 @@
+# Maintainer signing config — copy to packaging/signing.local.conf
+# (gitignored) and fill in your values. scripts/build-pkg-signed.sh
+# sources it.
+#
+# Cert names or SHA-1 fingerprints both work; find yours with:
+#   security find-identity -v -p codesigning   (Developer ID Application)
+#   security find-identity -v -p basic         (Developer ID Installer)
+# Profile: `xcrun notarytool store-credentials <name> …` once.
+
+CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)"
+PKG_SIGN_IDENTITY="Developer ID Installer: Your Name (TEAMID)"
+NOTARY_PROFILE="my-keychain-profile"

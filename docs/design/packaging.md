@@ -1,0 +1,127 @@
+# Packaging (#14)
+
+How releases reach users, and why. Decided: a **macOS Installer `.pkg`**
+plus a **`cargo-binstall`-compatible tarball** attached to each GitHub
+Release by `.github/workflows/release.yml`; `cargo install` from
+crates.io stays a first-class path.
+
+## Options considered
+
+### Rust-ecosystem
+
+- **`cargo install` (crates.io)** — the baseline; keeps working
+  unchanged. Post-steps (`install-plugin`, `install-man`,
+  `install-completions`) stay manual, as documented in
+  [install.md](../install.md).
+- **Prebuilt binaries + `cargo-binstall`** — `cargo binstall
+  container-distro` downloads a release tarball instead of compiling.
+  It reads the crate's crates.io metadata, follows `repository` to the
+  GitHub release, and picks the asset matching
+  `[package.metadata.binstall]` in `Cargo.toml`:
+  `{name}-{target}-v{version}.tar.gz` with the binaries under a
+  same-named inner dir. Same manual post-steps as `cargo install` —
+  binstall only drops binaries into `~/.cargo/bin`.
+- **`cargo-dist`** — rejected: it replaces the hand-rolled release
+  workflow with generated ones, and its `pkg` installer is a plain
+  component package — no `hostArchitectures`/`allowed-os-versions`
+  gating or distribution UI of our own.
+- **`cargo-bundle`/`cargo-wix`/`cargo-deb`** — other platforms and
+  formats; none build macOS pkgs.
+
+### The `.pkg`
+
+`pkgbuild` builds a component package from a staged payload root;
+`productbuild --distribution` wraps it in a product archive with a
+Distribution XML (`packaging/Distribution.xml`) that supplies the
+Installer.app UI (welcome/conclusion), the `hostArchitectures="arm64"`
+and macOS ≥ 26 requirements (the floor for `container` itself), and
+`rootVolumeOnly`.
+
+The payload is **everything, no scripts**: `cm`, `container-distro`,
+the `container distro` plugin registration
+(`libexec/container-plugins/distro/`), man pages, completions, and the
+license/notices files under `/usr/local` — all generated at build time
+by the binaries' own `install-plugin --plugin-dir`, `--install-man=`,
+and `install-completions --dir`, so the pkg can't drift from what a
+manual install produces. Zero install scripts means the installer adds
+no code-execution surface of its own (security.md T9).
+
+Upgrades obsolete: for a same-identifier, higher-version install,
+Installer removes files the old receipt owned that the new payload
+doesn't — so a removed/renamed subcommand's man page can't go stale.
+(`container-distro install-man` prunes stale generated pages anyway,
+for the non-pkg paths.)
+
+Uninstall has no pkg mechanism, so the payload ships
+`uninstall-container-distro.sh` in `bin/` — the same role as Apple's
+own `uninstall-container.sh`. It removes exactly the files the pkg
+receipt owns (`pkgutil --files`), rmdir's now-empty dirs, and
+`--forget`s the receipt; per-user state under `~/Library/Application
+Support/container-distro` is untouched.
+
+## The `container` dependency
+
+`container` is a hard prerequisite, but the pkg does **not** install
+it. Options weighed:
+
+- **Bundle Apple's signed pkg** (~112MB) as a second component with a
+  conditional choice — fully offline/native, but huge and hard-pins a
+  `container` release.
+- **Postinstall downloads + `installer -pkg`** — works (nested installs
+  are an established pattern) but hides a 112MB download inside a root
+  script with no progress UI, and re-implements the pinned-hash +
+  `pkgutil --check-signature` verification in shell.
+- **Postinstall `open`s the verified pkg for the console user** —
+  Installer.app drives the Apple install. Possible upgrade if the
+  first-run offer proves too late.
+- **Existing first-run offer** (chosen): an interactive
+  `cm`/`container-distro` already downloads the SHA-256-pinned,
+  signature-checked Apple installer and opens it in Installer.app
+  (`src/install.rs`, security.md T8). Nothing container-related happens
+  during our install — and none needs to.
+
+## Signing and notarization
+
+CI has no keychain, so the workflow's build produces
+`container-distro-<version>-unsigned.pkg` — Apple's own
+`container` releases use the same signed/unsigned naming pair. The
+signed pkg (`container-distro-<version>.pkg`) is produced by running
+`scripts/build-pkg.sh` on the cert-holding machine and uploading it
+over the draft release: `productsign` on the CI artifact is *not*
+enough — it would sign the outer pkg but leave the binaries unsigned,
+which notarization rejects.
+
+Even unsigned or unnotarized, the pkg installs via `sudo installer
+-pkg` or right-click → Open (Gatekeeper), and tarball binaries aren't
+quarantined anyway (CLI downloads carry no quarantine xattr).
+`build-pkg.sh` auto-detects the pieces when a Developer ID exists —
+`--sign` makes signing a hard requirement (fails without the
+identities), `--no-sign` forces the `-unsigned` artifact — so no env
+or script changes are needed either way. For the maintainer,
+`scripts/build-pkg-signed.sh` wraps it: it sources the gitignored
+`packaging/signing.local.conf` (see `signing.conf.example`) for the
+identities + profile, and `scripts/upload-release-artifacts.sh`
+uploads the result over the draft release:
+
+| Piece        | Identity                                                     | Tool                                          |
+| ------------ | ------------------------------------------------------------ | --------------------------------------------- |
+| binaries     | `Developer ID Application` (hardened runtime, `--timestamp`) | `codesign`                                    |
+| `.pkg`       | `Developer ID Installer`                                     | `productbuild --sign`                         |
+| notarization | `NOTARY_PROFILE` keychain profile                            | `notarytool submit --wait` + `stapler staple` |
+
+Setup (a paid Developer Program membership is required; an "Apple
+Development" cert from a free account is *not* usable — Gatekeeper
+treats it like unsigned and the notary service rejects it):
+
+1. Xcode → Settings → Accounts → *Manage Certificates* → `+` → create
+   **Developer ID Application** and **Developer ID Installer** (both
+   land in the login keychain; `build-pkg.sh` finds them).
+2. `xcrun notarytool store-credentials <profile> --apple-id …` →
+   `NOTARY_PROFILE=<profile>` opts the build into notarize + staple.
+
+Both certs are needed for a clean chain: notarization rejects
+unsigned/hardened-runtime-less binaries inside a signed pkg. If CI
+signing is ever wanted, the same env vars apply with the cert imported
+into a temp keychain from a base64 `.p12` secret — currently unwired
+on purpose: the private key stays on the maintainer's Mac, and signed
+artifacts are uploaded at draft-review time.

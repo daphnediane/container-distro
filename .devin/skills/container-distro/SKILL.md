@@ -208,3 +208,13 @@ out of the `cm-*` namespace — two letters isn't unambiguously ours,
 and `cm` has no subcommand pages to go stale anyway.
 `scripts/install-local.sh` runs the full maintainer reinstall:
 `cargo install --path .` + `install-plugin` + both `install-man`s.
+`scripts/build-pkg.sh` builds the release artifacts under
+`scratch/pkg/` — the payload-only macOS .pkg (payload staged by the
+binaries' own `install-*` commands; auto-signs/notarizes when Developer
+ID identities + `NOTARY_PROFILE` exist) and the `cargo-binstall`
+tarball `[package.metadata.binstall]` points at. The maintainer's
+signed+notarized path is `scripts/build-pkg-signed.sh` (sources
+gitignored `packaging/signing.local.conf`) plus
+`scripts/upload-release-artifacts.sh vX.Y.Z` to swap the draft's
+unsigned asset. The design and the investigated/rejected alternatives
+live in `docs/design/packaging.md`.

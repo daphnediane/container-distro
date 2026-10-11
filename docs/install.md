@@ -1,5 +1,28 @@
 # Building and installing
 
+The easiest path needs no toolchain at all: each [release] ships a
+macOS installer package:
+
+```bash
+sudo installer -pkg container-distro-<version>.pkg -target /
+```
+
+(or double-click in Finder -- the release build is notarized; if you
+grabbed the `container-distro-<version>-unsigned.pkg` CI build,
+Gatekeeper needs right-click → Open or the same `installer` command;
+[packaging] covers the signing story). It lands under `/usr/local`: `bin/cm` and
+`bin/container-distro`, the `container distro` plugin registration
+(`libexec/container-plugins/distro/`), man pages, bash/zsh/fish
+completions, `bin/uninstall-container-distro.sh`, and
+`share/doc/container-distro/` (LICENSE + THIRD-PARTY-NOTICES). When
+`container` isn't installed yet, the first `cm` run offers Apple's
+signed installer.
+
+The release also carries a `cargo-binstall`-compatible tarball, so
+`cargo binstall container-distro` fetches prebuilt binaries instead of
+compiling (then run the same post-steps under [Install](#install)
+below -- binstall only drops the binaries into `$CARGO_HOME/bin`).
+
 ## Prerequisites
 
 - macOS with Apple's [`container`] installed and working
@@ -41,8 +64,8 @@ The repository is a single crate:
 
 `cargo install` only copies binaries, so installing is cargo plus two
 small post-steps (plugin registration, man pages) -- each binary
-self-installs what it owns. No brew/nix/pkg packages exist yet
-([#14]) -- crates.io is the only packaged install path.
+self-installs what it owns. The release [.pkg](#building-and-installing)
+skips all of this by installing the finished layout directly ([#14]).
 
 ```bash
 cargo install --locked container-distro   # one crate, both binaries
@@ -137,9 +160,9 @@ the conventional vendor locations under the share root:
 
 The share root defaults to the binary's install prefix (`<bin-dir>/..` →
 `share`), so `cargo install --root /usr/local` lands under
-`/usr/local/share` and a Homebrew prefix under its share -- prefixes
-whose vendor dirs the shells already scan. For `$CARGO_HOME/share` or a
-dev build you'll want an explicit dir on the shell's search path:
+`/usr/local/share` -- prefixes whose vendor dirs the shells already
+scan. For `$CARGO_HOME/share` or a dev build you'll want an explicit
+dir on the shell's search path:
 
 ```bash
 cm --install-completions=~/.local/share        # fish + bash-completion
@@ -190,9 +213,17 @@ cm --uninstall-completions && container-distro uninstall-completions
 cargo uninstall container-distro   # removes both binaries
 ```
 
+For a `.pkg` install, `sudo /usr/local/bin/uninstall-container-distro.sh`
+removes exactly what the receipt owns and forgets it (the manual
+equivalent: `pkgutil --files io.github.daphnediane.container-distro`
+lists the files — all under `/usr/local` — then `sudo pkgutil
+--forget`).
+
 Distro state (`~/Library/Application Support/container-distro/`) and any
 distros/machines you created are left behind; `cm -l` lists them and
 `cm --unregister <name>` deletes them first if you want a clean removal.
 
 [#14]: https://github.com/daphnediane/container-distro/issues/14
 [`container`]: https://github.com/apple/container
+[packaging]: design/packaging.md
+[release]: https://github.com/daphnediane/container-distro/releases

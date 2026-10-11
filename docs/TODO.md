@@ -70,8 +70,8 @@ From [security.md's checklist]:
 
 ### For 1.0 — docs & tooling
 
-- [ ] Packages -- no brew/nix/pkg installers; `cargo install` +
-  `install-plugin` is the only path ([#14]; [install])
+- [x] Packages -- releases ship a macOS .pkg installer and a
+  `cargo-binstall` tarball;  ([#14]; [install], [packaging])
 
 [#3]: https://github.com/daphnediane/container-distro/issues/3
 [#4]: https://github.com/daphnediane/container-distro/issues/4
@@ -96,6 +96,7 @@ From [security.md's checklist]:
 [service-startup]: design/notes/service-startup.md
 [subprocess-overhead]: design/notes/subprocess-overhead.md
 [install]: install.md
+[packaging]: design/packaging.md
 [lower-level-integration]: design/lower-level-integration.md#rung-by-rung-how-low-can-cm-go
 [remote-wsl-interop]: design/remote-wsl-interop.md
 [security.md's checklist]: design/security.md#pre-10-checklist

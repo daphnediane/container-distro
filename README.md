@@ -27,8 +27,10 @@ parts:
   download the signed installer (SHA-256-pinned;
   `CONTAINER_DISTRO_NO_INSTALL_OFFER=1` opts out). Newer releases run
   but may warn on internals we verify per release.
-- A current Rust toolchain (`rustup` recommended) -- `cargo install`
-  is the only packaged install path today.
+- A current Rust toolchain (`rustup` recommended) -- only for building
+  from source. Releases also ship a macOS `.pkg`
+  (`sudo installer -pkg container-distro-<version>.pkg -target /`) and a
+  `cargo-binstall` tarball (`cargo binstall container-distro`).
 
 ## Quick start
 

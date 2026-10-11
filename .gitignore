@@ -43,6 +43,9 @@
 /output
 /docs-to-be-added
 
+# Maintainer-local signing config (cert fingerprints + notary profile)
+/packaging/signing.local.conf
+
 # Commit templates
 next[-_]commit*.txt
 next[-_]amend*.txt

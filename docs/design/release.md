@@ -2,7 +2,10 @@
 
 Releases are git tags plus a maintenance branch; `cargo publish` after
 tagging makes the release installable via `cargo install
-container-distro` (`--path .` builds a checkout; see [install]).
+container-distro` (`--path .` builds a checkout; see [install]), and
+the tag-push workflow attaches the built artifacts -- the macOS
+installer .pkg and the `cargo-binstall` tarball `scripts/build-pkg.sh`
+produces, plus `THIRD-PARTY-NOTICES.yaml` ([packaging]).
 
 ## Versioning
 
@@ -104,12 +107,23 @@ The mechanical bits are driven by [cargo-release] (`cargo install
    ```
 
 6. Pushing the tag runs `.github/workflows/release.yml`, which verifies
-   the tag matches the package version, re-runs the tests, and
-   creates a **draft** GitHub Release using the new `CHANGELOG.md`
-   section as notes (`--prerelease` when the tag carries a `-` suffix
-   like `v0.4.0-rc.1`). Review the draft and publish it -- in the web
+   the tag matches the package version, re-runs the tests, builds the
+   .pkg + tarball via `scripts/build-pkg.sh`, and creates a **draft**
+   GitHub Release with the new `CHANGELOG.md` section as notes and the
+   artifacts attached (`--prerelease` when the tag carries a `-` suffix
+   like `v0.4.0-rc.1`). CI has no signing keychain, so the attached
+   pkg is `container-distro-X.Y.Z-unsigned.pkg`; with a Developer ID
+   configured (`packaging/signing.local.conf`), rebuild signed and
+   replace it before publishing:
+
+   ```bash
+   scripts/build-pkg-signed.sh                 # signs + notarizes/staples
+   scripts/upload-release-artifacts.sh vX.Y.Z  # replaces the unsigned asset
+   ```
+
+   Review the draft and publish it -- in the web
    UI, or `gh release edit vX.Y.Z --draft=false`. If the workflow is
-   unavailable, the manual equivalent is:
+   unavailable, the manual equivalent is `scripts/build-pkg.sh` plus:
 
    ```bash
    gh release create vX.Y.Z --verify-tag --notes-file \
@@ -119,14 +133,10 @@ The mechanical bits are driven by [cargo-release] (`cargo install
    (`awk`, not `sed | head -n -1` — BSD `head` has no negative counts,
    and macOS is the dev and CI platform.)
 
-   Prebuilt binaries are optional --
-   `gh release upload v0.2.0 target/release/cm
-   target/release/container-distro` -- since install is source-only
-   today ([#14] owns packaging). If binaries ever ship, attach
-   `THIRD-PARTY-NOTICES.yaml` too -- it carries every dep's copyright +
-   license text (MIT/BSD/Apache/Unicode all require reproducing them in
-   distributed copies). `cargo install` alone doesn't trigger that --
-   users compile the deps themselves.
+   `THIRD-PARTY-NOTICES.yaml` is attached alongside the binaries -- it
+   carries every dep's copyright + license text (MIT/BSD/Apache/Unicode
+   all require reproducing them in distributed copies). `cargo install`
+   alone doesn't trigger that -- users compile the deps themselves.
 
 7. Publish to crates.io **from the tagged commit**: `cargo publish`
    (one-time `cargo login` first). `cargo publish --dry-run` packages
@@ -208,12 +218,12 @@ remains.
   proptest properties that run inside `cargo test` ([#17]).
 
 [#12]: https://github.com/daphnediane/container-distro/issues/12
-[#14]: https://github.com/daphnediane/container-distro/issues/14
 [#16]: https://github.com/daphnediane/container-distro/issues/16
 [#17]: https://github.com/daphnediane/container-distro/issues/17
 [cargo-release]: https://github.com/crate-ci/cargo-release
 [Changelog]: #changelog
 [install]: ../install.md
+[packaging]: packaging.md
 [SemVer]: https://semver.org
 [TODO]: ../TODO.md
 [Version gating]: container-internals.md#version-gating

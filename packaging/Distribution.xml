@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Distribution script for the container-distro product archive.
+     @VERSION@ / @COMPONENT@ are filled in by scripts/build-pkg.sh.
+     container needs Apple silicon and macOS 26 — same requirements the
+     pkg enforces here. -->
+<installer-gui-script minSpecVersion="2">
+    <title>container-distro</title>
+    <organization>io.github.daphnediane</organization>
+    <domains enable_localSystem="true" enable_anywhere="false" enable_currentUserHome="false"/>
+    <options customize="never" hostArchitectures="arm64" rootVolumeOnly="true"/>
+    <volume-check>
+        <allowed-os-versions>
+            <os-version min="26.0"/>
+        </allowed-os-versions>
+    </volume-check>
+    <welcome file="welcome.html" mime-type="text/html"/>
+    <conclusion file="conclusion.html" mime-type="text/html"/>
+    <choices-outline>
+        <line choice="default">
+            <line choice="io.github.daphnediane.container-distro"/>
+        </line>
+    </choices-outline>
+    <choice id="default"/>
+    <choice id="io.github.daphnediane.container-distro" title="container-distro">
+        <pkg-ref id="io.github.daphnediane.container-distro"/>
+    </choice>
+    <pkg-ref id="io.github.daphnediane.container-distro" version="@VERSION@" onConclusion="none">@COMPONENT@</pkg-ref>
+</installer-gui-script>
