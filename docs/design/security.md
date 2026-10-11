@@ -49,10 +49,27 @@ is a cross-container integrity risk, not just a same-guest one.
   `container machine set home-mount=` for machines. `ro`/`none` also
   cuts off tampering with runtime state under the share -- it is the
   actual boundary, not just privacy for your files.
-- **Re-evaluate if:** users start running semi-trusted workloads
-  (AI-generated code, random images, `import`ed rootfses) in distros and
-  expect sandboxing. Options: default `ro`, scoped subdir shares instead
-  of all of `$HOME`, or a "sandboxed distro" profile.
+- **Partially re-evaluated (0.6.0, #19):** the default is now
+  *source-dependent* rather than uniform `rw`. Installs resolved
+  through a catalog entry keep `rw` — a catalog is already an act of
+  trust (T4), so the curated path keeps the WSL ergonomics — while
+  every ad-hoc path (`create`/`cm --install` with a bare image ref,
+  `import`, `--from-file`, `--from-image`) defaults to `none`. A
+  catalog entry can also pin a different per-entry default via the
+  schema's optional `HomeMount` field. Resolution order: explicit
+  `--home-mount`, then preset (`--restricted` → `none`, `--trusted`
+  → `rw`), then an explicit `--automount` mode (warned — `rw`
+  volumes are `rw`-level host exposure anyway), then the source
+  default. `--trusted` is the mirror preset: rw home, rw automount,
+  agent on — the deliberate "I trust this image" escape hatch, and
+  the opt-in for machine-tier operations below. The default binds at
+  create into `spec.home_mount`, so `set` recreations never silently
+  change an existing distro's posture.
+- **Re-evaluate if:** the catalog-trust heuristic stops matching how
+  distros actually get installed, or scoped subdir shares (home `ro`
+  + a narrow rw overlay — expressible today) deserve a first-class
+  flag. Remaining hole: catalog `Image` refs are pulled **by tag**,
+  which is mutable — see T4's "known hole" note.
 
 ### T2. `SSH_AUTH_SOCK` is forwarded into every machine and distro
 
@@ -65,9 +82,26 @@ hosts -- for as long as the guest runs.
   feature that makes `git`/`ssh` "just work" in-guest, a core WSL-ism.
 - **Mitigations that exist:** `--no-ssh` at create or `set --no-ssh`;
   `--restricted` turns it off along with everything else.
-- **Re-evaluate if:** T1 is re-evaluated, or agent confirmation /
-  per-key scoping becomes desirable. macOS's `ssh-agent` supports
-  per-use confirmation which would blunt this entirely.
+- **Narrowed (0.6.0, #19):** the forward now defaults on only when the
+  effective home-mount is `rw` — the agent is "authenticate as you",
+  the same exposure tier as write access to your home, so the two
+  share one trust knob. Ad-hoc sources (default `none`) and
+  `ro`-pinned catalog entries lose the forward unless `--ssh` opts
+  back in; `--home-mount rw` on any source opts both in at once.
+  `--restricted` beats the tier: every hole needs its own explicit
+  flag there, so `restricted + --home-mount rw` still defaults the
+  agent off.
+  **Machines are the exception:** `container machine` forwards
+  `SSH_AUTH_SOCK` from the caller's env at *every* boot with no flag
+  to disable it, so `cm --install --machine` and `migrate --machine`
+  are **refused** when the home-mount resolves below `rw` — a
+  non-rw machine can't honor the policy, so it isn't created.
+  (`machine set home-mount=` on an existing machine has the same
+  asymmetry and can't be policed — upstream's model.)
+- **Re-evaluate if:** upstream grows a per-machine ssh opt-out, or
+  agent confirmation / per-key scoping becomes desirable. macOS's
+  `ssh-agent` supports per-use confirmation which would blunt this
+  entirely.
 
 ### T3. Passwordless sudo + `cap-add ALL` + no masked/read-only paths
 
@@ -91,9 +125,9 @@ instant guest root → rw access to every shared host path.
 ### T4. `import` fully provisions an untrusted rootfs
 
 `container distro import NAME file.tar` wraps an arbitrary tar as an
-image, then applies full provisioning: your uid/gid, passwordless sudo,
-rw home (default), ssh agent, all caps. Importing a hostile rootfs hands
-it your identity and home directory.
+image, then applies provisioning: your uid/gid, passwordless sudo, ssh
+agent, all caps. Since 0.6.0 the home share defaults to `none` on this
+path (T1) — but importing a hostile rootfs still hands it your identity.
 
 - **Accepted because:** WSL `--import` has the same shape and the user
   is expected to know what they're importing.
@@ -119,7 +153,40 @@ it your identity and home directory.
   catalog is already an
   explicit act of trust (it can equally point `Image` at a hostile
   registry), so pinning to a caller-supplied manifest adds no new
-  trust.
+  trust. The same act-of-trust framing is why catalog-resolved
+  installs keep the `rw` home default (T1): a user-supplied catalog
+  gets the same relaxed default for whatever it lists, which is an
+  accepted consequence of documenting `--catalog` as "I trust this
+  manifest" rather than adding a separate trust bit.
+- **Known hole — tag mutability.** Unlike `.wsl` entries, catalog
+  `Image` refs carry no integrity pin: pulls resolve the tag at pull
+  time, so whatever the tag points to *then* is what lands. The
+  accepted exposure is a compromised or misused registry namespace
+  (Docker Hub controls who can push to `library/*`; other registries
+  have equivalent namespacing), which is a different — and arguably
+  weaker — guarantee than the `.wsl` SHA-256s. Digest pinning was
+  considered and punted for two reasons: upstream `container`
+  resolves `name:tag@sha256:…` **by tag** (`Reference::normalize`
+  prefers `_tag`), so an embedded pin only enforces if we construct
+  tagless `name@digest` refs or verify post-pull ourselves — plumbing
+  for marginal benefit over "the tag was probably fine"; and pins go
+  stale on every upstream republish (weekly-to-monthly for most
+  catalog entries), which is a maintenance treadmill for integrity
+  that registries partially provide by namespace control anyway.
+  Signature verification (cosign/notation via OCI referrers — a
+  referrers client already exists in ContainerizationOCI) is the
+  stronger long-term answer and is tracked as a separate item. If
+  pinning is revisited, store `Digest` as a separate catalog field
+  and pull `name@digest` — never `name:tag@digest`.
+- **Strategic direction.** `.wsl` rootfs packages are the preferred
+  catalog source where they exist: they have a vendor release
+  cadence, a mandatory SHA-256 in the schema, and a content-addressed
+  download cache — the verified-bits property `Image` entries lack.
+  Microsoft's own `DistributionInfo.json` (the manifest behind
+  `wsl --list --online`, in the MIT-licensed `microsoft/WSL` repo)
+  works verbatim via `--catalog FILE`, so tracking it — or caching
+  a vetted copy — is a candidate for replacing `Image` entries
+  wholesale.
 
 ### T5. `container` is resolved from `PATH` (or `CONTAINER_CLI`)
 

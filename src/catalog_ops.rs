@@ -18,7 +18,7 @@ use crate::container::{self, ImageListEntry, Machine, MachineDetail};
 use crate::naming;
 use crate::oci;
 use crate::ops::{self, CreateOptions};
-use crate::spec::{LABEL_IMPORTED_FROM, LABEL_ROOTFS_SHA256};
+use crate::spec::{HomeMount, LABEL_IMPORTED_FROM, LABEL_ROOTFS_SHA256, OriginSource};
 use crate::table;
 use crate::wsl;
 use crate::{catalog, ops::ImportSource};
@@ -31,11 +31,19 @@ pub enum Resolved<'a> {
     Image {
         image: &'a str,
         name: Option<&'a str>,
+        /// The `--home-mount` default for this source: the entry's
+        /// `HomeMount` override (absent → `rw` — installing through a
+        /// catalog entry is an act of trust in its curation, whether
+        /// the catalog is built-in or a `--catalog FILE`), `none` for
+        /// bare image references.
+        default_home: HomeMount,
     },
     /// A catalog `.wsl` download; `name` is the entry's NAME.
     Wsl {
         download: &'a catalog::Download,
         name: &'a str,
+        /// The `--home-mount` default from the entry, as for `Image`.
+        default_home: HomeMount,
     },
 }
 
@@ -57,19 +65,23 @@ pub fn resolve<'a>(
                 return Ok(Resolved::Image {
                     image: a,
                     name: None,
+                    default_home: HomeMount::None,
                 });
             }
             None => bail!("{a:?} is not in the distro catalog (use `create` for images)"),
         },
     };
+    let default_home = entry.home_mount.unwrap_or(HomeMount::Rw);
     match entry.source(oci::host_arch()) {
         Some(catalog::Source::Image(i)) => Ok(Resolved::Image {
             image: i,
             name: Some(&entry.name),
+            default_home,
         }),
         Some(catalog::Source::Wsl(download)) => Ok(Resolved::Wsl {
             download,
             name: &entry.name,
+            default_home,
         }),
         None => bail!(
             "{:?} is not available for {} (no image or .wsl download for that architecture)",
@@ -93,7 +105,9 @@ pub fn install(
 
 /// Install an already-resolved source as a distro. Image entries become
 /// `create`s; `.wsl` entries are fetched, verified, cached, and imported
-/// with download provenance.
+/// with download provenance. The resolved source carries its
+/// `--home-mount` default: catalog entries get their `HomeMount`
+/// override (`rw` when unset), everything else `none`.
 pub fn install_resolved(
     resolved: Resolved<'_>,
     requested_name: Option<String>,
@@ -101,13 +115,25 @@ pub fn install_resolved(
 ) -> Result<String> {
     container::ensure_started()?;
     match resolved {
-        Resolved::Image { image, name } => {
-            let name = requested_name
+        Resolved::Image {
+            image,
+            name,
+            default_home,
+        } => {
+            let distro_name = requested_name
                 .unwrap_or_else(|| container::default_machine_name(name.unwrap_or(image)));
-            container::validate_name(&name)?;
-            ops::create(Some(name), opts, image)
+            container::validate_name(&distro_name)?;
+            let origin = match name {
+                Some(n) => OriginSource::CatalogImage { name: n.into() },
+                None => OriginSource::Image,
+            };
+            ops::create(Some(distro_name), opts, image, origin, default_home)
         }
-        Resolved::Wsl { download, name } => {
+        Resolved::Wsl {
+            download,
+            name,
+            default_home,
+        } => {
             // `fetched` holds a shared lock on the cache entry — purge
             // and prune wait for the import below instead of deleting
             // the file mid-flight.
@@ -122,6 +148,7 @@ pub fn install_resolved(
                     sha256: &download.sha256,
                     name,
                 },
+                default_home,
             )
         }
     }
@@ -155,6 +182,7 @@ pub fn import_file(
     name_hint: Option<&str>,
     opts: &CreateOptions,
     source: ImportSource<'_>,
+    default_home: HomeMount,
 ) -> Result<String> {
     if !file.is_file() {
         bail!("{} does not exist", file.display());
@@ -176,7 +204,7 @@ pub fn import_file(
     if !opts.force {
         ops::bail_machine_shadow(&name, false)?;
     }
-    ops::import(&name, file, opts, source)
+    ops::import(&name, file, opts, source, default_home)
 }
 
 /// A `container machine` plus the inspected fields catalog reporting
@@ -928,12 +956,17 @@ mod tests {
     #[test]
     fn catalog_install_names_after_the_entry() {
         let cat = builtin();
-        let Resolved::Image { image, name } = resolve(&cat, None, false).unwrap() else {
+        let Resolved::Image { image, name, .. } = resolve(&cat, None, false).unwrap() else {
             panic!("the catalog default should resolve to an image");
         };
         assert_eq!(image, "docker.io/library/ubuntu:latest");
         assert_eq!(name, Some("Ubuntu"));
         assert_eq!(container::default_machine_name(name.unwrap()), "ubuntu");
+        let Resolved::Image { default_home, .. } = resolve(&cat, None, false).unwrap() else {
+            unreachable!()
+        };
+        // Catalog entries relax the home-mount default to rw.
+        assert_eq!(default_home, HomeMount::Rw);
         for arg in ["ubuntu", "UBUNTU-24.04"] {
             let Resolved::Image { name, .. } = resolve(&cat, Some(arg), false).unwrap() else {
                 panic!("{arg} should resolve to an image");
@@ -945,12 +978,17 @@ mod tests {
     #[test]
     fn image_fallback_only_when_enabled() {
         let cat = builtin();
-        let Resolved::Image { image, name } = resolve(&cat, Some("quay.io/x/y:1"), true).unwrap()
+        let Resolved::Image {
+            image,
+            name,
+            default_home,
+        } = resolve(&cat, Some("quay.io/x/y:1"), true).unwrap()
         else {
             panic!("a qualified ref should fall back to an image");
         };
         assert_eq!(image, "quay.io/x/y:1");
         assert_eq!(name, None);
+        assert_eq!(default_home, HomeMount::None);
         let err = resolve(&cat, Some("quay.io/x/y:1"), false).unwrap_err();
         assert!(err.to_string().contains("not in the distro catalog"));
     }

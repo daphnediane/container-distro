@@ -17,7 +17,7 @@ use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser};
 use container_distro::ops::{self, DistroSummary, RunOpts};
 use container_distro::plugin;
-use container_distro::spec::{Automount, SpecChanges};
+use container_distro::spec::{Automount, HomeMount, OriginSource, SpecChanges};
 use container_distro::table::{columns, human_bytes, local_datetime};
 use container_distro::{catalog, catalog_ops, wsl};
 
@@ -216,7 +216,10 @@ fn catalog_command(command: CatalogCommand) -> Result<()> {
 fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Command::Create { name, opts, image } => {
-            println!("{}", ops::create(name, &opts, &image)?);
+            println!(
+                "{}",
+                ops::create(name, &opts, &image, OriginSource::Image, HomeMount::None)?
+            );
         }
         Command::Catalog { command } => catalog_command(command)?,
         Command::List {
@@ -309,7 +312,13 @@ fn run(cli: Cli) -> Result<()> {
         Command::Import { name, file, opts } => {
             println!(
                 "{}",
-                ops::import(&name, &file, &opts, ops::ImportSource::Local)?
+                ops::import(
+                    &name,
+                    &file,
+                    &opts,
+                    ops::ImportSource::Local,
+                    HomeMount::None
+                )?
             );
         }
         Command::Rename { old, new, force } => {

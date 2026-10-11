@@ -18,17 +18,35 @@ guest as roughly equivalent to code run on the host as you.
 
 ## What's exposed by default
 
-- **Your home directory**, read-write, at the same path. Guest code
-  can write `~/.zshrc`, `~/.ssh/authorized_keys`, `~/.gitconfig`
+- **Your home directory** — but only when the install implies trust.
+  Distros installed through a **catalog entry** (`cm --install
+  <Distro>`, `container distro catalog install`) keep the WSL-style
+  rw share at the same path; a catalog is a curation decision, and
+  resolving through one is treated as an act of trust (see the
+  `--catalog` caveat in [design/security.md](design/security.md#t4-import-fully-provisions-an-untrusted-rootfs)).
+  Every other creation path — `container distro create` or
+  `cm --install` with a bare image ref, `import`, `--from-file`,
+  `--from-image` — defaults to `--home-mount none`, no host share at
+  all. An explicit `--automount rw|ro` implies you want host paths
+  shared, so home follows the same mode (a warning is printed when it
+  does). Whatever the default, an rw home lets guest code write
+  `~/.zshrc`, `~/.ssh/authorized_keys`, `~/.gitconfig`
   (`core.hooksPath`), `~/Library/LaunchAgents` -- host code execution
   on your next login -- plus access to everything in `$HOME`, including
   `container`'s own state and the image store other containers rely
   on. `--home-mount ro|none` scopes this down; extra `-v`/`--share`/
   `--automount` mounts extend it further.
-- **Your SSH agent** (`SSH_AUTH_SOCK` forwarded in). Guest code can't
-  steal private keys, but can authenticate *as you* -- push to your
-  repos, ssh to your hosts -- for as long as the guest runs.
-  `--no-ssh` disables the forward.
+- **Your SSH agent** (`SSH_AUTH_SOCK` forwarded in) — but only at the
+  same trust tier as an rw home: the default is on when the effective
+  home-mount is `rw` (catalog installs, explicit `--home-mount rw`),
+  off otherwise — under `--restricted` it's off regardless (every hole
+  needs its own flag there). Guest code can't steal private keys, but can
+  authenticate *as you* -- push to your repos, ssh to your hosts --
+  for as long as the guest runs. `--ssh`/`--no-ssh` override.
+  `container machine` is the exception: upstream forwards the agent
+  at every boot with no opt-out, so `--install --machine` and
+  `migrate --machine` are refused unless the home-mount resolves to
+  `rw` — a machine can't run below the trusted tier.
 - **Instant guest root.** The provisioned user has passwordless
   sudo/doas and the container runs with `--cap-add ALL` -- guest user →
   guest root in one command. That's the WSL model too; the VM boundary,
@@ -37,7 +55,8 @@ guest as roughly equivalent to code run on the host as you.
 - **Published ports** bind `127.0.0.1` by default -- keep it that way
   unless you want LAN-reachable services; a `0.0.0.0` bind changes
   exposure for *other* machines too.
-- **Imported rootfses get all of the above.** `container distro
+- **Imported rootfses get all of the above** — except the home share,
+  which defaults to `none`. `container distro
   import`, `cm --install --from-file`, and catalog `.wsl` installs
   provision your identity into an arbitrary rootfs -- importing an
   image is trusting it. Catalog `.wsl` downloads are SHA-256-verified
@@ -46,13 +65,25 @@ guest as roughly equivalent to code run on the host as you.
 
 ## Scoping down
 
-| Option                         | Effect                                                                                    |
-| ------------------------------ | ----------------------------------------------------------------------------------------- |
-| `--home-mount ro` or `none`    | Shrink or remove the host share (machines: `container machine set home-mount=` + restart) |
-| `--no-ssh`                     | No SSH-agent forwarding                                                                   |
-| `--no-sudo`                    | Skip the sudo/doas grant -- future grants only; can't remove files already in a rootfs    |
-| `--network none`               | No interface, DNS, or outbound (loopback only)                                            |
-| `--restricted` (`--untrusted`) | All four at once -- see below                                                             |
+| Option                          | Effect                                                                                                                                                                          |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--home-mount ro` or `none`     | Shrink or remove the host share (machines: `container machine set home-mount=` + restart)                                                                                       |
+| `-v SRC:DST:ro,nosuid,nodev...` | Mount options on any share -- `ro` is host-enforced; `nosuid`/`nodev`/`noexec`/`noatime` etc. are guest-side mount flags (defense in depth -- guest root can remount them away) |
+| `--no-ssh`                      | No SSH-agent forwarding                                                                                                                                                         |
+| `--no-sudo`                     | Skip the sudo/doas grant -- future grants only; can't remove files already in a rootfs                                                                                          |
+| `--network none`                | No interface, DNS, or outbound (loopback only)                                                                                                                                  |
+| `--restricted` (`--untrusted`)  | All four at once -- see below                                                                                                                                                   |
+| `--trusted`                     | The mirror preset: rw home, rw `/Volumes` automount, agent on                                                                                                                   |
+
+`--automount` shares get `nosuid,nodev` automatically — `/Volumes` is
+data, so guest-created setuid binaries and device nodes there never
+function.
+
+The other direction: `--trusted` is the mirror preset — rw home,
+`/Volumes` automounted rw, SSH agent forwarded — for images you'd
+give your own login session. It also opts an untrusted-tier install
+into `--machine` (machines always forward the agent), and lets a
+locked-down distro `migrate --machine` out at the trusted tier.
 
 ## Restricted distros
 

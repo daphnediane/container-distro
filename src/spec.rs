@@ -129,6 +129,17 @@ impl Automount {
     pub fn read_only(self) -> bool {
         self == Automount::Ro
     }
+
+    /// The equivalent home-mount access. An explicit `--automount`
+    /// with no `--home-mount` defaults home to the same access — an
+    /// `rw` volumes share is an `rw`-level host exposure anyway.
+    pub fn home_mount(self) -> HomeMount {
+        match self {
+            Automount::Rw => HomeMount::Rw,
+            Automount::Ro => HomeMount::Ro,
+            Automount::None => HomeMount::None,
+        }
+    }
 }
 
 impl FromStr for Automount {
@@ -175,32 +186,78 @@ impl HostUser {
     }
 }
 
-/// An extra host directory shared into the guest: `SRC:DST[:ro|rw]`.
+/// Extra guest-side mount flags accepted in the `[:opts]` field of a
+/// mount — the subset of vminitd's `mount(2)` option table meaningful
+/// for a virtiofs share. Unknown flags would be passed through to the
+/// filesystem's mount data and EINVAL the whole mount, so anything
+/// outside this list is a parse error. These are *guest*-enforced:
+/// `ro` is also applied host-side by VZ, but the rest can be remounted
+/// away by guest root — defense-in-depth, not a boundary.
+const MOUNT_OPTION_FLAGS: &[&str] = &[
+    "suid",
+    "nosuid",
+    "dev",
+    "nodev",
+    "exec",
+    "noexec",
+    "atime",
+    "noatime",
+    "diratime",
+    "nodiratime",
+    "relatime",
+    "norelatime",
+    "strictatime",
+    "nostrictatime",
+    "sync",
+    "async",
+    "dirsync",
+];
+
+/// An extra host directory shared into the guest: `SRC:DST[:opt,…]`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MountSpec {
     pub source: String,
     pub target: String,
     pub read_only: bool,
+    /// Extra guest-side mount flags (`nosuid`, `nodev`, …) beyond
+    /// `ro`/`rw`. Absent in journals written before the field existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<String>,
 }
 
 impl FromStr for MountSpec {
     type Err = anyhow::Error;
     fn from_str(s: &str) -> Result<Self> {
         let parts: Vec<&str> = s.split(':').collect();
-        let (source, target, read_only) = match parts.as_slice() {
-            [src, dst] => (*src, *dst, false),
-            [src, dst, "ro"] => (*src, *dst, true),
-            [src, dst, "rw"] => (*src, *dst, false),
-            _ => bail!("invalid mount `{s}` (expected SRC:DST[:ro|rw])"),
+        let (source, target, opts) = match parts.as_slice() {
+            [src, dst] => (*src, *dst, ""),
+            [_, _, ""] => bail!("invalid mount `{s}`: empty options (expected SRC:DST[:opt,…])"),
+            [src, dst, opts] => (*src, *dst, *opts),
+            _ => bail!("invalid mount `{s}` (expected SRC:DST[:opt,…])"),
         };
         if !source.starts_with('/') || !target.starts_with('/') {
             bail!("invalid mount `{s}`: SRC and DST must be absolute paths");
+        }
+        let mut read_only = false;
+        let mut rw = false;
+        let mut options = Vec::new();
+        for o in opts.split(',').filter(|o| !o.is_empty()) {
+            match o {
+                "ro" => read_only = true,
+                "rw" => rw = true,
+                _ if MOUNT_OPTION_FLAGS.contains(&o) => options.push(o.to_string()),
+                _ => bail!("invalid mount option `{o}` in `{s}`"),
+            }
+        }
+        if read_only && rw {
+            bail!("invalid mount `{s}`: `ro` and `rw` conflict");
         }
         Ok(MountSpec {
             source: source.to_string(),
             target: target.to_string(),
             read_only,
+            options,
         })
     }
 }
@@ -208,8 +265,13 @@ impl FromStr for MountSpec {
 impl fmt::Display for MountSpec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}:{}", self.source, self.target)?;
+        let mut opts: Vec<&str> = Vec::new();
         if self.read_only {
-            f.write_str(":ro")?;
+            opts.push("ro");
+        }
+        opts.extend(self.options.iter().map(String::as_str));
+        if !opts.is_empty() {
+            write!(f, ":{}", opts.join(","))?;
         }
         Ok(())
     }
@@ -295,12 +357,21 @@ pub enum OriginSource {
     /// tar or `.wsl` package — the path as given (`-` for stdin).
     File { path: String },
     /// A catalog `.wsl` download: the URL, the SHA-256 the download
-    /// was verified against, and the catalog entry's name.
+    /// was verified against, and the catalog entry's name. Only ever
+    /// produced by catalog installs — the name is kept (rather than
+    /// `CatalogDownload`) because existing journals serialize this
+    /// variant and renaming would break them.
     Download {
         url: String,
         sha256: String,
         name: String,
     },
+    /// A catalog image install: the entry's name. Recorded whether the
+    /// catalog was built-in or a `--catalog FILE` — provenance, not a
+    /// trust statement. The catalog file itself is not recorded: the
+    /// trust decision was made at install time and the file can be
+    /// replaced or moved afterwards, so its path would mean little.
+    CatalogImage { name: String },
     /// `migrate --in` from a `container machine` of this name.
     Machine { name: String },
     /// `migrate` adopting a pre-journal distro container — its live
@@ -509,6 +580,12 @@ impl DistroSpec {
                 source: m.source.clone(),
                 target: m.destination.clone(),
                 read_only: m.read_only(),
+                options: m
+                    .options
+                    .iter()
+                    .filter(|o| o.as_str() != "ro" && o.as_str() != "rw")
+                    .cloned()
+                    .collect(),
             })
             .collect();
         let publish = cfg
@@ -730,6 +807,9 @@ pub fn automounts(entries: &[(String, bool)], read_only: bool) -> Vec<MountSpec>
             source: format!("/Volumes/{name}"),
             target,
             read_only,
+            // External volumes never legitimately host suid binaries
+            // or device nodes — free hardening from the guest flag set.
+            options: vec!["nosuid".into(), "nodev".into()],
         });
     }
     v.sort_by(|a, b| a.target.cmp(&b.target));
@@ -773,9 +853,39 @@ mod tests {
         assert!(m.read_only);
         assert_eq!(m.to_string(), "/a:/b:ro");
         assert_eq!("/a:/b".parse::<MountSpec>().unwrap().to_string(), "/a:/b");
-        for bad in ["/a", "a:/b", "/a:b", "/a:/b:xx"] {
+        for bad in ["/a", "a:/b", "/a:b", "/a:/b:xx", "/a:/b:"] {
             assert!(bad.parse::<MountSpec>().is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn mount_spec_options() {
+        let m: MountSpec = "/a:/b:ro,nosuid,nodev".parse().unwrap();
+        assert!(m.read_only);
+        assert_eq!(m.options, ["nosuid", "nodev"]);
+        assert_eq!(m.to_string(), "/a:/b:ro,nosuid,nodev");
+        // Options without ro; `rw` is canonicalized away.
+        let m: MountSpec = "/a:/b:noexec".parse().unwrap();
+        assert!(!m.read_only);
+        assert_eq!(m.to_string(), "/a:/b:noexec");
+        let m: MountSpec = "/a:/b:rw,nosuid".parse().unwrap();
+        assert!(!m.read_only);
+        assert_eq!(m.options, ["nosuid"]);
+        assert_eq!(m.to_string(), "/a:/b:nosuid");
+        for bad in ["/a:/b:ro,rw", "/a:/b:bind", "/a:/b:remount", "/a:/b:foo"] {
+            assert!(bad.parse::<MountSpec>().is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn mount_spec_serde_without_options() {
+        // Journals predating `options` still parse.
+        let m: MountSpec =
+            serde_json::from_str(r#"{"source":"/a","target":"/b","readOnly":true}"#).unwrap();
+        assert!(m.read_only && m.options.is_empty());
+        // And the field is omitted again on the way out.
+        let v = serde_json::to_value(&m).unwrap();
+        assert!(v.get("options").is_none());
     }
 
     #[test]
@@ -910,6 +1020,7 @@ mod tests {
             OriginSource::File {
                 path: "/tmp/r.wsl".into(),
             },
+            OriginSource::CatalogImage { name: "u".into() },
             OriginSource::Machine { name: "m".into() },
             OriginSource::Adopted,
         ] {
@@ -1069,8 +1180,8 @@ mod tests {
         assert_eq!(
             m.iter().map(ToString::to_string).collect::<Vec<_>>(),
             [
-                "/Volumes/CaseSens:/mnt/CaseSens",
-                "/Volumes/My Photos:/mnt/My-Photos"
+                "/Volumes/CaseSens:/mnt/CaseSens:nosuid,nodev",
+                "/Volumes/My Photos:/mnt/My-Photos:nosuid,nodev"
             ]
         );
         assert!(automounts(&entries, true).iter().all(|m| m.read_only));
@@ -1113,8 +1224,8 @@ mod tests {
         assert_eq!(
             m.iter().map(ToString::to_string).collect::<Vec<_>>(),
             [
-                "/Volumes/My  Photos:/mnt/My--Photos",
-                "/Volumes/My Photos:/mnt/My-Photos"
+                "/Volumes/My  Photos:/mnt/My--Photos:nosuid,nodev",
+                "/Volumes/My Photos:/mnt/My-Photos:nosuid,nodev"
             ]
         );
     }

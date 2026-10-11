@@ -25,6 +25,7 @@ use cli::{Action, Args, Backend, InstallOpts, InstallSource, ShellType};
 use container_distro::container::{self, ArgvMode};
 use container_distro::forward::PortMapping;
 use container_distro::ops::{self as distro, CreateOptions, RunOpts};
+use container_distro::spec::HomeMount;
 use container_distro::{catalog, catalog_ops, wsl};
 use list::Entry;
 
@@ -400,7 +401,11 @@ fn resolve<'a>(
     match source {
         InstallSource::Default => catalog_ops::resolve(cat, None, false),
         InstallSource::CatalogOrImage(a) => catalog_ops::resolve(cat, Some(a), true),
-        InstallSource::Image(image) => Ok(catalog_ops::Resolved::Image { image, name: None }),
+        InstallSource::Image(image) => Ok(catalog_ops::Resolved::Image {
+            image,
+            name: None,
+            default_home: HomeMount::None,
+        }),
         InstallSource::File(_) => bail!("internal error: file source resolved as image"),
     }
 }
@@ -416,6 +421,7 @@ fn install(opts: &InstallOpts) -> Result<ExitCode> {
         memory: opts.memory.clone(),
         home_mount: opts.home_mount,
         restricted: opts.restricted,
+        trusted: opts.trusted,
         force: opts.force,
         ..CreateOptions::default()
     };
@@ -424,8 +430,12 @@ fn install(opts: &InstallOpts) -> Result<ExitCode> {
     }
     let cat = catalog::load(opts.catalog.as_deref())?;
     let resolved = resolve(&cat, &opts.source)?;
-    let (image, hint) = match &resolved {
-        catalog_ops::Resolved::Image { image, name } => (*image, *name),
+    let (image, hint, default_home) = match &resolved {
+        catalog_ops::Resolved::Image {
+            image,
+            name,
+            default_home,
+        } => (*image, *name, *default_home),
         catalog_ops::Resolved::Wsl { name, .. } => {
             // Machines boot from images — a catalog entry that only
             // ships a rootfs download can't satisfy `--machine`.
@@ -455,7 +465,11 @@ fn install(opts: &InstallOpts) -> Result<ExitCode> {
             );
         }
         let name = catalog_ops::install_resolved(
-            catalog_ops::Resolved::Image { image, name: hint },
+            catalog_ops::Resolved::Image {
+                image,
+                name: hint,
+                default_home,
+            },
             opts.name.clone(),
             &create,
         )?;
@@ -489,9 +503,27 @@ fn install(opts: &InstallOpts) -> Result<ExitCode> {
     if let Some(m) = &opts.memory {
         cmd.args(["--memory", m]);
     }
-    if let Some(h) = opts.home_mount {
-        cmd.args(["--home-mount", h.as_str()]);
+    // The resolved source carries the home-mount default — the
+    // catalog entry's override (`rw` unless pinned tighter), `none`
+    // for bare image refs — and `--restricted` pins `none` just like
+    // the distro path. An explicit --home-mount still wins.
+    // A machine forwards SSH_AUTH_SOCK into the guest at every boot
+    // (upstream reads the caller's env — there is no opt-out), so it
+    // can only run at the trusted tier our distro policy expresses as
+    // rw home. Anything less is refused rather than silently giving a
+    // "locked-down" machine the agent anyway. `create` is the
+    // CreateOptions built from this install's flags, so it resolves
+    // the same way the distro path does (automount can't reach here —
+    // it's a distro-only flag).
+    let home = create.effective_home_mount(default_home);
+    if home != HomeMount::Rw {
+        bail!(
+            "`container machine` always forwards your SSH agent — an untrusted-tier \
+             install can't be a machine; pass --trusted or --home-mount rw to opt in, \
+             or drop --machine for a distro"
+        );
     }
+    cmd.args(["--home-mount", home.as_str()]);
     let status = cmd
         .arg(image)
         .status()
@@ -521,7 +553,14 @@ fn install_from_file(
     }
     // --name is used verbatim; a derived name (the .wsl manifest's
     // oobe.defaultName, else the file stem) is sanitized to a valid one.
-    let name = catalog_ops::import_file(file, opts.name.clone(), name_hint, create, source)?;
+    let name = catalog_ops::import_file(
+        file,
+        opts.name.clone(),
+        name_hint,
+        create,
+        source,
+        HomeMount::None,
+    )?;
     if opts.no_launch {
         return Ok(ExitCode::SUCCESS);
     }
@@ -577,6 +616,7 @@ fn import(
                 ..CreateOptions::default()
             },
             distro::ImportSource::Local,
+            HomeMount::None,
         )?;
     }
     Ok(ExitCode::SUCCESS)
@@ -740,7 +780,7 @@ mod tests {
         let cat = builtin();
         // `wsl --install` registers `Ubuntu` — a catalog install takes
         // the entry's NAME, not an image-derived `ubuntu-latest`.
-        let catalog_ops::Resolved::Image { image, name } =
+        let catalog_ops::Resolved::Image { image, name, .. } =
             resolve(&cat, &InstallSource::Default).unwrap()
         else {
             panic!("the catalog default should resolve to an image");

@@ -18,7 +18,10 @@ It runs two ways:
 
 - your macOS account is provisioned inside (same name/uid/gid,
   passwordless sudo/doas), with `SSH_AUTH_SOCK` forwarded
-- `$HOME` is shared at the same path (`--home-mount rw|ro|none`)
+- `$HOME` can be shared at the same path (`--home-mount rw|ro|none`);
+  the default depends on where the distro comes from — `rw` for
+  catalog installs, `none` for ad-hoc `create`/`import` (see
+  [security.md](security.md))
 - the image's own init runs as PID 1 -- or an idle PID 1 for images
   without one -- via our `assets/init` entrypoint (mounted read-only at
   `/sbin.distro`)
@@ -52,22 +55,23 @@ Journal files are `uchg`-locked at rest (design/security.md T6).
 Create a distro from an image and boot it. Name defaults to a derivation
 from the image.
 
-| Option                 | Description                                                                                                                |
-| ---------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `-n, --name`           | Distro name (lowercase DNS-style)                                                                                          |
-| `-v, --volume`         | `SRC:DST[:ro]` share a host directory (repeatable)                                                                         |
-| `--automount[=MODE]`   | Share every `/Volumes/<X>` at `/mnt/<x>`; `MODE` is `rw` (default) or `ro` (skips hidden/`com.apple.*`/unreadable volumes) |
-| `-p, --publish`        | `[HOST_IP:]HOST[:GUEST][/tcp\|udp]` (repeatable; HOST_IP defaults to `127.0.0.1`)                                          |
-| `--cpus`               | Virtual CPUs (default: half the host's)                                                                                    |
-| `--memory`             | e.g. `8G` (default: half the host's)                                                                                       |
-| `--home-mount`         | `rw` (default), `ro`, `none`                                                                                               |
-| `--network`            | Container network name; `none` for no network                                                                              |
-| `--ssh` / `--no-ssh`   | Forward the host SSH agent socket (default: on)                                                                            |
-| `--sudo` / `--no-sudo` | Provision passwordless sudo/doas (default: on)                                                                             |
-| `--restricted`         | Defaults preset: `--home-mount none --network none --no-ssh --no-sudo` (alias `--untrusted`)                               |
-| `--no-boot`            | Create without booting                                                                                                     |
-| `--set-default`        | Make this the default distro (automatic when nothing is)                                                                   |
-| `--force`              | Allow the name of an existing `container machine` — see below                                                              |
+| Option                 | Description                                                                                                                                                                                                 |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-n, --name`           | Distro name (lowercase DNS-style)                                                                                                                                                                           |
+| `-v, --volume`         | `SRC:DST[:opt,...]` share a host directory (repeatable); opts: `ro`/`rw` plus guest mount flags `nosuid`,`nodev`,`noexec`,`noatime`,`nodiratime`,`relatime`,`sync`,`dirsync`                                |
+| `--automount[=MODE]`   | Share every `/Volumes/<X>` at `/mnt/<x>`; `MODE` is `rw` (default) or `ro` (skips hidden/`com.apple.*`/unreadable volumes). Shares get `nosuid,nodev`; with no `--home-mount`, home follows `MODE` (warned) |
+| `-p, --publish`        | `[HOST_IP:]HOST[:GUEST][/tcp\|udp]` (repeatable; HOST_IP defaults to `127.0.0.1`)                                                                                                                           |
+| `--cpus`               | Virtual CPUs (default: half the host's)                                                                                                                                                                     |
+| `--memory`             | e.g. `8G` (default: half the host's)                                                                                                                                                                        |
+| `--home-mount`         | `rw`/`ro`/`none` — default `none` for `create`/`import` (`rw` via `catalog install`); an explicit `--automount` mode is used if unset                                                                       |
+| `--network`            | Container network name; `none` for no network                                                                                                                                                               |
+| `--ssh` / `--no-ssh`   | Forward the host SSH agent socket (default: on only when the effective home-mount is `rw`)                                                                                                                  |
+| `--sudo` / `--no-sudo` | Provision passwordless sudo/doas (default: on)                                                                                                                                                              |
+| `--restricted`         | Defaults preset: `--home-mount none --network none --no-ssh --no-sudo` (alias `--untrusted`)                                                                                                                |
+| `--trusted`            | Mirror preset: `--home-mount rw --automount rw --ssh` — also opts a locked-down distro into `migrate --machine`                                                                                             |
+| `--no-boot`            | Create without booting                                                                                                                                                                                      |
+| `--set-default`        | Make this the default distro (automatic when nothing is)                                                                                                                                                    |
+| `--force`              | Allow the name of an existing `container machine` — see below                                                                                                                                               |
 
 Creating a distro named after an existing `container machine` is
 **refused** without `--force`: `cm` resolves a shared name to the
@@ -196,12 +200,12 @@ serializing `set` against start/delete.
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | `--cpus`                                      | Virtual CPUs                                                                                                                    |
 | `--memory`                                    | e.g. `8G`                                                                                                                       |
-| `--home-mount`                                | `rw`/`ro`/`none`                                                                                                                |
+| `--home-mount`                                | `rw`/`ro`/`none` — replaces the create-time default                                                                             |
 | `--network`                                   | Network name; `none` disables, `default` restores                                                                               |
 | `--ssh`/`--no-ssh`                            | SSH-agent forwarding                                                                                                            |
 | `--sudo`/`--no-sudo`                          | Sudo/doas provisioning -- `--no-sudo` stops *future* grants; sudoers/doas files already inside the guest remain                 |
 | `--automount[=rw\|ro\|none]`/`--no-automount` | Auto-manage `/Volumes` mounts at `/mnt/<name>`; enabling reconciles now and at each start, `none`/`--no-automount` removes them |
-| `--add-volume`                                | `SRC:DST[:ro]` add or replace a mount by guest path                                                                             |
+| `--add-volume`                                | `SRC:DST[:opt,...]` add or replace a mount by guest path (same option set as `-v`)                                              |
 | `--rm-volume`                                 | `DST` remove the mount at that guest path                                                                                       |
 | `--publish`                                   | Add a published port (replaces one on the same host port)                                                                       |
 | `--unpublish`                                 | `HOST_PORT` stop publishing that host port                                                                                      |

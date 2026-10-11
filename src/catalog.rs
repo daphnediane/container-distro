@@ -91,6 +91,13 @@ pub struct Entry {
     pub amd64_url: Option<Download>,
     #[serde(default)]
     pub arm64_url: Option<Download>,
+    /// Our extension: the `--home-mount` default when installing this
+    /// entry (`rw`/`ro`/`none`; absent → `rw`, since installing from a
+    /// catalog — built-in or `--catalog FILE` — is an act of trust in
+    /// its curation). A catalog can pin a tighter default for entries
+    /// it wants to mark semi-trusted.
+    #[serde(default)]
+    pub home_mount: Option<crate::spec::HomeMount>,
 }
 
 /// What an entry installs from on this host.
@@ -415,6 +422,22 @@ mod tests {
             Source::Image(_) => panic!("expected wsl download"),
         }
         assert!(!e.installable("riscv"));
+    }
+
+    #[test]
+    fn entry_home_mount_override_parses() {
+        let text = r#"{"ModernDistributions":{"v":[
+            {"Name":"a","Image":"x:1","HomeMount":"ro"},
+            {"Name":"b","Image":"x:2","HomeMount":"none"},
+            {"Name":"c","Image":"x:3"}
+        ]}}"#;
+        let f = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(f.path(), text).unwrap();
+        let cat = load(Some(f.path())).unwrap();
+        use crate::spec::HomeMount;
+        assert_eq!(cat.entries[0].home_mount, Some(HomeMount::Ro));
+        assert_eq!(cat.entries[1].home_mount, Some(HomeMount::None));
+        assert_eq!(cat.entries[2].home_mount, None);
     }
 
     #[test]

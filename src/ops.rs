@@ -130,18 +130,34 @@ impl DistroSummary {
     }
 }
 
+/// Which defaults preset a creation runs at: `--restricted` locks
+/// everything down, `--trusted` opens the full WSL-style tier, and
+/// neither leaves the source-dependent defaults. The two flags are
+/// stored as separate clap bools (they conflict at parse), so this is
+/// what internal code reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Preset {
+    #[default]
+    Default,
+    Restricted,
+    Trusted,
+}
+
 /// Options shared by `create` and `import`.
 #[derive(Debug, Clone, Default, PartialEq, clap::Args)]
 pub struct CreateOptions {
-    /// Share a host directory: SRC:DST[:ro] (repeatable)
-    #[arg(short = 'v', long = "volume", value_name = "SRC:DST[:ro]")]
+    /// Share a host directory: SRC:DST[:opt,...] where opts include
+    /// ro, rw, and guest mount flags (nosuid, nodev, noexec, noatime,
+    /// relatime, strictatime, sync, dirsync — repeatable)
+    #[arg(short = 'v', long = "volume", value_name = "SRC:DST[:opt,...]")]
     pub volumes: Vec<MountSpec>,
 
     /// Share every /Volumes/<name> at /mnt/<name> (like WSL's
     /// /mnt/<drive>); `--automount ro` mounts read-only. Hidden,
     /// Apple-private (com.apple.*), and unreadable volumes are skipped.
     /// Re-resolved on `set` and when a stopped distro starts, so
-    /// attaching or ejecting a volume needs no manual fix-up
+    /// attaching or ejecting a volume needs no manual fix-up. With no
+    /// --home-mount, your home directory gets the same access (warned)
     #[arg(long, value_enum, num_args = 0..=1, require_equals = true,
           default_missing_value = "rw", value_name = "rw|ro|none")]
     pub automount: Option<Automount>,
@@ -159,7 +175,9 @@ pub struct CreateOptions {
     #[arg(long)]
     pub memory: Option<String>,
 
-    /// How to share your macOS home directory
+    /// How to share your macOS home directory (default: none —
+    /// read-write only for distros installed through a catalog entry,
+    /// or when --automount implies the same access)
     #[arg(long, value_enum)]
     pub home_mount: Option<HomeMount>,
 
@@ -167,7 +185,8 @@ pub struct CreateOptions {
     #[arg(long, value_name = "NAME")]
     pub network: Option<String>,
 
-    /// Forward the host SSH agent socket into the distro
+    /// Forward the host SSH agent socket into the distro (default: only
+    /// when the effective home-mount is rw — the same trust tier)
     #[arg(long, conflicts_with = "no_ssh")]
     pub ssh: bool,
 
@@ -189,6 +208,12 @@ pub struct CreateOptions {
     #[arg(long, visible_alias = "untrusted")]
     pub restricted: bool,
 
+    /// Trusted defaults for images you fully trust: home mount rw,
+    /// /Volumes automounted rw, SSH agent forwarded. Explicit flags
+    /// still apply — the mirror of --restricted.
+    #[arg(long, conflicts_with = "restricted")]
+    pub trusted: bool,
+
     /// Create without booting
     #[arg(long)]
     pub no_boot: bool,
@@ -203,6 +228,20 @@ pub struct CreateOptions {
     /// shadowing the machine, so the collision is refused without this
     #[arg(long)]
     pub force: bool,
+}
+
+impl CreateOptions {
+    /// The defaults preset the flags select. `--restricted` and
+    /// `--trusted` conflict at parse, so the bools can't both be set.
+    pub fn preset(&self) -> Preset {
+        if self.restricted {
+            Preset::Restricted
+        } else if self.trusted {
+            Preset::Trusted
+        } else {
+            Preset::Default
+        }
+    }
 }
 
 const INIT_SCRIPT: &str = include_str!("../assets/init");
@@ -670,41 +709,106 @@ fn resolve_mounts(opts: &CreateOptions) -> Result<Vec<MountSpec>> {
     Ok(mounts)
 }
 
-fn build_spec(name: String, image: String, opts: &CreateOptions) -> Result<DistroSpec> {
+impl CreateOptions {
+    /// The effective home-mount: explicit `--home-mount`, then the
+    /// preset (`--restricted` → none, `--trusted` → rw — presets beat
+    /// the derived automount-follows default, so `--trusted
+    /// --automount ro` is rw home with ro volumes), then an explicit
+    /// `--automount` mode (warned), then `base` — the source default,
+    /// the journaled spec's value, or a machine's recorded config.
+    pub fn effective_home_mount(&self, base: HomeMount) -> HomeMount {
+        if let Some(h) = self.home_mount {
+            return h;
+        }
+        match self.preset() {
+            Preset::Restricted => return HomeMount::None,
+            Preset::Trusted => return HomeMount::Rw,
+            Preset::Default => {}
+        }
+        if let Some(am) = self.automount.filter(|a| a.enabled()) {
+            let h = am.home_mount();
+            eprintln!(
+                "container-distro: warning: --automount {} with no --home-mount gives your home directory the same access ({}) — pass --home-mount to override",
+                am.as_str(),
+                h.as_str()
+            );
+            return h;
+        }
+        eprintln!(
+            "container-distro: home-mount {} (resolved default; pass --home-mount to override)",
+            base.as_str()
+        );
+        base
+    }
+
+    /// The effective automount mode: explicit, else `--trusted` → rw.
+    pub fn effective_automount(&self) -> Automount {
+        self.automount.unwrap_or(match self.preset() {
+            Preset::Trusted => Automount::Rw,
+            _ => Automount::None,
+        })
+    }
+
+    /// The effective SSH-agent default: `--ssh`/`--no-ssh`, then the
+    /// preset, then the same trust tier as `home_mount` — the agent is
+    /// "authenticate as you", so it's an rw-home-level capability.
+    /// Under `--restricted` every hole needs its own flag, so it's off
+    /// even with an explicit `--home-mount rw` — pass `--ssh` too.
+    pub fn effective_ssh(&self, home_mount: HomeMount) -> bool {
+        if self.ssh {
+            true
+        } else if self.no_ssh {
+            false
+        } else {
+            match self.preset() {
+                Preset::Restricted => false,
+                Preset::Trusted => true,
+                Preset::Default => home_mount == HomeMount::Rw,
+            }
+        }
+    }
+
+    /// The effective sudo/doas grant: explicit flags, then preset.
+    pub fn effective_admin(&self) -> bool {
+        if self.sudo {
+            true
+        } else if self.no_sudo {
+            false
+        } else {
+            self.preset() != Preset::Restricted
+        }
+    }
+
+    /// The effective network: explicit, else `--restricted` → none.
+    pub fn effective_network(&self) -> Option<String> {
+        self.network
+            .clone()
+            .or_else(|| (self.preset() == Preset::Restricted).then(|| "none".to_string()))
+    }
+}
+
+fn build_spec(
+    name: String,
+    image: String,
+    opts: &CreateOptions,
+    default_home: HomeMount,
+) -> Result<DistroSpec> {
     validate_name(&name)?;
     let mounts = resolve_mounts(opts)?;
     let (def_cpus, def_mem) = default_resources();
-    // --restricted is a defaults preset; explicit flags still apply.
-    let r = opts.restricted;
-    let admin = if opts.sudo {
-        true
-    } else if opts.no_sudo {
-        false
-    } else {
-        !r
-    };
+    let admin = opts.effective_admin();
+    let home_mount = opts.effective_home_mount(default_home);
     let spec = DistroSpec {
         name,
         image,
         cpus: Some(opts.cpus.unwrap_or(def_cpus)),
         memory: Some(opts.memory.clone().unwrap_or(def_mem)),
-        home_mount: opts
-            .home_mount
-            .unwrap_or(if r { HomeMount::None } else { HomeMount::Rw }),
+        home_mount,
         mounts,
-        automount: opts.automount.unwrap_or_default(),
+        automount: opts.effective_automount(),
         publish: opts.publish.clone(),
-        network: opts
-            .network
-            .clone()
-            .or_else(|| r.then(|| "none".to_string())),
-        ssh: if opts.ssh {
-            true
-        } else if opts.no_ssh {
-            false
-        } else {
-            !r
-        },
+        network: opts.effective_network(),
+        ssh: opts.effective_ssh(home_mount),
         admin,
         admin_grant: admin,
         user: host_user()?,
@@ -868,11 +972,21 @@ fn create_from_spec(spec: &DistroSpec, opts: &CreateOptions) -> Result<String> {
 }
 
 /// Create (and unless `no_boot`, boot) a distro; returns its name.
-pub fn create(name: Option<String>, opts: &CreateOptions, image: &str) -> Result<String> {
+/// `origin` is the provenance stamped into the journal;
+/// `default_home` is the `--home-mount` fallback when neither an
+/// explicit flag, `--restricted`, nor `--automount` settles it —
+/// `Rw` for built-in-catalog installs, `None` for everything else.
+pub fn create(
+    name: Option<String>,
+    opts: &CreateOptions,
+    image: &str,
+    origin: OriginSource,
+    default_home: HomeMount,
+) -> Result<String> {
     ensure_started()?;
     let name = name.unwrap_or_else(|| default_machine_name(image));
-    let mut spec = build_spec(name, image.to_string(), opts)?;
-    spec.origin = Some(stamped_origin(OriginSource::Image));
+    let mut spec = build_spec(name, image.to_string(), opts, default_home)?;
+    spec.origin = Some(stamped_origin(origin));
     create_from_spec(&spec, opts)
 }
 
@@ -977,7 +1091,9 @@ fn journal_summary(name: &str, default: Option<&str>) -> Option<DistroSummary> {
 fn origin_source_display(s: &OriginSource) -> Option<String> {
     match s {
         OriginSource::File { path } => Some(format!("file:{}", source_basename(path))),
-        OriginSource::Download { name, .. } => Some(format!("catalog:{name}")),
+        OriginSource::Download { name, .. } | OriginSource::CatalogImage { name } => {
+            Some(format!("catalog:{name}"))
+        }
         _ => None,
     }
 }
@@ -2319,12 +2435,14 @@ pub enum ImportSource<'a> {
     },
 }
 
-/// Create a distro from a rootfs tar; returns its name.
+/// Create a distro from a rootfs tar; returns its name. `default_home`
+/// is the `--home-mount` fallback, as in [`create`].
 pub fn import(
     name: &str,
     file: &Path,
     opts: &CreateOptions,
     source: ImportSource<'_>,
+    default_home: HomeMount,
 ) -> Result<String> {
     validate_name(name)?;
     ensure_started()?;
@@ -2363,7 +2481,7 @@ pub fn import(
         }
     }
     oci::load_rootfs(rootfs, &reference, &labels)?;
-    let mut spec = build_spec(name.to_string(), reference, opts)?;
+    let mut spec = build_spec(name.to_string(), reference, opts, default_home)?;
     spec.origin = Some(stamped_origin(match source {
         ImportSource::Local => OriginSource::File {
             path: file.to_string_lossy().into_owned(),
@@ -2646,14 +2764,7 @@ pub fn migrate(
 /// mount, and provisioned account, with `opts` overrides on top
 /// (`--restricted` remains a defaults preset, like at `create`).
 fn spec_from_machine(name: &str, m: &MachineDetail, opts: &CreateOptions) -> Result<DistroSpec> {
-    let r = opts.restricted;
-    let admin = if opts.sudo {
-        true
-    } else if opts.no_sudo {
-        false
-    } else {
-        !r
-    };
+    let admin = opts.effective_admin();
     let user = match &m.user_setup {
         Some(u) => HostUser {
             name: u.username.clone(),
@@ -2662,11 +2773,9 @@ fn spec_from_machine(name: &str, m: &MachineDetail, opts: &CreateOptions) -> Res
         },
         None => host_user()?,
     };
-    let home_mount = match opts.home_mount {
-        Some(h) => h,
-        None if r => HomeMount::None,
-        None => m.home_mount.as_deref().unwrap_or("rw").parse()?,
-    };
+    // The base is the machine's recorded home-mount (upstream defaults
+    // to rw), not a source default.
+    let home_mount = opts.effective_home_mount(m.home_mount.as_deref().unwrap_or("rw").parse()?);
     let image = m
         .image
         .as_ref()
@@ -2682,19 +2791,10 @@ fn spec_from_machine(name: &str, m: &MachineDetail, opts: &CreateOptions) -> Res
             .or_else(|| m.memory.map(|b| format!("{}M", b / (1024 * 1024)))),
         home_mount,
         mounts: resolve_mounts(opts)?,
-        automount: opts.automount.unwrap_or_default(),
+        automount: opts.effective_automount(),
         publish: opts.publish.clone(),
-        network: opts
-            .network
-            .clone()
-            .or_else(|| r.then(|| "none".to_string())),
-        ssh: if opts.ssh {
-            true
-        } else if opts.no_ssh {
-            false
-        } else {
-            !r
-        },
+        network: opts.effective_network(),
+        ssh: opts.effective_ssh(home_mount),
         admin,
         admin_grant: admin,
         user,
@@ -2957,8 +3057,20 @@ fn machine_create_image(spec_image: &str, carrying: bool) -> Result<String> {
 /// `container machine create` for a distro migrating out: its
 /// cpus/memory/home-mount with `opts` overrides on top. The machine
 /// boots once — its plugin-state rootfs only materializes then — and is
-/// stopped by the caller for the filesystem swap.
+/// stopped by the caller for the filesystem swap. A machine forwards
+/// SSH_AUTH_SOCK at every boot with no opt-out, so only the trusted
+/// tier (rw home) may migrate out — matching the `cm --install
+/// --machine` refusal.
 fn create_machine(name: &str, image: &str, spec: &DistroSpec, opts: &CreateOptions) -> Result<()> {
+    let home = opts.effective_home_mount(spec.home_mount);
+    if home != HomeMount::Rw {
+        bail!(
+            "`container machine` always forwards your SSH agent — a {home} distro can't \
+             become a machine; pass --trusted or --home-mount rw to opt into the \
+             trusted tier",
+            home = home.as_str()
+        );
+    }
     let mut a: Vec<String> = ["machine", "create", "--name", name]
         .map(String::from)
         .to_vec();
@@ -2968,10 +3080,7 @@ fn create_machine(name: &str, image: &str, spec: &DistroSpec, opts: &CreateOptio
     if let Some(m) = opts.memory.clone().or_else(|| spec.memory.clone()) {
         a.extend(["--memory".into(), m]);
     }
-    a.extend([
-        "--home-mount".into(),
-        opts.home_mount.unwrap_or(spec.home_mount).as_str().into(),
-    ]);
+    a.extend(["--home-mount".into(), home.as_str().into()]);
     a.push(image.to_string());
     let a: Vec<&str> = a.iter().map(String::as_str).collect();
     run_container(&a)
@@ -3873,6 +3982,101 @@ mod tests {
         assert!(!no_default(None, &[], &[machine("m", true)]));
     }
 
+    #[test]
+    fn home_mount_default_resolution() {
+        // An explicit flag wins over everything — even --restricted.
+        let opts = CreateOptions {
+            home_mount: Some(HomeMount::Rw),
+            restricted: true,
+            automount: Some(Automount::Ro),
+            ..CreateOptions::default()
+        };
+        assert_eq!(opts.effective_home_mount(HomeMount::None), HomeMount::Rw);
+        // --restricted pins none.
+        let opts = CreateOptions {
+            restricted: true,
+            automount: Some(Automount::Rw),
+            ..CreateOptions::default()
+        };
+        assert_eq!(opts.effective_home_mount(HomeMount::Rw), HomeMount::None);
+        // An explicit --automount is followed (and warns).
+        for (am, want) in [
+            (Automount::Rw, HomeMount::Rw),
+            (Automount::Ro, HomeMount::Ro),
+            (Automount::None, HomeMount::None),
+        ] {
+            let opts = CreateOptions {
+                automount: Some(am),
+                ..CreateOptions::default()
+            };
+            assert_eq!(opts.effective_home_mount(HomeMount::None), want, "{am:?}");
+        }
+        // --trusted presets rw regardless of source, and beats the
+        // automount-follows default (ro volumes, still rw home).
+        let opts = CreateOptions {
+            trusted: true,
+            ..CreateOptions::default()
+        };
+        assert_eq!(opts.effective_home_mount(HomeMount::None), HomeMount::Rw);
+        let opts = CreateOptions {
+            trusted: true,
+            automount: Some(Automount::Ro),
+            ..CreateOptions::default()
+        };
+        assert_eq!(opts.effective_home_mount(HomeMount::None), HomeMount::Rw);
+        // Otherwise the source default applies.
+        let opts = CreateOptions::default();
+        assert_eq!(opts.effective_home_mount(HomeMount::Rw), HomeMount::Rw);
+        assert_eq!(opts.effective_home_mount(HomeMount::None), HomeMount::None);
+    }
+
+    #[test]
+    fn ssh_default_follows_home_tier() {
+        // Catalog-tier rw → agent on; ad-hoc none → off.
+        let opts = CreateOptions::default();
+        for (default, want) in [(HomeMount::Rw, true), (HomeMount::None, false)] {
+            let spec = build_spec("d".into(), "img".into(), &opts, default).unwrap();
+            assert_eq!(spec.ssh, want, "{default:?}");
+        }
+        // --restricted beats an explicit rw home: every hole needs its
+        // own flag there.
+        let opts = CreateOptions {
+            restricted: true,
+            home_mount: Some(HomeMount::Rw),
+            ..CreateOptions::default()
+        };
+        assert!(
+            !build_spec("d".into(), "i".into(), &opts, HomeMount::None)
+                .unwrap()
+                .ssh
+        );
+        // --trusted presets home rw, automount rw, and the agent.
+        let opts = CreateOptions {
+            trusted: true,
+            ..CreateOptions::default()
+        };
+        let spec = build_spec("d".into(), "i".into(), &opts, HomeMount::None).unwrap();
+        assert!(spec.ssh);
+        assert_eq!(spec.home_mount, HomeMount::Rw);
+        assert_eq!(spec.automount, Automount::Rw);
+    }
+
+    #[test]
+    fn migrate_out_requires_trusted_tier() {
+        // A machine forwards SSH_AUTH_SOCK at every boot — a non-rw
+        // distro can't become one. The check bails before `container`
+        // is ever spawned.
+        let mut spec = spec();
+        spec.home_mount = HomeMount::None;
+        let err = create_machine("m", "img", &spec, &CreateOptions::default())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("--trusted"), "{err}");
+        // An rw spec passes the check; --home-mount rw and --trusted
+        // both lift a non-rw spec (they proceed past it to spawn
+        // `container`, so only the refusal is unit-testable here).
+    }
+
     // ---- migrate ----
 
     fn detail_json() -> MachineDetail {
@@ -3909,7 +4113,8 @@ mod tests {
                 gid: 20
             }
         );
-        assert!(spec.ssh && spec.admin && spec.admin_grant);
+        // homeMount is ro → the agent default follows the home tier: off.
+        assert!(!spec.ssh && spec.admin && spec.admin_grant);
         assert!(!spec.is_restricted());
     }
 

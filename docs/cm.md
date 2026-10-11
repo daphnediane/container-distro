@@ -150,8 +150,8 @@ way: the distro's disk carries into a new `container machine`.
 ```text
 cm --install [DISTRO|IMAGE] [--name NAME] [--no-launch]
                   [--cpus N] [--memory SIZE] [--home-mount rw|ro|none]
-                  [--machine] [--restricted] [--force]
-                  [--share SRC:DST[:ro]]... [--publish SPEC]...
+                  [--machine] [--restricted|--trusted] [--force]
+                  [--share SRC:DST[:opt,...]]... [--publish SPEC]...
 cm --install --from-image IMAGE ...
 cm --install --from-file ROOTFS.tar|.wsl ...
 cm --catalog FILE --install DISTRO | -l -o
@@ -181,7 +181,8 @@ whose schema is Microsoft's `DistributionInfo.json` — the file behind
 with a `Name`, `FriendlyName`, and either `Image` (an OCI reference;
 installs can create a machine or distro) or per-arch `Amd64Url` /
 `Arm64Url` `.wsl` downloads (`{"Url", "Sha256"}`; the rootfs is
-fetched, verified, and imported as a distro). Downloads are cached
+fetched, verified, and imported as a distro). An optional `HomeMount`
+field (`rw`/`ro`/`none`) pins the entry's home-share default. Downloads are cached
 content-addressed (`<sha256>.wsl`) under the Darwin per-user cache
 directory (`cm -l --cache` lists it, `cm --purge-cache` empties it),
 so a second install skips the fetch; the OS may reclaim the cache
@@ -236,10 +237,25 @@ fresh install drops straight into a shell. `--machine` runs
 `container machine create` instead — for WSL-parity testing and
 upstream comparisons — and is rejected alongside the distro-only
 options `--share`/`--publish`/`--restricted`/`--from-file`, which have
-no machine equivalent. `--restricted` (alias `--untrusted`) is a
+no machine equivalent. It is also refused when the home-mount would
+resolve below `rw`: `container machine` forwards your SSH agent at
+every boot and can't disable it, so a machine only runs at the
+trusted tier — pass `--trusted` (or `--home-mount rw`) to opt in.
+
+`--trusted` is the mirror preset of `--restricted`: rw home, rw
+`/Volumes` automount, and the SSH agent — for images you'd give your
+own login session. Explicit flags still override it. `--restricted` (alias `--untrusted`) is a
 defaults preset for semi-trusted images: no home share, no network, no
 SSH-agent forward, no sudo -- explicit flags still apply, and it is
 *not* a sandbox (see security.md).
+
+The home share follows trust: a name that resolves to a catalog entry
+defaults to `--home-mount rw` (resolving through a catalog is treated
+as an act of trust — including a `--catalog FILE`, which implies trust
+in that manifest); a bare image ref, `--from-image`, or `--from-file`
+defaults to `none`. An explicit `--home-mount` always wins. The
+equivalent on `container distro create`/`import` also lets an explicit
+`--automount rw|ro` set the home default (with a warning).
 
 ## Exporting and importing
 

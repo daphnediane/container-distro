@@ -55,6 +55,10 @@ pub struct InstallOpts {
     /// Restricted defaults (no mounts, network, agent, sudo). Distro-only
     /// — machines can't be restricted.
     pub restricted: bool,
+    /// Trusted defaults (rw home, rw automount, SSH agent). With
+    /// `--machine`, opts an untrusted-tier install into the agent-
+    /// forwarding tier machines always run at.
+    pub trusted: bool,
     /// Allow the new machine or distro to share its name with one in
     /// the other backend (`cm` resolves a shared name to the distro).
     pub force: bool,
@@ -260,7 +264,9 @@ pub struct Args {
     #[arg(long = "memory", requires = "install", value_name = "SIZE")]
     pub memory: Option<String>,
 
-    /// Home directory mount for the machine created by --install
+    /// Home directory mount for what --install creates (default: none —
+    /// rw only for distros installed from a catalog entry, which implies
+    /// trust in that catalog)
     #[arg(
         long = "home-mount",
         requires = "install",
@@ -286,9 +292,17 @@ pub struct Args {
     #[arg(long = "restricted", visible_alias = "untrusted", requires = "install")]
     pub restricted: bool,
 
+    /// Trusted defaults for what --install creates: rw home share,
+    /// /Volumes automounted rw (distros), SSH agent forwarded — the
+    /// mirror of --restricted. Also opts an untrusted-tier install into
+    /// --machine, which always forwards the agent.
+    #[arg(long = "trusted", requires = "install", conflicts_with = "restricted")]
+    pub trusted: bool,
+
     /// Share a host directory into a distro created by --install:
-    /// SRC:DST[:ro] (repeatable; implies --distro)
-    #[arg(long = "share", requires = "install", value_name = "SRC:DST[:ro]")]
+    /// SRC:DST[:opt,...] — ro, rw, and guest mount flags like
+    /// nosuid,nodev,noexec (repeatable; implies --distro)
+    #[arg(long = "share", requires = "install", value_name = "SRC:DST[:opt,...]")]
     pub shares: Vec<MountSpec>,
 
     /// Publish a port from a distro created by --install:
@@ -531,6 +545,7 @@ impl Args {
                 distro: self.distro,
                 machine: self.machine,
                 restricted: self.restricted,
+                trusted: self.trusted,
                 force: self.force,
                 shares: self.shares.clone(),
                 publish: self.publish.clone(),
@@ -801,6 +816,7 @@ mod tests {
                 distro: false,
                 machine: false,
                 restricted: false,
+                trusted: false,
                 force: false,
                 shares: vec![],
                 publish: vec![],
