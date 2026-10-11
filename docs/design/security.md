@@ -66,10 +66,10 @@ is a cross-container integrity risk, not just a same-guest one.
   create into `spec.home_mount`, so `set` recreations never silently
   change an existing distro's posture.
 - **Re-evaluate if:** the catalog-trust heuristic stops matching how
-  distros actually get installed, or scoped subdir shares (home `ro`
-  + a narrow rw overlay — expressible today) deserve a first-class
-  flag. Remaining hole: catalog `Image` refs are pulled **by tag**,
-  which is mutable — see T4's "known hole" note.
+  distros actually get installed, or scoped subdir shares (home `ro` +
+  a narrow rw overlay — expressible today) deserve a first-class flag.
+  Remaining hole: catalog `Image` refs are pulled **by tag**, which
+  is mutable — see T4's "known hole" note.
 
 ### T2. `SSH_AUTH_SOCK` is forwarded into every machine and distro
 
