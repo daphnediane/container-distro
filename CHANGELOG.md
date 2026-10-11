@@ -4,6 +4,53 @@ User-facing changes per release, newest first. Written at release time
 from the commit log and the TODO items completed since the previous
 tag -- see docs/design/release.md.
 
+## 0.6.0 -- 2026-10-11
+
+### Added
+
+- `cm --update` and `container distro update` — the `wsl --update`
+  analog. Fetches a GitHub release pkg (latest or a named `vX.Y.Z`),
+  verifies its SHA-256 against the API digest and its Developer ID
+  signature and signing team against the installed binary, then hands
+  it to Installer.app via `exec`. `--dry-run` resolves and verifies
+  without installing; consent prompts cover downgrades, same-version,
+  unsigned CI pkgs, team mismatch, and non-pkg installs (`--force`
+  skips; non-tty refuses).
+- Releases now ship a macOS `.pkg` installer and a `cargo-binstall`
+  tarball (`cargo binstall container-distro` resolves the aarch64
+  tarball) — installing no longer requires a Rust toolchain. The pkg
+  stages binaries, the `container distro` plugin registration, man
+  pages, completions, and license notices under `/usr/local`.
+- `uninstall-container-distro.sh`, shipped in the pkg on Apple's
+  `uninstall-container.sh` model: `-k` keeps per-user state, `-d` also
+  deletes every distro, `sudo` only where needed, `-n` previews.
+- `container distro delete --all` (alias `rm --all`) deletes the union
+  of journaled distros and labeled containers.
+- `--trusted` preset — the mirror of `--restricted`: rw home, rw
+  automount, SSH agent forwarded.
+- Mount options on `MountSpec`: `SRC:DST[:opt,...]` whitelisted to
+  `ro`/`rw` plus guest flags (`nosuid`, `nodev`, `noexec`, `noatime`,
+  `nodiratime`, `relatime`, `sync`, `dirsync`); `--automount` shares
+  get `nosuid,nodev` automatically.
+- Draft security policy (`SECURITY.md`).
+
+### Changed
+
+- **Home share and SSH agent are now trust-tiered.** Ad-hoc distros
+  (`create` / `import` / `--from-file` / bare image refs) default to no
+  home mount and no agent forwarding; only installs resolved through a
+  catalog (built-in or `--catalog FILE`) keep the full WSL-style
+  exposure, and catalog entries can pin their own via an optional
+  `HomeMount` field. `--restricted` beats an explicit `--home-mount
+  rw`. `container machine` can't honor agent-off (upstream forwards
+  `SSH_AUTH_SOCK` unconditionally), so `cm --install --machine` and
+  `cm --migrate --machine` are refused below rw home — `--trusted` is
+  the opt-in.
+- Test seams are gated behind a per-invocation `--dev` flag on both
+  binaries (`CONTAINER_DISTRO_RELEASES_URL` release lookups and a
+  non-default `CONTAINER_CLI`), so a planted environment variable can't
+  steer a privileged path.
+
 ## 0.5.0 -- 2026-10-10
 
 ### Added

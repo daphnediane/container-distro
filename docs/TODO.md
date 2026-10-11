@@ -52,27 +52,6 @@ source of truth. "Rung" references are the integration levels in
   narrower "stop what we started" primitive appears upstream ([#11];
   [service-startup])
 
-## Security & hardening
-
-From [security.md's checklist]:
-
-### For 1.0 — security
-
-- [ ] Nudge semi-trusted workloads off rw home shares -- an rw-home
-  guest can tamper with runtime-managed state that *other* containers
-  rely on, not just its own files (design/security.md T1). Options: a
-  create-time hint when registering non-`--restricted` distros, docs
-  recommending `home-mount ro` as the default posture for generated or
-  imported images, or a scoped-subdir share instead of all of
-  `$HOME` ([#19])
-
-## Docs & tooling
-
-### For 1.0 — docs & tooling
-
-- [x] Packages -- releases ship a macOS .pkg installer and a
-  `cargo-binstall` tarball;  ([#14]; [install], [packaging])
-
 [#3]: https://github.com/daphnediane/container-distro/issues/3
 [#4]: https://github.com/daphnediane/container-distro/issues/4
 [#5]: https://github.com/daphnediane/container-distro/issues/5
@@ -81,9 +60,7 @@ From [security.md's checklist]:
 [#8]: https://github.com/daphnediane/container-distro/issues/8
 [#9]: https://github.com/daphnediane/container-distro/issues/9
 [#11]: https://github.com/daphnediane/container-distro/issues/11
-[#14]: https://github.com/daphnediane/container-distro/issues/14
 [#15]: https://github.com/daphnediane/container-distro/issues/15
-[#19]: https://github.com/daphnediane/container-distro/issues/19
 [apple/container#1148]: https://github.com/apple/container/issues/1148
 [apple/container#1805]: https://github.com/apple/container/issues/1805
 [apple/container#2278]: https://github.com/apple/container/issues/2278
@@ -95,8 +72,5 @@ From [security.md's checklist]:
 [port-forwarding]: design/upstream-limitations.md#no-localhost-port-forwarding-for-machines
 [service-startup]: design/notes/service-startup.md
 [subprocess-overhead]: design/notes/subprocess-overhead.md
-[install]: install.md
-[packaging]: design/packaging.md
 [lower-level-integration]: design/lower-level-integration.md#rung-by-rung-how-low-can-cm-go
 [remote-wsl-interop]: design/remote-wsl-interop.md
-[security.md's checklist]: design/security.md#pre-10-checklist
