@@ -27,9 +27,9 @@ guest as roughly equivalent to code run on the host as you.
   Every other creation path — `container distro create` or
   `cm --install` with a bare image ref, `import`, `--from-file`,
   `--from-image` — defaults to `--home-mount none`, no host share at
-  all. An explicit `--automount rw|ro` implies you want host paths
-  shared, so home follows the same mode (a warning is printed when it
-  does). Whatever the default, an rw home lets guest code write
+  all. The effective `--automount` mode implies you want host paths
+  shared, so home follows it (a warning is printed when it does).
+  Whatever the default, an rw home lets guest code write
   `~/.zshrc`, `~/.ssh/authorized_keys`, `~/.gitconfig`
   (`core.hooksPath`), `~/Library/LaunchAgents` -- host code execution
   on your next login -- plus access to everything in `$HOME`, including
@@ -44,9 +44,10 @@ guest as roughly equivalent to code run on the host as you.
   authenticate *as you* -- push to your repos, ssh to your hosts --
   for as long as the guest runs. `--ssh`/`--no-ssh` override.
   `container machine` is the exception: upstream forwards the agent
-  at every boot with no opt-out, so `--install --machine` and
-  `migrate --machine` are refused unless the home-mount resolves to
-  `rw` — a machine can't run below the trusted tier.
+  at every boot with no opt-out (an upstream limitation), so
+  `--machine` itself is the opt-in — `cm --install --machine` and
+  `migrate --out` warn when the resolved agent setting is off, and
+  only refuse an explicit `--no-ssh` pin the machine can't honor.
 - **Instant guest root.** The provisioned user has passwordless
   sudo/doas and the container runs with `--cap-add ALL` -- guest user →
   guest root in one command. That's the WSL model too; the VM boundary,
@@ -81,9 +82,25 @@ function.
 
 The other direction: `--trusted` is the mirror preset — rw home,
 `/Volumes` automounted rw, SSH agent forwarded — for images you'd
-give your own login session. It also opts an untrusted-tier install
-into `--machine` (machines always forward the agent), and lets a
-locked-down distro `migrate --machine` out at the trusted tier.
+give your own login session. A machine forwards the agent
+unconditionally, so `--machine` operations just warn when the
+resolved setting is off; only a distro with agent forwarding
+*pinned* off (`set --no-ssh`) is refused a `migrate --out` until the
+pin is dropped (`set --ssh` or `set --reset ssh`).
+
+Presets are a recorded tier, not a one-time default flip: `--preset
+restricted|default|trusted` on `create`/`import`/`cm --install`
+(`--restricted`/`--trusted` are aliases) is journaled on the distro,
+and `container distro set --preset TIER` re-derives it later. Every
+option you ever set with an explicit flag is pinned and survives a
+tier change; everything else follows the tier — including implied
+chains like home-mount inheriting the effective automount mode. `set
+--reset OPTION` un-pins one option (back to preset/source-derived),
+`--reset mounts`/`--reset publish` clear those lists, and `--reset
+restricted|default|trusted` clears *every* pin and sets the tier.
+Catalog installs record the entry's curated home request as `source`
+intent: it fills options nothing else sets and caps what a tier
+would raise, but an explicit flag always wins over it.
 
 ## Restricted distros
 

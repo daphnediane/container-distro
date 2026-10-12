@@ -4,6 +4,51 @@ User-facing changes per release, newest first. Written at release time
 from the commit log and the TODO items completed since the previous
 tag -- see docs/design/release.md.
 
+## Unreleased
+
+### Added
+
+- **Presets are a journaled tier, not a one-time default flip.** `--preset
+  default|restricted|trusted` on `create`/`import`/`cm --install`
+  (`--restricted`/`--trusted` are aliases) records the tier on the distro,
+  and `container distro set --preset TIER` re-derives it later. Options
+  you set with an explicit flag stay pinned across tier changes;
+  everything else follows the tier — including chains like home-mount
+  inheriting the *effective* automount mode. `set` reports what was
+  re-derived and what stayed pinned.
+- **`set --reset`**: un-pin one option back to derived (`--reset
+  home-mount`, `--reset ssh`, …), clear a list (`--reset mounts`,
+  `--reset publish`), or reset every pin to a tier (`--reset
+  restricted` — also sets the preset).
+- **Catalog installs record `source` intent**: the entry's curated
+  home-mount request fills options nothing else sets and caps what a
+  tier would raise (a `ro`-pinned entry stays `ro` under `--trusted`),
+  but explicit flags always win.
+- **`distro list` shows the tier model**: MOUNTS gains `~`/`~(ro)` and
+  `automounts`/`automounts(ro)` tokens; JSON adds `mounts` (user mounts
+  only — automounts are no longer journaled), `automounts` (computed
+  shares, home included), `effectiveMounts`, and `preset`. CPUS/MEMORY
+  show a pinned value plainly, the host's pick bracketed (`[8]`), or
+  `-` when nothing is recorded — unpinned resources are no longer
+  frozen into the journal at create, so a host upgrade just changes
+  what future boots get.
+- `cm --install` gains `--preset` and `--ssh`/`--no-ssh`.
+
+### Changed
+
+- **Automounts are computed at materialization, never stored.** The
+  journal's mount list is user mounts only; legacy journals drop
+  automount-derived entries on migration. A user mount wins a target
+  collision against a computed automount, and `automount none` no
+  longer removes a mount you added yourself.
+- **Machine-tier SSH check is honest about the knob.** `cm --install
+  --machine` and `migrate --out` warn when the resolved agent setting
+  is off rather than refusing non-`rw` home-mounts outright —
+  `container machine` forwards `SSH_AUTH_SOCK` at every boot
+  regardless (upstream has no opt-out), so choosing `--machine` is the
+  opt-in. Only an explicit opt-out still refuses: `--no-ssh` at
+  install, or a distro with `set --no-ssh` recorded on migrate.
+
 ## 0.6.0 -- 2026-10-11
 
 ### Added

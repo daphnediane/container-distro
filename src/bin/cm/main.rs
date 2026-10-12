@@ -25,7 +25,7 @@ use cli::{Action, Args, Backend, InstallOpts, InstallSource, ShellType};
 use container_distro::container::{self, ArgvMode};
 use container_distro::forward::PortMapping;
 use container_distro::ops::{self as distro, CreateOptions, RunOpts};
-use container_distro::spec::HomeMount;
+use container_distro::spec::Intent;
 use container_distro::{catalog, catalog_ops, wsl};
 use list::Entry;
 
@@ -413,7 +413,7 @@ fn resolve<'a>(
         InstallSource::Image(image) => Ok(catalog_ops::Resolved::Image {
             image,
             name: None,
-            default_home: HomeMount::None,
+            requested: Intent::default(),
         }),
         InstallSource::File(_) => bail!("internal error: file source resolved as image"),
     }
@@ -429,6 +429,9 @@ fn install(opts: &InstallOpts) -> Result<ExitCode> {
         cpus: opts.cpus.map(u64::from),
         memory: opts.memory.clone(),
         home_mount: opts.home_mount,
+        preset: opts.preset,
+        ssh: opts.ssh,
+        no_ssh: opts.no_ssh,
         restricted: opts.restricted,
         trusted: opts.trusted,
         force: opts.force,
@@ -439,12 +442,12 @@ fn install(opts: &InstallOpts) -> Result<ExitCode> {
     }
     let cat = catalog::load(opts.catalog.as_deref())?;
     let resolved = resolve(&cat, &opts.source)?;
-    let (image, hint, default_home) = match &resolved {
+    let (image, hint, requested) = match &resolved {
         catalog_ops::Resolved::Image {
             image,
             name,
-            default_home,
-        } => (*image, *name, *default_home),
+            requested,
+        } => (*image, *name, requested.clone()),
         catalog_ops::Resolved::Wsl { name, .. } => {
             // Machines boot from images — a catalog entry that only
             // ships a rootfs download can't satisfy `--machine`.
@@ -477,7 +480,7 @@ fn install(opts: &InstallOpts) -> Result<ExitCode> {
             catalog_ops::Resolved::Image {
                 image,
                 name: hint,
-                default_home,
+                requested: requested.clone(),
             },
             opts.name.clone(),
             &create,
@@ -504,41 +507,15 @@ fn install(opts: &InstallOpts) -> Result<ExitCode> {
     // A same-named distro hides the machine from every `cm` name
     // lookup — refused unless --force opts in.
     distro::bail_distro_shadow(&name, opts.force)?;
-    let mut cmd = container::container_cmd();
-    cmd.args(["machine", "create", "--name", &name]);
-    if let Some(c) = opts.cpus {
-        cmd.arg("--cpus").arg(c.to_string());
-    }
-    if let Some(m) = &opts.memory {
-        cmd.args(["--memory", m]);
-    }
-    // The resolved source carries the home-mount default — the
-    // catalog entry's override (`rw` unless pinned tighter), `none`
-    // for bare image refs — and `--restricted` pins `none` just like
-    // the distro path. An explicit --home-mount still wins.
-    // A machine forwards SSH_AUTH_SOCK into the guest at every boot
-    // (upstream reads the caller's env — there is no opt-out), so it
-    // can only run at the trusted tier our distro policy expresses as
-    // rw home. Anything less is refused rather than silently giving a
-    // "locked-down" machine the agent anyway. `create` is the
-    // CreateOptions built from this install's flags, so it resolves
-    // the same way the distro path does (automount can't reach here —
-    // it's a distro-only flag).
-    let home = create.effective_home_mount(default_home);
-    if home != HomeMount::Rw {
-        bail!(
-            "`container machine` always forwards your SSH agent — an untrusted-tier \
-             install can't be a machine; pass --trusted or --home-mount rw to opt in, \
-             or drop --machine for a distro"
-        );
-    }
-    cmd.args(["--home-mount", home.as_str()]);
-    let status = cmd
-        .arg(image)
-        .status()
-        .context("failed to run `container machine create`")?;
-    if !status.success() || opts.no_launch {
-        return Ok(exit_code(status));
+    // `machine create` is shared with `migrate --out`: the options
+    // resolve through the same intent chain, and the
+    // always-forwarded-agent check warns or refuses a `--no-ssh` pin
+    // (clap already conflicts `--machine --no-ssh`, so only a derived
+    // ssh-off reaches the warning).
+    let spec = create.spec(&requested);
+    distro::create_machine(&name, image, &spec, &create)?;
+    if opts.no_launch {
+        return Ok(ExitCode::SUCCESS);
     }
     let mut cmd = container::run_command(Some(&name), None, None, &[], None, &[], ArgvMode::Shell);
     Err(anyhow::Error::from(cmd.exec()).context("failed to exec `container machine run`"))
@@ -568,7 +545,7 @@ fn install_from_file(
         name_hint,
         create,
         source,
-        HomeMount::None,
+        &Intent::default(),
     )?;
     if opts.no_launch {
         return Ok(ExitCode::SUCCESS);
@@ -625,7 +602,7 @@ fn import(
                 ..CreateOptions::default()
             },
             distro::ImportSource::Local,
-            HomeMount::None,
+            &Intent::default(),
         )?;
     }
     Ok(ExitCode::SUCCESS)

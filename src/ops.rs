@@ -72,9 +72,10 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::spec::{
-    Automount, DistroOrigin, DistroSpec, HomeMount, HostUser, INIT_DIR, LABEL_DISTRO,
-    LABEL_EXPORT_SCRATCH, LABEL_HOME_MOUNT, LABEL_IMPORTED_FROM, LABEL_MACHINE,
-    LABEL_ROOTFS_SHA256, MountSpec, OriginSource, PublishSpec, SpecChanges, automounts,
+    Automount, DistroOrigin, DistroSpec, HomeMount, HostUser, INIT_DIR, Intent, JournalSpec,
+    LABEL_DISTRO, LABEL_EXPORT_SCRATCH, LABEL_HOME_MOUNT, LABEL_IMPORTED_FROM, LABEL_MACHINE,
+    LABEL_ROOTFS_SHA256, MountSpec, OriginSource, Preset, PublishSpec, ResolveCtx, ResolvedSpec,
+    SpecChanges, automounts, size_bytes,
 };
 
 /// One distro, as reported by [`summaries`] (and `list --format json`).
@@ -103,9 +104,23 @@ pub struct DistroSummary {
     pub platform: Option<String>,
     #[serde(default)]
     pub home_mount: Option<String>,
-    /// User mounts as `SRC:DST[:ro]`.
+    /// User mounts as `SRC:DST[:ro]` — the journaled shares only.
     #[serde(default)]
     pub mounts: Vec<String>,
+    /// The derived shares: the `/Volumes` automounts plus the home
+    /// mount — computed, never journaled.
+    #[serde(default)]
+    pub automounts: Vec<String>,
+    /// The full mount set passed to `container create`: `mounts` +
+    /// `automounts` with user mounts winning target collisions.
+    #[serde(default)]
+    pub effective_mounts: Vec<String>,
+    /// The `/Volumes` automount mode (`rw`/`ro`/`none`).
+    #[serde(default)]
+    pub automount: Option<String>,
+    /// The defaults tier (`default`/`restricted`/`trusted`).
+    #[serde(default)]
+    pub preset: Option<String>,
     /// Published ports as `IP:HOST:GUEST/PROTO`.
     #[serde(default)]
     pub ports: Vec<String>,
@@ -128,19 +143,6 @@ impl DistroSummary {
     pub fn is_running(&self) -> bool {
         self.status == "running"
     }
-}
-
-/// Which defaults preset a creation runs at: `--restricted` locks
-/// everything down, `--trusted` opens the full WSL-style tier, and
-/// neither leaves the source-dependent defaults. The two flags are
-/// stored as separate clap bools (they conflict at parse), so this is
-/// what internal code reads.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Preset {
-    #[default]
-    Default,
-    Restricted,
-    Trusted,
 }
 
 /// Options shared by `create` and `import`.
@@ -202,15 +204,21 @@ pub struct CreateOptions {
     #[arg(long)]
     pub no_sudo: bool,
 
+    /// The defaults tier the distro runs at — `default`,
+    /// `restricted`, or `trusted`. Recorded in the journal so `set
+    /// --preset` can re-derive every option you haven't pinned
+    #[arg(long, value_enum, conflicts_with_all = ["restricted", "trusted"])]
+    pub preset: Option<Preset>,
+
     /// Restricted defaults for semi-trusted images: home mount none, no
     /// network, no SSH agent, no sudo/doas. Explicit flags still apply.
-    /// A convenience preset, not a sandbox.
+    /// A convenience preset, not a sandbox. (`--preset restricted`)
     #[arg(long, visible_alias = "untrusted")]
     pub restricted: bool,
 
     /// Trusted defaults for images you fully trust: home mount rw,
     /// /Volumes automounted rw, SSH agent forwarded. Explicit flags
-    /// still apply — the mirror of --restricted.
+    /// still apply — the mirror of --restricted. (`--preset trusted`)
     #[arg(long, conflicts_with = "restricted")]
     pub trusted: bool,
 
@@ -231,16 +239,19 @@ pub struct CreateOptions {
 }
 
 impl CreateOptions {
-    /// The defaults preset the flags select. `--restricted` and
-    /// `--trusted` conflict at parse, so the bools can't both be set.
+    /// The defaults preset the flags select. `--preset`,
+    /// `--restricted`, and `--trusted` conflict at parse, so at most
+    /// one is set.
     pub fn preset(&self) -> Preset {
-        if self.restricted {
-            Preset::Restricted
-        } else if self.trusted {
-            Preset::Trusted
-        } else {
-            Preset::Default
-        }
+        self.preset.unwrap_or({
+            if self.restricted {
+                Preset::Restricted
+            } else if self.trusted {
+                Preset::Trusted
+            } else {
+                Preset::Default
+            }
+        })
     }
 }
 
@@ -358,7 +369,10 @@ fn host_memsize() -> Option<u64> {
 /// need live process/network/disk introspection — e.g. watching guest
 /// listeners for WSL-style automatic port forwarding — the `sysinfo`
 /// crate (CPU count, memory, processes, users) is the switch point.
-fn default_resources() -> (u64, String) {
+/// The host-derived resource defaults a distro materializes with
+/// when intent leaves them unset (half the host's cpus/memory) —
+/// `list` brackets them (`[8]`) to mark the value as derived.
+pub fn default_resources() -> (u64, String) {
     let cpus = std::thread::available_parallelism().map_or(2, |n| n.get() as u64);
     let mem = host_memsize().map_or_else(
         || "4G".to_string(),
@@ -685,105 +699,117 @@ fn scan_automounts(
     Ok(mounts)
 }
 
-/// Sync `spec`'s automounts with the currently attached `/Volumes`:
-/// canonical automounts are dropped and re-resolved; everything else —
-/// including a user's `ro` or differently-targeted `/Volumes` mount —
-/// is kept. Used by `set` and by start-time refresh.
-fn reconcile_automounts(spec: &mut DistroSpec) -> Result<()> {
-    spec.mounts.retain(|m| !crate::spec::is_automount(m));
-    let taken = spec.mounts.iter().map(|m| m.target.clone()).collect();
-    spec.mounts.extend(scan_automounts(spec.automount, &taken)?);
-    Ok(())
+/// The `/Volumes` shares to add at materialize time for `spec` — the
+/// automount scan when the mode is enabled, skipping targets the
+/// user's own mounts already claim. Derived, never journaled.
+fn auto_shares(r: &ResolvedSpec) -> Result<Vec<MountSpec>> {
+    if !r.automount.enabled() {
+        return Ok(Vec::new());
+    }
+    let taken = r.mounts.iter().map(|m| m.target.clone()).collect();
+    scan_automounts(r.automount, &taken)
 }
 
-/// The mounts requested by create options: explicit `-v`s plus
-/// `--automount` resolutions (readable volumes only, no target
-/// collisions).
-fn resolve_mounts(opts: &CreateOptions) -> Result<Vec<MountSpec>> {
-    let mut mounts = opts.volumes.clone();
-    let automount = opts.automount.unwrap_or_default();
-    if automount.enabled() {
-        let taken = mounts.iter().map(|x| x.target.clone()).collect();
-        mounts.extend(scan_automounts(automount, &taken)?);
+/// The host-dependent inputs `DistroSpec::resolve` can't see.
+fn resolve_ctx() -> ResolveCtx {
+    let (cpus, memory) = default_resources();
+    ResolveCtx { cpus, memory }
+}
+
+/// A clap flag pair (`--ssh`/`--no-ssh`) as an `Option<bool>` pin —
+/// they conflict at parse, so at most one is set.
+fn flag_pair(on: bool, off: bool) -> Option<bool> {
+    if on {
+        Some(true)
+    } else if off {
+        Some(false)
+    } else {
+        None
     }
-    Ok(mounts)
+}
+
+/// The `Intent` a `CreateOptions`' flags pin — the user side of the
+/// spec; the source side comes from the catalog entry or machine.
+fn create_intent(opts: &CreateOptions) -> Intent {
+    Intent {
+        home_mount: opts.home_mount,
+        automount: opts.automount,
+        ssh: flag_pair(opts.ssh, opts.no_ssh),
+        admin: flag_pair(opts.sudo, opts.no_sudo),
+        network: opts.network.clone(),
+        cpus: opts.cpus,
+        memory: opts.memory.clone(),
+    }
+}
+
+/// The options half of a spec: `opts`' flags as `explicit` intent
+/// resolved against `source`, before identity (name/image/user)
+/// lands — [`build_spec`] finishes those. Shared with the
+/// machine-tier checks (`--install --machine`, `migrate --out`) so
+/// what they probe is exactly the spec a distro would run.
+fn options_spec(opts: &CreateOptions, source: &Intent) -> DistroSpec {
+    DistroSpec {
+        // `resolve` never reads identity — `build_spec` fills it in.
+        name: String::new(),
+        image: String::new(),
+        mounts: opts.volumes.clone(),
+        publish: opts.publish.clone(),
+        user: HostUser::default(),
+        preset: opts.preset(),
+        explicit: create_intent(opts),
+        source: source.clone(),
+        admin_grant: false,
+        origin: None,
+    }
 }
 
 impl CreateOptions {
-    /// The effective home-mount: explicit `--home-mount`, then the
-    /// preset (`--restricted` → none, `--trusted` → rw — presets beat
-    /// the derived automount-follows default, so `--trusted
-    /// --automount ro` is rw home with ro volumes), then an explicit
-    /// `--automount` mode (warned), then `base` — the source default,
-    /// the journaled spec's value, or a machine's recorded config.
-    pub fn effective_home_mount(&self, base: HomeMount) -> HomeMount {
-        if let Some(h) = self.home_mount {
-            return h;
-        }
-        match self.preset() {
-            Preset::Restricted => return HomeMount::None,
-            Preset::Trusted => return HomeMount::Rw,
-            Preset::Default => {}
-        }
-        if let Some(am) = self.automount.filter(|a| a.enabled()) {
-            let h = am.home_mount();
-            eprintln!(
-                "container-distro: warning: --automount {} with no --home-mount gives your home directory the same access ({}) — pass --home-mount to override",
-                am.as_str(),
-                h.as_str()
-            );
-            return h;
-        }
-        eprintln!(
-            "container-distro: home-mount {} (resolved default; pass --home-mount to override)",
-            base.as_str()
-        );
-        base
+    /// The intent-side spec these flags describe for `source` —
+    /// identity (name/image/user) is left for the caller; `create`'s
+    /// path fills it via `build_spec`, and `create_machine` layers
+    /// `spec_changes` on a scratch copy.
+    pub fn spec(&self, source: &Intent) -> DistroSpec {
+        options_spec(self, source)
     }
 
-    /// The effective automount mode: explicit, else `--trusted` → rw.
-    pub fn effective_automount(&self) -> Automount {
-        self.automount.unwrap_or(match self.preset() {
-            Preset::Trusted => Automount::Rw,
-            _ => Automount::None,
-        })
+    /// The spec these flags resolve to for `source` — computed by
+    /// `DistroSpec::resolve` itself, so paths that need a resolved
+    /// field without a journal (the machine-tier checks) derive
+    /// exactly what a distro would.
+    pub fn resolved_spec(&self, source: &Intent) -> ResolvedSpec {
+        options_spec(self, source).resolve().0
     }
 
-    /// The effective SSH-agent default: `--ssh`/`--no-ssh`, then the
-    /// preset, then the same trust tier as `home_mount` — the agent is
-    /// "authenticate as you", so it's an rw-home-level capability.
-    /// Under `--restricted` every hole needs its own flag, so it's off
-    /// even with an explicit `--home-mount rw` — pass `--ssh` too.
-    pub fn effective_ssh(&self, home_mount: HomeMount) -> bool {
-        if self.ssh {
-            true
-        } else if self.no_ssh {
-            false
-        } else {
-            match self.preset() {
-                Preset::Restricted => false,
-                Preset::Trusted => true,
-                Preset::Default => home_mount == HomeMount::Rw,
-            }
+    /// `resolved_spec(source).home_mount` — for the `--home-mount`
+    /// arg the machine checks still pass through.
+    pub fn resolve_home_mount(&self, source: &Intent) -> HomeMount {
+        self.resolved_spec(source).home_mount
+    }
+
+    /// The flags as `SpecChanges` — set-style overrides layered onto
+    /// an existing spec (the `migrate --out` scratch spec). Only the
+    /// options a machine can honor reach it; `reject_machine_opts`
+    /// refuses the rest first.
+    pub fn spec_changes(&self) -> SpecChanges {
+        SpecChanges {
+            preset: self.preset.or(if self.restricted {
+                Some(Preset::Restricted)
+            } else if self.trusted {
+                Some(Preset::Trusted)
+            } else {
+                None
+            }),
+            cpus: self.cpus,
+            memory: self.memory.clone(),
+            home_mount: self.home_mount,
+            automount: self.automount,
+            network: self.network.clone(),
+            ssh: flag_pair(self.ssh, self.no_ssh),
+            admin: flag_pair(self.sudo, self.no_sudo),
+            add_mounts: self.volumes.clone(),
+            add_publish: self.publish.clone(),
+            ..SpecChanges::default()
         }
-    }
-
-    /// The effective sudo/doas grant: explicit flags, then preset.
-    pub fn effective_admin(&self) -> bool {
-        if self.sudo {
-            true
-        } else if self.no_sudo {
-            false
-        } else {
-            self.preset() != Preset::Restricted
-        }
-    }
-
-    /// The effective network: explicit, else `--restricted` → none.
-    pub fn effective_network(&self) -> Option<String> {
-        self.network
-            .clone()
-            .or_else(|| (self.preset() == Preset::Restricted).then(|| "none".to_string()))
     }
 }
 
@@ -791,30 +817,22 @@ fn build_spec(
     name: String,
     image: String,
     opts: &CreateOptions,
-    default_home: HomeMount,
+    source: &Intent,
 ) -> Result<DistroSpec> {
     validate_name(&name)?;
-    let mounts = resolve_mounts(opts)?;
-    let (def_cpus, def_mem) = default_resources();
-    let admin = opts.effective_admin();
-    let home_mount = opts.effective_home_mount(default_home);
-    let spec = DistroSpec {
-        name,
-        image,
-        cpus: Some(opts.cpus.unwrap_or(def_cpus)),
-        memory: Some(opts.memory.clone().unwrap_or(def_mem)),
-        home_mount,
-        mounts,
-        automount: opts.effective_automount(),
-        publish: opts.publish.clone(),
-        network: opts.effective_network(),
-        ssh: opts.effective_ssh(home_mount),
-        admin,
-        admin_grant: admin,
-        user: host_user()?,
-        origin: None,
-    };
-    if spec.network.as_deref() == Some("none") && !spec.publish.is_empty() {
+    let mut spec = options_spec(opts, source);
+    spec.name = name;
+    spec.image = image;
+    spec.user = host_user()?;
+    let (resolved, warnings) = spec.resolve();
+    for w in warnings {
+        eprintln!("container-distro: {w}");
+    }
+    // The grant env is armed at create — a guest that removes its own
+    // privilege files stays unprivileged until an explicit `set
+    // --sudo` re-arms it.
+    spec.admin_grant = resolved.admin;
+    if resolved.network.as_deref() == Some("none") && !spec.publish.is_empty() {
         eprintln!("container-distro: published ports have no effect without a network");
     }
     warn_public_publish(&spec.publish);
@@ -842,9 +860,20 @@ fn check_sources(spec: &DistroSpec) -> Result<()> {
 }
 
 /// Create `spec`'s container under the ephemeral runtime `id`.
+/// Automounts are resolved from the live `/Volumes` right here — the
+/// journal stays declarative, so an attached or ejected volume is
+/// picked up at every materialize, no rewrite needed.
 fn create_container(spec: &DistroSpec, id: &str) -> Result<()> {
     let assets = journal_assets_dir(&spec.name)?;
-    let args = spec.create_args(id, &assets.to_string_lossy(), &host_home()?);
+    let (resolved, _) = spec.resolve();
+    let auto = auto_shares(&resolved)?;
+    let args = resolved.create_args(
+        &resolve_ctx(),
+        id,
+        &assets.to_string_lossy(),
+        &host_home()?,
+        &auto,
+    );
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     run_container_quiet(&args)
 }
@@ -852,7 +881,8 @@ fn create_container(spec: &DistroSpec, id: &str) -> Result<()> {
 /// Boot distro `name`'s container `id` and (idempotently) provision
 /// the user account.
 fn boot(name: &str, id: &str, lock: &DistroLock) -> Result<()> {
-    refresh_mounted_assets(name, lock.spec()?.admin)?;
+    let (r, _) = lock.spec()?.resolve();
+    refresh_mounted_assets(name, r.admin)?;
     run_container_quiet(&["start", id])?;
     let init = format!("{INIT_DIR}/init");
     run_container(&["exec", "--user", "0:0", id, &init, "-u"])
@@ -880,13 +910,14 @@ fn report_ports(name: &str) {
 }
 
 /// Start `name` under its lock if it isn't running — converge any
-/// leftover container, re-resolve automounts, materialize fresh from
-/// the journal, boot — and return the running container.
+/// leftover container, materialize fresh from the journal (which is
+/// where the automount scan happens), boot — and return the running
+/// container.
 fn ensure_running_locked(name: &str, lock: &mut DistroLock) -> Result<ContainerInfo> {
     if let Some(info) = converge(name, lock)? {
         return Ok(info);
     }
-    let spec = refresh_automounts(name, lock)?;
+    let spec = lock.spec()?;
     let id = materialize(name, &spec, lock)?;
     boot(name, &id, lock)?;
     find(name)
@@ -972,20 +1003,20 @@ fn create_from_spec(spec: &DistroSpec, opts: &CreateOptions) -> Result<String> {
 }
 
 /// Create (and unless `no_boot`, boot) a distro; returns its name.
-/// `origin` is the provenance stamped into the journal;
-/// `default_home` is the `--home-mount` fallback when neither an
-/// explicit flag, `--restricted`, nor `--automount` settles it —
-/// `Rw` for built-in-catalog installs, `None` for everything else.
+/// `origin` is the provenance stamped into the journal; `requested`
+/// is the source side of the spec's intent — what the catalog entry
+/// or installer asked for (a catalog's `home-mount` request, for
+/// one). It loses to every explicit flag and to the preset.
 pub fn create(
     name: Option<String>,
     opts: &CreateOptions,
     image: &str,
     origin: OriginSource,
-    default_home: HomeMount,
+    requested: &Intent,
 ) -> Result<String> {
     ensure_started()?;
     let name = name.unwrap_or_else(|| default_machine_name(image));
-    let mut spec = build_spec(name, image.to_string(), opts, default_home)?;
+    let mut spec = build_spec(name, image.to_string(), opts, requested)?;
     spec.origin = Some(stamped_origin(origin));
     create_from_spec(&spec, opts)
 }
@@ -996,7 +1027,13 @@ fn summarize(c: &ContainerInfo, default: Option<&str>, app_root: Option<&Path>) 
     let spec = DistroSpec::from_container(c, &home).ok();
     let name = distro_name(c).unwrap_or_else(|| c.id());
     let journal = read_journal(name).ok();
+    // The journal is the truth; the container is the fallback for a
+    // pre-journal distro awaiting adoption.
+    let spec = journal.as_ref().or(spec.as_ref());
+    let resolved = spec.map(|s| s.resolve().0);
     let origin = journal.as_ref().and_then(|s| s.origin.clone());
+    let (automounts_list, effective_mounts) =
+        resolved.as_ref().map(share_lists).unwrap_or_default();
     // The journal's `origin.created` is the distro's real creation
     // date; a recreated container's `creationDate` would say "when it
     // last materialized" instead.
@@ -1016,15 +1053,19 @@ fn summarize(c: &ContainerInfo, default: Option<&str>, app_root: Option<&Path>) 
         image: cfg.image.as_ref().map(|i| i.reference.clone()),
         platform: cfg.platform.as_ref().map(ToString::to_string),
         home_mount: label_lookup(&cfg.labels, LABEL_HOME_MOUNT).cloned(),
-        mounts: spec
+        mounts: resolved
             .as_ref()
-            .map(|s| s.mounts.iter().map(ToString::to_string).collect())
+            .map(|r| r.mounts.iter().map(ToString::to_string).collect())
             .unwrap_or_default(),
-        ports: spec
+        automounts: automounts_list,
+        effective_mounts,
+        automount: resolved.as_ref().map(|r| r.automount.as_str().to_string()),
+        preset: resolved.as_ref().map(|r| r.preset.as_str().to_string()),
+        ports: resolved
             .as_ref()
-            .map(|s| s.publish.iter().map(ToString::to_string).collect())
+            .map(|r| r.publish.iter().map(ToString::to_string).collect())
             .unwrap_or_default(),
-        restricted: spec.as_ref().is_some_and(DistroSpec::is_restricted),
+        restricted: resolved.is_some_and(|r| r.is_restricted()),
         source: origin
             .as_ref()
             .and_then(|o| origin_source_display(&o.source)),
@@ -1032,22 +1073,29 @@ fn summarize(c: &ContainerInfo, default: Option<&str>, app_root: Option<&Path>) 
     }
 }
 
-/// A `container` size string (`4096M`, `8G`, …) as bytes, for list
-/// output. Unknown spellings degrade to a blank column.
-fn size_bytes(s: &str) -> Option<u64> {
-    let (num, unit) = s
-        .trim()
-        .find(|c: char| c.is_ascii_alphabetic())
-        .map_or((s.trim(), ""), |i| s.trim().split_at(i));
-    let mult = match unit {
-        "" | "B" => 1,
-        "K" | "KiB" => 1 << 10,
-        "M" | "MiB" => 1 << 20,
-        "G" | "GiB" => 1 << 30,
-        "T" | "TiB" => 1 << 40,
-        _ => return None,
-    };
-    num.parse::<u64>().ok()?.checked_mul(mult)
+/// The derived shares for a `list` row: the `/Volumes` automounts the
+/// spec's mode would mount now, then the home mount rendered as
+/// `HOME:HOME[:ro]`. Everything `container create` mounts beyond the
+/// user's own list.
+fn share_lists(r: &ResolvedSpec) -> (Vec<String>, Vec<String>) {
+    let mut auto: Vec<String> = auto_shares(r)
+        .unwrap_or_default()
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    if r.home_mount != HomeMount::None
+        && let Ok(home) = host_home()
+    {
+        let ro = if r.home_mount == HomeMount::Ro {
+            ":ro"
+        } else {
+            ""
+        };
+        auto.push(format!("{home}:{home}{ro}"));
+    }
+    let mut effective: Vec<String> = r.mounts.iter().map(ToString::to_string).collect();
+    effective.extend(auto.iter().cloned());
+    (auto, effective)
 }
 
 /// A `list` row for a journaled (stopped) distro — assembled from its
@@ -1058,6 +1106,8 @@ fn journal_summary(name: &str, default: Option<&str>) -> Option<DistroSummary> {
         .ok()
         .and_then(|p| fs::metadata(p).ok())
         .map(|m| std::os::unix::fs::MetadataExt::blocks(&m) * 512);
+    let (r, _) = spec.resolve();
+    let (automounts_list, effective_mounts) = share_lists(&r);
     Some(DistroSummary {
         id: name.to_string(),
         status: if distro_busy(name) {
@@ -1066,14 +1116,18 @@ fn journal_summary(name: &str, default: Option<&str>) -> Option<DistroSummary> {
             "stopped".into()
         },
         default: default == Some(name),
-        cpus: spec.cpus,
-        memory: spec.memory.as_deref().and_then(size_bytes),
+        cpus: r.cpus,
+        memory: r.memory.as_deref().and_then(size_bytes),
         disk_size: disk,
         image: Some(spec.image.clone()),
-        home_mount: Some(spec.home_mount.as_str().to_string()),
+        home_mount: Some(r.home_mount.as_str().to_string()),
         mounts: spec.mounts.iter().map(ToString::to_string).collect(),
+        automounts: automounts_list,
+        effective_mounts,
+        automount: Some(r.automount.as_str().to_string()),
+        preset: Some(r.preset.as_str().to_string()),
         ports: spec.publish.iter().map(ToString::to_string).collect(),
-        restricted: spec.is_restricted(),
+        restricted: r.is_restricted(),
         created_date: spec.origin.as_ref().map(|o| o.created.clone()),
         source: spec
             .origin
@@ -1196,8 +1250,8 @@ fn staged_summaries() -> Vec<DistroSummary> {
             let image = preserved_journal(&id)
                 .ok()
                 .and_then(|p| fs::read(p).ok())
-                .and_then(|b| serde_json::from_slice::<DistroSpec>(&b).ok())
-                .map(|s| s.image);
+                .and_then(|b| serde_json::from_slice::<JournalSpec>(&b).ok())
+                .map(|j| j.into_spec().0.image);
             DistroSummary {
                 id,
                 status: "interrupted".into(),
@@ -1245,11 +1299,11 @@ pub fn start(name: &str) -> Result<()> {
     ensure_started()?;
     container::warn_unverified_version();
     ensure_journal(name)?;
-    let mut lock = DistroLock::acquire(name)?;
+    let lock = DistroLock::acquire(name)?;
     let id = match converge(name, &lock)? {
         Some(info) => info.id().to_string(),
         None => {
-            let spec = refresh_automounts(name, &mut lock)?;
+            let spec = lock.spec()?;
             materialize(name, &spec, &lock)?
         }
     };
@@ -1381,11 +1435,11 @@ pub fn delete_all(force: bool) -> Result<()> {
 
 /// Default working directory: the host cwd's guest path if it is shared
 /// (via the home mount or an extra mount), else the guest home.
-fn default_workdir(spec: &DistroSpec, home: &str) -> String {
+fn default_workdir(r: &ResolvedSpec, home: &str) -> String {
     env::current_dir()
         .ok()
-        .and_then(|cwd| spec.guest_path(&cwd, home))
-        .unwrap_or_else(|| spec.user.guest_home())
+        .and_then(|cwd| r.guest_path(&cwd, home))
+        .unwrap_or_else(|| r.user.guest_home())
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1435,7 +1489,9 @@ pub fn run_command(o: RunOpts) -> Result<Command> {
             cmd.arg("--env").arg(format!("{k}={v}"));
         }
     }
-    let workdir = o.workdir.unwrap_or_else(|| default_workdir(&spec, &home));
+    let workdir = o
+        .workdir
+        .unwrap_or_else(|| default_workdir(&spec.resolve().0, &home));
     cmd.args(["--workdir", &workdir]);
     if let Ok(term) = env::var("TERM") {
         cmd.arg("--env").arg(format!("TERM={term}"));
@@ -1704,23 +1760,34 @@ fn write_journal(name: &str, spec: &DistroSpec) -> Result<()> {
             fs::create_dir(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
         }
         unlock(&spec_path);
-        write_nofollow(&spec_path, &serde_json::to_vec_pretty(spec)?)?;
+        write_nofollow(&spec_path, &serde_json::to_vec_pretty(&spec.to_journal())?)?;
         set_locked(&spec_path, true)?;
         set_locked(&dir, true)
     })
 }
 
 /// The journaled spec — the distro's trusted desired configuration.
+/// The journal records intent plus the effective values at write
+/// time; the intent is authoritative. Pre-preset journals get tier
+/// and intent back-computed, derived automount entries a historic
+/// journal recorded are dropped (automounts are computed, not
+/// stored), and a recorded value that no longer matches the
+/// resolution — a hand-edit, or a change in the rules — is noted
+/// rather than silently adopted (the next write heals the record).
 fn read_journal(name: &str) -> Result<DistroSpec> {
-    let spec: DistroSpec = serde_json::from_slice(
+    let journal: JournalSpec = serde_json::from_slice(
         &fs::read(journal_spec_path(name)?).context("failed to read the distro journal")?,
     )
     .context("invalid distro journal")?;
-    if spec.name != name {
+    if journal.name != name {
         bail!(
             "journal for `{name}` names `{}` — refusing to trust it",
-            spec.name
+            journal.name
         );
+    }
+    let (spec, notes) = journal.into_spec();
+    for n in notes {
+        eprintln!("container-distro: {n}");
     }
     Ok(spec)
 }
@@ -1947,11 +2014,12 @@ fn migrate_legacy_preserved(name: &str) -> Result<()> {
         }
         return Ok(());
     }
-    let spec: DistroSpec = serde_json::from_slice(
+    let js: JournalSpec = serde_json::from_slice(
         &fs::read(&journal)
             .with_context(|| format!("`{name}`'s interrupted `set` journal is unreadable"))?,
     )
     .context("invalid `set` journal")?;
+    let (spec, _) = js.into_spec();
     if spec.name != name {
         bail!(
             "`set` journal for `{name}` names `{}` — refusing to trust it",
@@ -2073,7 +2141,7 @@ impl DistroLock {
     /// stays `uchg`-locked — and the same inode, so the `flock` isn't
     /// disturbed — the whole time.
     fn write_spec(&mut self, spec: &DistroSpec) -> Result<()> {
-        let data = serde_json::to_vec_pretty(spec)?;
+        let data = serde_json::to_vec_pretty(&spec.to_journal())?;
         self.file.seek(SeekFrom::Start(0))?;
         self.file.write_all(&data)?;
         self.file.set_len(data.len() as u64)?;
@@ -2129,7 +2197,8 @@ fn materialize(name: &str, spec: &DistroSpec, _lock: &DistroLock) -> Result<Stri
     // written fresh for this build and the spec's admin flavor, so no
     // shared or plugin-installed copy can drift out from under it.
     let assets = journal_assets_dir(name)?;
-    with_journal_dir_unlocked(name, || write_assets(&assets, spec.admin))?;
+    let (resolved, _) = spec.resolve();
+    with_journal_dir_unlocked(name, || write_assets(&assets, resolved.admin))?;
     let id = runtime_id(name);
     create_container(spec, &id)?;
     let fs_path = journal_fs_path(name)?;
@@ -2184,7 +2253,7 @@ fn dismantle(name: &str, id: &str, _lock: &DistroLock) -> Result<()> {
 /// each, empty when they agree. List fields compare as sets (`inspect`
 /// ordering isn't stable); memory compares as bytes so `4G` and `4096M`
 /// don't read as drift.
-fn spec_diff(want: &DistroSpec, actual: &DistroSpec) -> Vec<String> {
+fn spec_diff(want: &ResolvedSpec, actual: &ResolvedSpec) -> Vec<String> {
     let mut out = Vec::new();
     macro_rules! field {
         ($name:literal, $w:expr, $a:expr) => {
@@ -2198,6 +2267,7 @@ fn spec_diff(want: &DistroSpec, actual: &DistroSpec) -> Vec<String> {
     }
     let user = |u: &HostUser| format!("{}({}:{})", u.name, u.uid, u.gid);
     field!("image", want.image, actual.image);
+    field!("preset", want.preset.as_str(), actual.preset.as_str());
     field!(
         "cpus",
         want.cpus.map_or("default".to_string(), |c| c.to_string()),
@@ -2262,7 +2332,7 @@ fn warn_spec_drift(name: &str, info: &ContainerInfo, lock: &DistroLock) {
     let actual = host_home().and_then(|home| DistroSpec::from_container(info, &home));
     match (want, actual) {
         (Ok(want), Ok(actual)) => {
-            for d in spec_diff(&want, &actual) {
+            for d in spec_diff(&want.resolve().0, &actual.resolve().0) {
                 eprintln!("container-distro: warning: `{name}` drifted from its journal: {d}");
             }
         }
@@ -2298,24 +2368,6 @@ fn converge(name: &str, lock: &DistroLock) -> Result<Option<ContainerInfo>> {
     }
 }
 
-/// Re-resolve an enabled `--automount` against the currently attached
-/// `/Volumes`, journaling the result when it changed — a plugged or
-/// ejected volume shouldn't need a manual `set`. Returns the spec to
-/// materialize.
-fn refresh_automounts(name: &str, lock: &mut DistroLock) -> Result<DistroSpec> {
-    let mut spec = lock.spec()?;
-    if !spec.automount.enabled() {
-        return Ok(spec);
-    }
-    let before = spec.mounts.clone();
-    reconcile_automounts(&mut spec)?;
-    if spec.mounts != before {
-        eprintln!("container-distro: refreshing `{name}`'s automounts for the attached /Volumes");
-        lock.write_spec(&spec)?;
-    }
-    Ok(spec)
-}
-
 /// `container distro set`: update `name`'s journaled spec. A running
 /// distro is stopped and rebooted under the new settings; a stopped one
 /// is just re-journaled — its container is fresh-created at the next
@@ -2324,6 +2376,12 @@ fn refresh_automounts(name: &str, lock: &mut DistroLock) -> Result<DistroSpec> {
 /// Like `machine boot`, a failed materialize leaves the distro stopped
 /// with the new spec committed; there is no stale config to fall back
 /// to.
+///
+/// Tier and resets resolve first (`--preset T` re-derives the
+/// unpinned options; `--reset <opt>` un-pins one; `--reset <tier>`
+/// clears every pin), then the per-option flags pin on top, so a
+/// report of the resulting spec can say what changed and what the
+/// user's own flags still pin.
 pub fn set(name: &str, changes: &SpecChanges) -> Result<()> {
     ensure_started()?;
     container::warn_unverified_version();
@@ -2333,13 +2391,14 @@ pub fn set(name: &str, changes: &SpecChanges) -> Result<()> {
     ensure_journal(name)?;
     let mut lock = DistroLock::acquire(name)?;
     let old = lock.spec()?;
-    let mut new = changes.apply(&old)?;
-    warn_public_publish(&changes.add_publish);
-    // An enabled automount is always reconciled, not just when
-    // `--automount` was passed.
-    if new.automount.enabled() {
-        reconcile_automounts(&mut new)?;
+    let (new, warnings) = changes.apply(&old)?;
+    for w in warnings {
+        eprintln!("container-distro: {w}");
     }
+    for line in new.change_report(&old) {
+        println!("{line}");
+    }
+    warn_public_publish(&changes.add_publish);
     check_sources(&new)?;
     let info = find(name).ok();
     let was_running = info.as_ref().is_some_and(|i| i.is_running());
@@ -2447,14 +2506,14 @@ pub enum ImportSource<'a> {
     },
 }
 
-/// Create a distro from a rootfs tar; returns its name. `default_home`
-/// is the `--home-mount` fallback, as in [`create`].
+/// Create a distro from a rootfs tar; returns its name. `requested`
+/// is the source side of the spec's intent, as in [`create`].
 pub fn import(
     name: &str,
     file: &Path,
     opts: &CreateOptions,
     source: ImportSource<'_>,
-    default_home: HomeMount,
+    requested: &Intent,
 ) -> Result<String> {
     validate_name(name)?;
     ensure_started()?;
@@ -2493,7 +2552,7 @@ pub fn import(
         }
     }
     oci::load_rootfs(rootfs, &reference, &labels)?;
-    let mut spec = build_spec(name.to_string(), reference, opts, default_home)?;
+    let mut spec = build_spec(name.to_string(), reference, opts, requested)?;
     spec.origin = Some(stamped_origin(match source {
         ImportSource::Local => OriginSource::File {
             path: file.to_string_lossy().into_owned(),
@@ -2776,7 +2835,6 @@ pub fn migrate(
 /// mount, and provisioned account, with `opts` overrides on top
 /// (`--restricted` remains a defaults preset, like at `create`).
 fn spec_from_machine(name: &str, m: &MachineDetail, opts: &CreateOptions) -> Result<DistroSpec> {
-    let admin = opts.effective_admin();
     let user = match &m.user_setup {
         Some(u) => HostUser {
             name: u.username.clone(),
@@ -2785,33 +2843,36 @@ fn spec_from_machine(name: &str, m: &MachineDetail, opts: &CreateOptions) -> Res
         },
         None => host_user()?,
     };
-    // The base is the machine's recorded home-mount (upstream defaults
-    // to rw), not a source default.
-    let home_mount = opts.effective_home_mount(m.home_mount.as_deref().unwrap_or("rw").parse()?);
     let image = m
         .image
         .as_ref()
         .map(|i| i.reference.clone())
         .with_context(|| "machine has no image reference".to_string())?;
-    let spec = DistroSpec {
+    // The machine's recorded settings are source intent: they lose to
+    // the user's flags and the preset, and resurface on `--reset`.
+    let source = Intent {
+        home_mount: Some(m.home_mount.as_deref().unwrap_or("rw").parse()?),
+        cpus: m.cpus,
+        memory: m.memory.map(|b| format!("{}M", b / (1024 * 1024))),
+        ..Intent::default()
+    };
+    let mut spec = DistroSpec {
         name: name.to_string(),
         image,
-        cpus: opts.cpus.or(m.cpus),
-        memory: opts
-            .memory
-            .clone()
-            .or_else(|| m.memory.map(|b| format!("{}M", b / (1024 * 1024)))),
-        home_mount,
-        mounts: resolve_mounts(opts)?,
-        automount: opts.effective_automount(),
+        mounts: opts.volumes.clone(),
         publish: opts.publish.clone(),
-        network: opts.effective_network(),
-        ssh: opts.effective_ssh(home_mount),
-        admin,
-        admin_grant: admin,
         user,
+        preset: opts.preset(),
+        explicit: create_intent(opts),
+        source,
+        admin_grant: false,
         origin: None,
     };
+    let (resolved, warnings) = spec.resolve();
+    for w in warnings {
+        eprintln!("container-distro: {w}");
+    }
+    spec.admin_grant = resolved.admin;
     warn_public_publish(&spec.publish);
     Ok(spec)
 }
@@ -3003,6 +3064,11 @@ fn distro_rootfs(name: &str) -> Result<Option<PathBuf>> {
 
 /// The `CreateOptions` `machine create` can't honor — `--out` rejects
 /// them rather than silently dropping user intent.
+/// `migrate --out` accepts set-style changes the machine can honor
+/// (`--cpus`, `--memory`, `--home-mount`, `--ssh`, `--preset`/
+/// `--restricted`/`--trusted` — they shift what the resolution
+/// produces for the machine's own options) and refuses the ones it
+/// can't, so a flag never silently no-ops.
 fn reject_machine_opts(opts: &CreateOptions) -> Result<()> {
     let mut bad: Vec<&str> = Vec::new();
     if !opts.volumes.is_empty() {
@@ -3017,18 +3083,18 @@ fn reject_machine_opts(opts: &CreateOptions) -> Result<()> {
     if opts.network.is_some() {
         bad.push("--network");
     }
-    if opts.ssh || opts.no_ssh {
-        bad.push("--ssh/--no-ssh");
+    // `--ssh` is a redundant opt-in the machine honors; `--no-ssh`
+    // pins something it can never do.
+    if opts.no_ssh {
+        bad.push("--no-ssh");
     }
     if opts.sudo || opts.no_sudo {
         bad.push("--sudo/--no-sudo");
     }
-    if opts.restricted {
-        bad.push("--restricted");
-    }
     if !bad.is_empty() {
         bail!(
-            "{} cannot be applied to a machine (supported overrides: --cpus, --memory, --home-mount)",
+            "{} cannot be applied to a machine (supported overrides: \
+             --cpus, --memory, --home-mount, --ssh, --preset/--restricted/--trusted)",
             bad.join(", ")
         );
     }
@@ -3070,29 +3136,49 @@ fn machine_create_image(spec_image: &str, carrying: bool) -> Result<String> {
 /// cpus/memory/home-mount with `opts` overrides on top. The machine
 /// boots once — its plugin-state rootfs only materializes then — and is
 /// stopped by the caller for the filesystem swap. A machine forwards
-/// SSH_AUTH_SOCK at every boot with no opt-out, so only the trusted
-/// tier (rw home) may migrate out — matching the `cm --install
-/// --machine` refusal.
-fn create_machine(name: &str, image: &str, spec: &DistroSpec, opts: &CreateOptions) -> Result<()> {
-    let home = opts.effective_home_mount(spec.home_mount);
-    if home != HomeMount::Rw {
-        bail!(
-            "`container machine` always forwards your SSH agent — a {home} distro can't \
-             become a machine; pass --trusted or --home-mount rw to opt into the \
-             trusted tier",
-            home = home.as_str()
-        );
+/// SSH_AUTH_SOCK at every boot with no opt-out, so only a distro that
+/// resolves to agent-forwarding may migrate out — matching the `cm
+/// --install --machine` refusal.
+pub fn create_machine(
+    name: &str,
+    image: &str,
+    spec: &DistroSpec,
+    opts: &CreateOptions,
+) -> Result<()> {
+    // `opts` applies as set-style changes to a scratch copy of the
+    // spec — the journal is never written, so `--keep` can't leak a
+    // machine-shaped tweak back into the distro. A machine forwards
+    // SSH_AUTH_SOCK at every boot with no opt-out, so migrating out is
+    // itself the opt-in: warn when `ssh` lands off, and refuse only an
+    // explicit `--no-ssh` pin (`reject_machine_opts` refuses an
+    // `opts` one; a pin recorded on the distro still blocks).
+    reject_machine_opts(opts)?;
+    let changes = opts.spec_changes();
+    let (result, warnings) = changes.apply(spec)?;
+    for w in warnings {
+        eprintln!("container-distro: {w}");
+    }
+    let (resolved, _) = result.resolve();
+    if !resolved.ssh {
+        if result.explicit.ssh == Some(false) {
+            bail!(
+                "`container machine` always forwards your SSH agent — {name} has \
+                 agent forwarding pinned off; `distro set --ssh` it first (or \
+                 drop the pin with `set --reset ssh`)"
+            );
+        }
+        eprintln!("container-distro: `container machine` forwards your SSH agent at every boot");
     }
     let mut a: Vec<String> = ["machine", "create", "--name", name]
         .map(String::from)
         .to_vec();
-    if let Some(c) = opts.cpus.or(spec.cpus) {
+    if let Some(c) = resolved.cpus {
         a.extend(["--cpus".into(), c.to_string()]);
     }
-    if let Some(m) = opts.memory.clone().or_else(|| spec.memory.clone()) {
-        a.extend(["--memory".into(), m]);
+    if let Some(m) = &resolved.memory {
+        a.extend(["--memory".into(), m.clone()]);
     }
-    a.extend(["--home-mount".into(), home.as_str().into()]);
+    a.extend(["--home-mount".into(), resolved.home_mount.as_str().into()]);
     a.push(image.to_string());
     let a: Vec<&str> = a.iter().map(String::as_str).collect();
     run_container(&a)
@@ -3112,6 +3198,8 @@ pub fn migrate_to_machine(
     opts: &CreateOptions,
 ) -> Result<String> {
     ensure_started()?;
+    // Refuse distro-only flags before the distro is stopped — the same
+    // check runs inside `create_machine` for the shared entry point.
     reject_machine_opts(opts)?;
     // Keeping the source means the result can't take its name — the
     // same-name distro+machine pair is exactly the shadow the create
@@ -3788,45 +3876,54 @@ mod tests {
         assert_eq!(size_bytes(""), None);
     }
 
+    /// An intent-only spec whose pins resolve to the shape the old
+    /// tests' effective values had.
     fn spec() -> DistroSpec {
         DistroSpec {
             name: "d1".into(),
             image: "alpine:latest".into(),
-            cpus: Some(2),
-            memory: Some("4G".into()),
-            home_mount: HomeMount::Rw,
             mounts: vec!["/a:/b:ro".parse().unwrap()],
-            automount: Automount::None,
             publish: vec!["8080:80".parse().unwrap()],
-            network: None,
-            ssh: true,
-            admin: true,
-            admin_grant: false,
             user: HostUser {
                 name: "dp".into(),
                 uid: 501,
                 gid: 20,
             },
+            preset: Preset::Default,
+            explicit: Intent {
+                cpus: Some(2),
+                memory: Some("4G".into()),
+                home_mount: Some(HomeMount::Rw),
+                ssh: Some(true),
+                admin: Some(true),
+                ..Intent::default()
+            },
+            source: Intent::default(),
+            admin_grant: false,
             origin: None,
         }
+    }
+
+    fn resolved(s: &DistroSpec) -> crate::spec::ResolvedSpec {
+        s.resolve().0
     }
 
     /// The start-time integrity check: identical specs produce no diff;
     /// drifted fields name themselves; `4G` vs `4096M` is not drift.
     #[test]
     fn spec_diff_names_drifted_fields() {
-        let want = spec();
+        let want = resolved(&spec());
         // `from_container` normalizes memory to `NM` — same bytes is
         // not drift.
         let mut actual = spec();
-        actual.memory = Some("4096M".into());
-        assert!(spec_diff(&want, &actual).is_empty());
+        actual.explicit.memory = Some("4096M".into());
+        assert!(spec_diff(&want, &resolved(&actual)).is_empty());
 
         let mut actual = spec();
-        actual.cpus = Some(8);
-        actual.ssh = false;
-        actual.home_mount = HomeMount::Ro;
-        let diff = spec_diff(&want, &actual);
+        actual.explicit.cpus = Some(8);
+        actual.explicit.ssh = Some(false);
+        actual.explicit.home_mount = Some(HomeMount::Ro);
+        let diff = spec_diff(&want, &resolved(&actual));
         assert!(diff.iter().any(|d| d.starts_with("cpus:")), "{diff:?}");
         assert!(diff.iter().any(|d| d.starts_with("ssh:")), "{diff:?}");
         assert!(
@@ -3838,7 +3935,7 @@ mod tests {
         let mut actual = spec();
         actual.mounts.pop();
         actual.mounts.push("/x:/y".parse().unwrap());
-        let diff = spec_diff(&want, &actual);
+        let diff = spec_diff(&want, &resolved(&actual));
         assert!(
             diff.iter()
                 .any(|d| d == "mounts: journal has `/a:/b:ro`, running doesn't"),
@@ -3867,26 +3964,7 @@ mod tests {
         assert!(fs::remove_file(&spec_p).is_err());
         assert!(fs::File::options().write(true).open(&spec_p).is_err());
 
-        let spec = DistroSpec {
-            name: "d1".into(),
-            image: "alpine:latest".into(),
-            cpus: Some(2),
-            memory: Some("4G".into()),
-            home_mount: HomeMount::Rw,
-            mounts: vec![],
-            automount: Automount::None,
-            publish: vec![],
-            network: None,
-            ssh: true,
-            admin: true,
-            admin_grant: true,
-            user: HostUser {
-                name: "dp".into(),
-                uid: 501,
-                gid: 20,
-            },
-            origin: None,
-        };
+        let spec = spec();
         let mut lock = DistroLock {
             file: open_locked_rw(&spec_p).unwrap(),
             name: "d1".into(),
@@ -3902,7 +3980,10 @@ mod tests {
         // Rewrites through the held fd are honored under `uchg`.
         lock.write_spec(&spec).unwrap();
         assert_eq!(
-            serde_json::from_slice::<DistroSpec>(&fs::read(&spec_p).unwrap()).unwrap(),
+            serde_json::from_slice::<JournalSpec>(&fs::read(&spec_p).unwrap())
+                .unwrap()
+                .into_spec()
+                .0,
             spec
         );
         drop(lock);
@@ -4003,14 +4084,17 @@ mod tests {
             automount: Some(Automount::Ro),
             ..CreateOptions::default()
         };
-        assert_eq!(opts.effective_home_mount(HomeMount::None), HomeMount::Rw);
+        assert_eq!(opts.resolve_home_mount(&Intent::default()), HomeMount::Rw);
         // --restricted pins none.
         let opts = CreateOptions {
             restricted: true,
             automount: Some(Automount::Rw),
             ..CreateOptions::default()
         };
-        assert_eq!(opts.effective_home_mount(HomeMount::Rw), HomeMount::None);
+        assert_eq!(
+            opts.resolve_home_mount(&Intent::only_home_mount(HomeMount::Rw)),
+            HomeMount::None
+        );
         // An explicit --automount is followed (and warns).
         for (am, want) in [
             (Automount::Rw, HomeMount::Rw),
@@ -4021,7 +4105,7 @@ mod tests {
                 automount: Some(am),
                 ..CreateOptions::default()
             };
-            assert_eq!(opts.effective_home_mount(HomeMount::None), want, "{am:?}");
+            assert_eq!(opts.resolve_home_mount(&Intent::default()), want, "{am:?}");
         }
         // --trusted presets rw regardless of source, and beats the
         // automount-follows default (ro volumes, still rw home).
@@ -4029,17 +4113,27 @@ mod tests {
             trusted: true,
             ..CreateOptions::default()
         };
-        assert_eq!(opts.effective_home_mount(HomeMount::None), HomeMount::Rw);
+        assert_eq!(opts.resolve_home_mount(&Intent::default()), HomeMount::Rw);
         let opts = CreateOptions {
             trusted: true,
             automount: Some(Automount::Ro),
             ..CreateOptions::default()
         };
-        assert_eq!(opts.effective_home_mount(HomeMount::None), HomeMount::Rw);
-        // Otherwise the source default applies.
+        assert_eq!(opts.resolve_home_mount(&Intent::default()), HomeMount::Rw);
+        // A source request caps what the preset raises — ro stays ro
+        // even under --trusted.
+        assert_eq!(
+            opts.resolve_home_mount(&Intent::only_home_mount(HomeMount::Ro)),
+            HomeMount::Ro
+        );
+        // Otherwise a source request fills the unset slot — the
+        // catalog's `rw` survives the `none` built-in default.
         let opts = CreateOptions::default();
-        assert_eq!(opts.effective_home_mount(HomeMount::Rw), HomeMount::Rw);
-        assert_eq!(opts.effective_home_mount(HomeMount::None), HomeMount::None);
+        assert_eq!(
+            opts.resolve_home_mount(&Intent::only_home_mount(HomeMount::Rw)),
+            HomeMount::Rw
+        );
+        assert_eq!(opts.resolve_home_mount(&Intent::default()), HomeMount::None);
     }
 
     #[test]
@@ -4047,8 +4141,14 @@ mod tests {
         // Catalog-tier rw → agent on; ad-hoc none → off.
         let opts = CreateOptions::default();
         for (default, want) in [(HomeMount::Rw, true), (HomeMount::None, false)] {
-            let spec = build_spec("d".into(), "img".into(), &opts, default).unwrap();
-            assert_eq!(spec.ssh, want, "{default:?}");
+            let spec = build_spec(
+                "d".into(),
+                "img".into(),
+                &opts,
+                &Intent::only_home_mount(default),
+            )
+            .unwrap();
+            assert_eq!(spec.resolve().0.ssh, want, "{default:?}");
         }
         // --restricted beats an explicit rw home: every hole needs its
         // own flag there.
@@ -4058,8 +4158,10 @@ mod tests {
             ..CreateOptions::default()
         };
         assert!(
-            !build_spec("d".into(), "i".into(), &opts, HomeMount::None)
+            !build_spec("d".into(), "i".into(), &opts, &Intent::default())
                 .unwrap()
+                .resolve()
+                .0
                 .ssh
         );
         // --trusted presets home rw, automount rw, and the agent.
@@ -4067,26 +4169,27 @@ mod tests {
             trusted: true,
             ..CreateOptions::default()
         };
-        let spec = build_spec("d".into(), "i".into(), &opts, HomeMount::None).unwrap();
-        assert!(spec.ssh);
-        assert_eq!(spec.home_mount, HomeMount::Rw);
-        assert_eq!(spec.automount, Automount::Rw);
+        let spec = build_spec("d".into(), "i".into(), &opts, &Intent::default()).unwrap();
+        let (r, _) = spec.resolve();
+        assert!(r.ssh);
+        assert_eq!(r.home_mount, HomeMount::Rw);
+        assert_eq!(r.automount, Automount::Rw);
     }
 
     #[test]
-    fn migrate_out_requires_trusted_tier() {
-        // A machine forwards SSH_AUTH_SOCK at every boot — a non-rw
-        // distro can't become one. The check bails before `container`
-        // is ever spawned.
+    fn migrate_out_refuses_a_pinned_agent_optout() {
+        // A machine forwards SSH_AUTH_SOCK at every boot — `--machine`
+        // is the opt-in, so an unpinned ssh-off distro only warns. The
+        // one refusal is a distro with `--no-ssh` explicitly recorded.
         let mut spec = spec();
-        spec.home_mount = HomeMount::None;
+        spec.explicit.home_mount = Some(HomeMount::None);
+        spec.explicit.ssh = Some(false);
         let err = create_machine("m", "img", &spec, &CreateOptions::default())
             .unwrap_err()
             .to_string();
-        assert!(err.contains("--trusted"), "{err}");
-        // An rw spec passes the check; --home-mount rw and --trusted
-        // both lift a non-rw spec (they proceed past it to spawn
-        // `container`, so only the refusal is unit-testable here).
+        assert!(err.contains("pinned off"), "{err}");
+        // Without the pin the same spec proceeds past the check to
+        // spawn `container` — not unit-testable here.
     }
 
     // ---- migrate ----
@@ -4114,9 +4217,10 @@ mod tests {
         let spec = spec_from_machine("d1", &detail_json(), &CreateOptions::default()).unwrap();
         assert_eq!(spec.name, "d1");
         assert_eq!(spec.image, "docker.io/library/alpine:latest");
-        assert_eq!(spec.cpus, Some(4));
-        assert_eq!(spec.memory.as_deref(), Some("4096M"));
-        assert_eq!(spec.home_mount, HomeMount::Ro);
+        let (r, _) = spec.resolve();
+        assert_eq!(r.cpus, Some(4));
+        assert_eq!(r.memory.as_deref(), Some("4096M"));
+        assert_eq!(r.home_mount, HomeMount::Ro);
         assert_eq!(
             spec.user,
             HostUser {
@@ -4126,8 +4230,8 @@ mod tests {
             }
         );
         // homeMount is ro → the agent default follows the home tier: off.
-        assert!(!spec.ssh && spec.admin && spec.admin_grant);
-        assert!(!spec.is_restricted());
+        assert!(!r.ssh && r.admin && spec.admin_grant);
+        assert!(!r.is_restricted());
     }
 
     #[test]
@@ -4140,12 +4244,13 @@ mod tests {
             ..CreateOptions::default()
         };
         let spec = spec_from_machine("d1", &detail_json(), &opts).unwrap();
-        assert_eq!(spec.cpus, Some(2));
-        assert_eq!(spec.memory.as_deref(), Some("1G"));
-        assert_eq!(spec.home_mount, HomeMount::None);
+        let (r, _) = spec.resolve();
+        assert_eq!(r.cpus, Some(2));
+        assert_eq!(r.memory.as_deref(), Some("1G"));
+        assert_eq!(r.home_mount, HomeMount::None);
         // --restricted still defaults network/ssh/admin.
-        assert_eq!(spec.network.as_deref(), Some("none"));
-        assert!(!spec.ssh && !spec.admin);
+        assert_eq!(r.network.as_deref(), Some("none"));
+        assert!(!r.ssh && !r.admin);
     }
 
     #[test]
@@ -4178,26 +4283,29 @@ mod tests {
 
     #[test]
     fn machine_opts_rejection() {
-        // The `machine create` subset passes.
+        // The set-style subset a machine can honor passes — resources,
+        // home-mount, `--ssh`, and the tier flags.
         assert!(
             reject_machine_opts(&CreateOptions {
                 cpus: Some(2),
                 memory: Some("1G".into()),
                 home_mount: Some(HomeMount::Ro),
+                ssh: true,
+                preset: Some(Preset::Restricted),
                 no_boot: true,
                 set_default: true,
                 ..CreateOptions::default()
             })
             .is_ok()
         );
-        // Distro-only options are refused, named in the error.
+        // Options a machine can't honor are refused, named in the
+        // error — including `--no-ssh`, a pin no machine can keep.
         let err = reject_machine_opts(&CreateOptions {
             volumes: vec!["/a:/b".parse().unwrap()],
             publish: vec!["8080".parse().unwrap()],
             network: Some("none".into()),
             no_ssh: true,
             sudo: true,
-            restricted: true,
             ..CreateOptions::default()
         })
         .unwrap_err()
@@ -4206,13 +4314,12 @@ mod tests {
             "--volume",
             "--publish",
             "--network",
-            "--ssh/--no-ssh",
+            "--no-ssh",
             "--sudo/--no-sudo",
-            "--restricted",
         ] {
             assert!(err.contains(f), "{err}");
         }
-        // --automount (even bare) and an explicit --network are refused.
+        // --automount (even bare) is refused.
         assert!(
             reject_machine_opts(&CreateOptions {
                 automount: Some(Automount::Rw),

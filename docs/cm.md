@@ -166,6 +166,7 @@ pkg) is the same update as a script.
 ```text
 cm --install [DISTRO|IMAGE] [--name NAME] [--no-launch]
                   [--cpus N] [--memory SIZE] [--home-mount rw|ro|none]
+                  [--preset default|restricted|trusted] [--ssh|--no-ssh]
                   [--machine] [--restricted|--trusted] [--force]
                   [--share SRC:DST[:opt,...]]... [--publish SPEC]...
 cm --install --from-image IMAGE ...
@@ -252,26 +253,30 @@ provision your macOS account automatically (same name/uid/gid), so a
 fresh install drops straight into a shell. `--machine` runs
 `container machine create` instead — for WSL-parity testing and
 upstream comparisons — and is rejected alongside the distro-only
-options `--share`/`--publish`/`--restricted`/`--from-file`, which have
-no machine equivalent. It is also refused when the home-mount would
-resolve below `rw`: `container machine` forwards your SSH agent at
-every boot and can't disable it, so a machine only runs at the
-trusted tier — pass `--trusted` (or `--home-mount rw`) to opt in.
+options `--preset`/`--share`/`--publish`/`--restricted`/`--from-file`,
+which have no machine equivalent. A machine forwards your SSH agent at
+every boot (upstream has no opt-out), so `--machine` itself is the
+opt-in: an install whose resolved agent setting is off just warns, and
+only an explicit `--no-ssh` pin is refused — `--ssh`, `--trusted`, or
+`--home-mount rw` all count as opting in.
 
 `--trusted` is the mirror preset of `--restricted`: rw home, rw
 `/Volumes` automount, and the SSH agent — for images you'd give your
 own login session. Explicit flags still override it. `--restricted` (alias `--untrusted`) is a
 defaults preset for semi-trusted images: no home share, no network, no
 SSH-agent forward, no sudo -- explicit flags still apply, and it is
-*not* a sandbox (see security.md).
+*not* a sandbox (see security.md). `--preset TIER` names the same
+three tiers; whichever selects it is journaled on the distro, so
+`container distro set --preset` can re-derive it later — flags you
+passed stay pinned, everything else follows the tier.
 
 The home share follows trust: a name that resolves to a catalog entry
 defaults to `--home-mount rw` (resolving through a catalog is treated
 as an act of trust — including a `--catalog FILE`, which implies trust
 in that manifest); a bare image ref, `--from-image`, or `--from-file`
 defaults to `none`. An explicit `--home-mount` always wins. The
-equivalent on `container distro create`/`import` also lets an explicit
-`--automount rw|ro` set the home default (with a warning).
+equivalent on `container distro create`/`import` also lets the
+effective `--automount` mode set the home default (with a warning).
 
 ## Exporting and importing
 

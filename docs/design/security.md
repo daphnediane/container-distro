@@ -57,15 +57,19 @@ is a cross-container integrity risk, not just a same-guest one.
   every ad-hoc path (`create`/`cm --install` with a bare image ref,
   `import`, `--from-file`, `--from-image`) defaults to `none`. A
   catalog entry can also pin a different per-entry default via the
-  schema's optional `HomeMount` field. Resolution order: explicit
-  `--home-mount`, then preset (`--restricted` → `none`, `--trusted`
-  → `rw`), then an explicit `--automount` mode (warned — `rw`
-  volumes are `rw`-level host exposure anyway), then the source
-  default. `--trusted` is the mirror preset: rw home, rw automount,
-  agent on — the deliberate "I trust this image" escape hatch, and
-  the opt-in for machine-tier operations below. The default binds at
-  create into `spec.home_mount`, so `set` recreations never silently
-  change an existing distro's posture.
+  schema's optional `HomeMount` field. Resolution order (`DistroSpec::resolve`,
+  the single implementation every path shares): explicit flag, then
+  `min(preset → inherited, source)` — the catalog entry's request
+  caps what a preset or the automount-inherit would raise and fills
+  the slot when neither produced a value — then the built-in
+  default. Home inherits the *effective* automount mode (`rw`
+  volumes are `rw`-level host exposure anyway), and the preset is
+  journaled on the distro so `set --preset` re-derives every option
+  the user hasn't pinned — `explicit` intent always beats tier and
+  source. `--trusted` is the mirror preset: rw home, rw automount,
+  agent on — the deliberate "I trust this image" escape hatch.
+  Effective values bind at create into the spec, so `set`
+  recreations never silently change an existing distro's posture.
 - **Re-evaluate if:** the catalog-trust heuristic stops matching how
   distros actually get installed, or scoped subdir shares (home `ro` +
   a narrow rw overlay — expressible today) deserve a first-class flag.
@@ -94,9 +98,13 @@ hosts -- for as long as the guest runs.
   agent off.
   **Machines are the exception:** `container machine` forwards
   `SSH_AUTH_SOCK` from the caller's env at *every* boot with no flag
-  to disable it, so `cm --install --machine` and `migrate --machine`
-  are **refused** when the home-mount resolves below `rw` — a
-  non-rw machine can't honor the policy, so it isn't created.
+  to disable it (upstream limitation), so `--machine` itself is the
+  opt-in: `cm --install --machine` and `migrate --out` resolve `ssh`
+  through the same chain a distro would, **warn** when it lands off,
+  and **refuse** only an explicit opt-out — `--no-ssh` at install,
+  or a distro whose `explicit.ssh` is pinned off on migrate. An
+  unpinned ssh-off distro migrates with a warning rather than being
+  refused, since asking for a machine already accepts the forward.
   (`machine set home-mount=` on an existing machine has the same
   asymmetry and can't be policed — upstream's model.)
 - **Re-evaluate if:** upstream grows a per-machine ssh opt-out, or

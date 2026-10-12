@@ -16,7 +16,7 @@ use anyhow::{Result, bail};
 use clap::{ArgAction, Parser, ValueEnum};
 use container_distro::forward::PortMapping;
 pub use container_distro::spec::HomeMount;
-use container_distro::spec::{MountSpec, PublishSpec};
+use container_distro::spec::{MountSpec, Preset, PublishSpec};
 
 /// What `--install` installs from.
 #[derive(Debug, Clone, PartialEq)]
@@ -52,6 +52,15 @@ pub struct InstallOpts {
     pub distro: bool,
     /// Create a `container machine` instead of a distro.
     pub machine: bool,
+    /// The defaults tier (`--preset`); mutually exclusive with
+    /// `restricted`/`trusted` at parse.
+    pub preset: Option<Preset>,
+    /// Pin SSH-agent forwarding on (`--ssh`) — machines forward it
+    /// anyway, so this only documents the opt-in there.
+    pub ssh: bool,
+    /// Pin SSH-agent forwarding off (`--no-ssh`) — a machine can't
+    /// honor it.
+    pub no_ssh: bool,
     /// Restricted defaults (no mounts, network, agent, sudo). Distro-only
     /// — machines can't be restricted.
     pub restricted: bool,
@@ -303,18 +312,35 @@ pub struct Args {
     #[arg(long = "machine")]
     pub machine: bool,
 
+    /// The defaults tier a distro created by --install runs at —
+    /// `default`, `restricted`, or `trusted` — recorded so
+    /// `container distro set --preset` can re-derive it later
+    #[arg(long, value_enum, requires = "install", conflicts_with_all = ["restricted", "trusted"])]
+    pub preset: Option<Preset>,
+
     /// Restricted defaults for a distro created by --install: no home or
     /// extra mounts, no network, no SSH agent, no sudo/doas. A
-    /// convenience preset, not a sandbox.
+    /// convenience preset, not a sandbox. (`--preset restricted`)
     #[arg(long = "restricted", visible_alias = "untrusted", requires = "install")]
     pub restricted: bool,
 
     /// Trusted defaults for what --install creates: rw home share,
     /// /Volumes automounted rw (distros), SSH agent forwarded — the
     /// mirror of --restricted. Also opts an untrusted-tier install into
-    /// --machine, which always forwards the agent.
+    /// --machine, which always forwards the agent. (`--preset trusted`)
     #[arg(long = "trusted", requires = "install", conflicts_with = "restricted")]
     pub trusted: bool,
+
+    /// Forward your SSH agent into what --install creates — an explicit
+    /// opt-in that pins agent forwarding on a distro regardless of its
+    /// home-mount mode (machines forward it unconditionally)
+    #[arg(long, requires = "install", conflicts_with = "no_ssh")]
+    pub ssh: bool,
+
+    /// Keep your SSH agent out of what --install creates — an explicit
+    /// pin a machine can't honor (`--machine` always forwards it)
+    #[arg(long = "no-ssh", requires = "install", conflicts_with = "machine")]
+    pub no_ssh: bool,
 
     /// Share a host directory into a distro created by --install:
     /// SRC:DST[:opt,...] — ro, rw, and guest mount flags like
@@ -514,12 +540,13 @@ impl Args {
         // `--machine` can't satisfy distro-only install options.
         if self.machine
             && (self.restricted
+                || self.preset.is_some()
                 || self.from_file.is_some()
                 || !self.shares.is_empty()
                 || !self.publish.is_empty())
         {
             bail!(
-                "--restricted, --from-file, --share, and --publish need a distro (drop --machine)"
+                "--preset, --restricted, --from-file, --share, and --publish need a distro (drop --machine)"
             );
         }
         let action = if self.version {
@@ -578,6 +605,9 @@ impl Args {
                 home_mount: self.home_mount,
                 distro: self.distro,
                 machine: self.machine,
+                preset: self.preset,
+                ssh: self.ssh,
+                no_ssh: self.no_ssh,
                 restricted: self.restricted,
                 trusted: self.trusted,
                 force: self.force,
@@ -852,6 +882,9 @@ mod tests {
                 restricted: false,
                 trusted: false,
                 force: false,
+                preset: None,
+                ssh: false,
+                no_ssh: false,
                 shares: vec![],
                 publish: vec![],
             })
@@ -1244,6 +1277,9 @@ mod tests {
             let args = parse(argv).unwrap();
             assert!(args.action().is_err(), "{argv:?}");
         }
+        // --no-ssh can't survive to action() at all — clap refuses it:
+        // a machine forwards the agent unconditionally.
+        assert!(parse(&["cm", "--install", "alpine", "--machine", "--no-ssh"]).is_err());
     }
 
     #[test]

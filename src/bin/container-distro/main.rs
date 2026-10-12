@@ -17,7 +17,7 @@ use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser};
 use container_distro::ops::{self, DistroSummary, RunOpts};
 use container_distro::plugin;
-use container_distro::spec::{Automount, HomeMount, OriginSource, SpecChanges};
+use container_distro::spec::{Automount, Intent, OriginSource, Preset, SpecChanges};
 use container_distro::table::{columns, human_bytes, local_datetime};
 use container_distro::{catalog, catalog_ops, wsl};
 
@@ -121,6 +121,10 @@ fn install_completions(dir: Option<PathBuf>) -> Result<()> {
 
 fn print_table(rows: &[DistroSummary]) {
     let dash = || "-".to_string();
+    // Unpinned resources render the host's pick bracketed — `[8]`
+    // means "derived, not set".
+    let (def_cpus, def_mem) = container_distro::ops::default_resources();
+    let def_mem = container_distro::spec::size_bytes(&def_mem).unwrap_or(0);
     let mut table = vec![
         [
             "NAME", "IMAGE", "CREATED", "STATE", "IP", "CPUS", "MEMORY", "DISK", "MOUNTS", "PORTS",
@@ -142,13 +146,46 @@ fn print_table(rows: &[DistroSummary]) {
                 .unwrap_or_else(dash),
             r.status.clone(),
             r.ip_address.clone().unwrap_or_else(dash),
-            r.cpus.map_or_else(dash, |c| c.to_string()),
-            r.memory.map_or_else(dash, human_bytes),
+            // Unpinned resources show the host's pick bracketed —
+            // `[8]` means "derived, not set" — except rows with no
+            // spec at all (an interrupted create), which get `-`.
+            r.cpus.map_or_else(
+                || {
+                    if r.status == "interrupted" {
+                        dash()
+                    } else {
+                        format!("[{def_cpus}]")
+                    }
+                },
+                |c| c.to_string(),
+            ),
+            r.memory.map_or_else(
+                || {
+                    if r.status == "interrupted" {
+                        dash()
+                    } else {
+                        format!("[{}]", human_bytes(def_mem))
+                    }
+                },
+                human_bytes,
+            ),
             r.disk_size.map_or_else(dash, human_bytes),
-            if r.mounts.is_empty() {
-                dash()
-            } else {
-                r.mounts.join(",")
+            {
+                // User mounts, then compact markers for the derived
+                // shares: `~`/`~(ro)` for home, `automounts`/
+                // `automounts(ro)` for the /Volumes set.
+                let mut m = r.mounts.clone();
+                match r.home_mount.as_deref() {
+                    Some("ro") => m.push("~(ro)".into()),
+                    Some("rw") => m.push("~".into()),
+                    _ => {}
+                }
+                match r.automount.as_deref() {
+                    Some("ro") => m.push("automounts(ro)".into()),
+                    Some("rw") => m.push("automounts".into()),
+                    _ => {}
+                }
+                if m.is_empty() { dash() } else { m.join(",") }
             },
             if r.ports.is_empty() {
                 dash()
@@ -221,7 +258,7 @@ fn run(cli: Cli) -> Result<()> {
         Command::Create { name, opts, image } => {
             println!(
                 "{}",
-                ops::create(name, &opts, &image, OriginSource::Image, HomeMount::None)?
+                ops::create(name, &opts, &image, OriginSource::Image, &Intent::default())?
             );
         }
         Command::Catalog { command } => catalog_command(command)?,
@@ -274,6 +311,10 @@ fn run(cli: Cli) -> Result<()> {
         }
         Command::Set {
             name,
+            preset,
+            restricted,
+            trusted,
+            reset,
             cpus,
             memory,
             home_mount,
@@ -291,6 +332,14 @@ fn run(cli: Cli) -> Result<()> {
         } => ops::set(
             &name,
             &SpecChanges {
+                preset: preset.or(if restricted {
+                    Some(Preset::Restricted)
+                } else if trusted {
+                    Some(Preset::Trusted)
+                } else {
+                    None
+                }),
+                reset,
                 cpus,
                 memory,
                 home_mount,
@@ -326,7 +375,7 @@ fn run(cli: Cli) -> Result<()> {
                     &file,
                     &opts,
                     ops::ImportSource::Local,
-                    HomeMount::None
+                    &Intent::default()
                 )?
             );
         }

@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 use container_distro::ops::CreateOptions;
-use container_distro::spec::{Automount, HomeMount, MountSpec, PublishSpec};
+use container_distro::spec::{Automount, HomeMount, MountSpec, Preset, PublishSpec, ResetTarget};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -185,6 +185,22 @@ pub enum Command {
     /// its filesystem)
     Set {
         name: String,
+        /// Change the defaults tier — re-derives every option you
+        /// haven't explicitly pinned
+        #[arg(long, value_enum, conflicts_with_all = ["restricted", "trusted"])]
+        preset: Option<Preset>,
+        /// Restricted tier — `--preset restricted` keeping your pinned
+        /// options
+        #[arg(long, visible_alias = "untrusted", conflicts_with = "trusted")]
+        restricted: bool,
+        /// Trusted tier — `--preset trusted` keeping your pinned options
+        #[arg(long)]
+        trusted: bool,
+        /// Un-pin an option back to inherited (`--reset home-mount`),
+        /// clear a list (`--reset mounts`), or reset everything to a
+        /// tier (`--reset restricted` — also sets the preset)
+        #[arg(long, value_enum)]
+        reset: Vec<ResetTarget>,
         #[arg(long)]
         cpus: Option<u64>,
         #[arg(long)]

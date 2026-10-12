@@ -63,12 +63,13 @@ from the image.
 | `-p, --publish`        | `[HOST_IP:]HOST[:GUEST][/tcp\|udp]` (repeatable; HOST_IP defaults to `127.0.0.1`)                                                                                                                           |
 | `--cpus`               | Virtual CPUs (default: half the host's)                                                                                                                                                                     |
 | `--memory`             | e.g. `8G` (default: half the host's)                                                                                                                                                                        |
-| `--home-mount`         | `rw`/`ro`/`none` — default `none` for `create`/`import` (`rw` via `catalog install`); an explicit `--automount` mode is used if unset                                                                       |
+| `--home-mount`         | `rw`/`ro`/`none` — default `none` for `create`/`import` (`rw` via `catalog install`); the *effective* `--automount` mode is used if unset                                                                   |
 | `--network`            | Container network name; `none` for no network                                                                                                                                                               |
 | `--ssh` / `--no-ssh`   | Forward the host SSH agent socket (default: on only when the effective home-mount is `rw`)                                                                                                                  |
 | `--sudo` / `--no-sudo` | Provision passwordless sudo/doas (default: on)                                                                                                                                                              |
-| `--restricted`         | Defaults preset: `--home-mount none --network none --no-ssh --no-sudo` (alias `--untrusted`)                                                                                                                |
-| `--trusted`            | Mirror preset: `--home-mount rw --automount rw --ssh` — also opts a locked-down distro into `migrate --machine`                                                                                             |
+| `--preset`             | The defaults tier: `default`, `restricted`, or `trusted` — journaled so `set --preset` can re-derive it later                                                                                               |
+| `--restricted`         | `--preset restricted`: `--home-mount none --network none --no-ssh --no-sudo` (alias `--untrusted`)                                                                                                          |
+| `--trusted`            | `--preset trusted`: `--home-mount rw --automount rw --ssh`                                                                                                                                                  |
 | `--no-boot`            | Create without booting                                                                                                                                                                                      |
 | `--set-default`        | Make this the default distro (automatic when nothing is)                                                                                                                                                    |
 | `--force`              | Allow the name of an existing `container machine` — see below                                                                                                                                               |
@@ -81,12 +82,15 @@ same refusal applies to `import`, `catalog install`, `migrate`, and
 `cm --import --machine` when a distro holds the name. `--force` makes
 the collision deliberate (it still warns).
 
-`--automount` is live, not create-once: the `/Volumes` scan reruns on
-`set` and whenever a stopped distro starts, so attaching a volume adds
-it and ejecting one drops it -- no `set --add-volume`/`--rm-volume`
-chore. Only the canonical `/Volumes/<X>` → `/mnt/<x>` pairs are managed;
-your own mounts (including differently-targeted `/Volumes` mounts) are
-never reconciled away.
+`--automount` is live, not create-once: automounts are computed at
+every materialization (create, `set`, every start) from what's
+actually attached — the journal only stores *your* mounts, so
+attaching a volume adds it and ejecting one drops it with no
+`set --add-volume`/`--rm-volume` chore. A user mount wins a target
+collision against a computed automount, and disabling automount
+never removes a mount you added yourself — even one that looks like
+`/Volumes/<X>` → `/mnt/<x>`. `set --reset mounts` clears all user
+mounts.
 
 `--restricted` is a **defaults preset, not a sandbox**: explicit flags
 still apply, `set` can reopen anything, and `run --root`/`exec` as `0:0`
@@ -117,12 +121,19 @@ Uses `container exec`, so argv is exact -- nothing is re-split.
 | `--format`    | `table` (default) or `json` |
 
 The table shows NAME, IMAGE, CREATED, STATE, IP, CPUS, MEMORY, DISK,
-MOUNTS, PORTS, and a `*` in DEFAULT. Stopped distros list from their
+MOUNTS, PORTS, and a `*` in DEFAULT. MOUNTS lists your mounts plus a
+`~`/`~(ro)` token for the home share and `automounts`/`automounts(ro)`
+when enabled. A CPUS/MEMORY you pinned shows plainly (`4`); a value
+the host will pick at boot shows bracketed (`[8]`); `-` means nothing
+is recorded. Stopped distros list from their
 journals — CREATED is the distro's real creation time (the journal's
 `origin`), not the container's. For distros created from a file or
 catalog import, IMAGE shows the origin instead of the generated
 `local/distro-*` snapshot reference (`file:<basename>`, `catalog:<name>`;
-`--format json` carries the full `origin` object).
+`--format json` carries the full `origin` object). In JSON, `mounts`
+is user mounts only, `automounts` the computed auto-shares (home
+included), `effectiveMounts` the merged set handed to `container
+create`, and `preset` the recorded tier.
 
 ### `catalog`
 
@@ -178,9 +189,9 @@ Dump the distros' `container` configuration as JSON.
 
 ### `start NAME` / `stop NAME...`
 
-Boot a stopped distro / stop running ones. For an `automount` distro,
-`start` (and the boot a `run` triggers) first reconciles `/Volumes`
-mounts with what's actually attached.
+Boot a stopped distro / stop running ones. An `automount` distro's
+`/Volumes` shares are recomputed at every boot (and the boot a `run`
+triggers) from what's actually attached.
 
 ### `delete` (alias `rm`) `-f|--force [--all] NAME...`
 
@@ -199,19 +210,30 @@ The journaled `rootfs.ext4` reattaches via `rootFsOverride` — no image
 round-trip. The journal's `spec.json` is the per-distro flock target,
 serializing `set` against start/delete.
 
-| Option                                        | Description                                                                                                                     |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `--cpus`                                      | Virtual CPUs                                                                                                                    |
-| `--memory`                                    | e.g. `8G`                                                                                                                       |
-| `--home-mount`                                | `rw`/`ro`/`none` — replaces the create-time default                                                                             |
-| `--network`                                   | Network name; `none` disables, `default` restores                                                                               |
-| `--ssh`/`--no-ssh`                            | SSH-agent forwarding                                                                                                            |
-| `--sudo`/`--no-sudo`                          | Sudo/doas provisioning -- `--no-sudo` stops *future* grants; sudoers/doas files already inside the guest remain                 |
-| `--automount[=rw\|ro\|none]`/`--no-automount` | Auto-manage `/Volumes` mounts at `/mnt/<name>`; enabling reconciles now and at each start, `none`/`--no-automount` removes them |
-| `--add-volume`                                | `SRC:DST[:opt,...]` add or replace a mount by guest path (same option set as `-v`)                                              |
-| `--rm-volume`                                 | `DST` remove the mount at that guest path                                                                                       |
-| `--publish`                                   | Add a published port (replaces one on the same host port)                                                                       |
-| `--unpublish`                                 | `HOST_PORT` stop publishing that host port                                                                                      |
+| Option                                        | Description                                                                                                                                                                                         |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--cpus`                                      | Virtual CPUs                                                                                                                                                                                        |
+| `--memory`                                    | e.g. `8G`                                                                                                                                                                                           |
+| `--home-mount`                                | `rw`/`ro`/`none` — replaces the create-time default                                                                                                                                                 |
+| `--network`                                   | Network name; `none` disables, `default` restores                                                                                                                                                   |
+| `--ssh`/`--no-ssh`                            | SSH-agent forwarding                                                                                                                                                                                |
+| `--sudo`/`--no-sudo`                          | Sudo/doas provisioning -- `--no-sudo` stops *future* grants; sudoers/doas files already inside the guest remain                                                                                     |
+| `--automount[=rw\|ro\|none]`/`--no-automount` | Auto-manage `/Volumes` mounts at `/mnt/<name>` — computed at each start from what's attached                                                                                                        |
+| `--preset`                                    | `default`/`restricted`/`trusted` — change the distro's tier, re-deriving every option you haven't pinned                                                                                            |
+| `--restricted`/`--trusted`                    | `--preset restricted`/`--preset trusted` (alias `--untrusted`)                                                                                                                                      |
+| `--reset`                                     | Un-pin an option back to derived (`--reset home-mount`), clear a list (`--reset mounts`, `--reset publish`), or reset every pin to a tier (`--reset restricted` — also sets the preset); repeatable |
+| `--add-volume`                                | `SRC:DST[:opt,...]` add or replace a mount by guest path (same option set as `-v`)                                                                                                                  |
+| `--rm-volume`                                 | `DST` remove the mount at that guest path                                                                                                                                                           |
+| `--publish`                                   | Add a published port (replaces one on the same host port)                                                                                                                                           |
+| `--unpublish`                                 | `HOST_PORT` stop publishing that host port                                                                                                                                                          |
+
+Options are tracked as **explicit pins** versus **derived** values: a
+flag you pass on `create` or `set` is pinned and survives `set
+--preset` re-derivation; everything else follows the tier (and chains
+like home-mount ← automount). `set` reports what the tier change
+re-derived and what's still pinned. Catalog installs also record the
+entry's curated request — it fills options nothing else sets and
+caps what a tier would raise, but your pins always win.
 
 A **never-booted** distro has no `rootfs.ext4` yet — the disk
 materializes on first boot, so `set` just rewrites the journal.
@@ -275,6 +297,10 @@ from the distro's image, boots it once to materialize its disk, then
 replaces that disk with a clone of the distro's rootfs; only the
 `machine create` subset applies (`--cpus`, `--memory`, `--home-mount`,
 `--no-boot`, `--set-default`) and other `create` options are refused. A
+machine forwards `SSH_AUTH_SOCK` at every boot with no opt-out, so
+migrating a distro whose resolved agent setting is off warns — and
+refuses outright when the distro has it explicitly pinned off
+(`set --ssh` it first). A
 never-booted source has no filesystem to carry, so the target starts
 from the image.
 
