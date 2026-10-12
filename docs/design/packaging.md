@@ -2,8 +2,9 @@
 
 How releases reach users, and why. Decided: a **macOS Installer `.pkg`**
 plus a **`cargo-binstall`-compatible tarball** attached to each GitHub
-Release by `.github/workflows/release.yml`; `cargo install` from
-crates.io stays a first-class path.
+Release by `.github/workflows/release.yml`, alongside
+`THIRD-PARTY-NOTICES.yaml` and a generated **CycloneDX SBOM**; `cargo
+install` from crates.io stays a first-class path.
 
 ## Options considered
 
@@ -84,6 +85,48 @@ process is replaced before the privileged install runs. Downgrades,
 the unsigned CI build, a foreign signer, and non-pkg installs prompt
 first (`--force` skips); no `container` services need stopping — the
 installer only swaps files under the install root.
+
+## SBOM (#28)
+
+`build-pkg.sh` also emits a CycloneDX 1.5 JSON SBOM,
+`container-distro-<version>-sbom.cdx.json`, via `cargo cyclonedx
+--target aarch64-apple-darwin` — the dependency tree of the shipped
+binaries: dev-deps are omitted and build-only deps (e.g. `cc`) are
+inventoried with `scope: excluded`. It's the consumer-side half of the
+supply-chain story — grype/osv-scanner/Dependency-Track can match CVEs
+against the shipped dep tree without re-deriving it — and it
+complements `THIRD-PARTY-NOTICES.yaml`, which stays the carrier for
+the license texts those licenses require reproducing. Since
+`Cargo.lock` is committed, every machine generates the same tree, so
+the SBOM has no signed/unsigned variant: the single CI-generated file
+serves. The workflow attaches it by explicit filename — it can't match
+the `container-distro-*.pkg`/`*.tar.gz` globs, but explicit is the
+lesson of the component-pkg leak anyway.
+
+`cargo-cyclonedx` (OWASP's plugin) was picked over `cargo sbom` for its
+target/feature/dep-kind filtering — it derives the tree from `cargo
+metadata`, not just `Cargo.lock` — and over language-agnostic scanners
+(syft et al.) which can't distinguish shipped deps from build-time
+ones.
+
+The binaries additionally carry the dep tree themselves: `build-pkg.sh`
+prefers `cargo auditable build`, which injects the resolved tree
+(zlib-compressed JSON in a `.dep-v0` linker section) into each binary.
+`cargo audit bin` (already a gate dependency), `rust-audit-info`, or
+`auditable2cdx` can then inventory an *installed* binary — no release
+asset required — and the section survives `strip = "symbols"` and
+pre-codesign since it's injected at link time. This is the interim
+stand-in until Cargo grows native SBOM embedding
+(rust-lang/rfcs#3553); when that lands, `cargo build` alone produces
+the same property and the wrapper can drop.
+
+Both plugins are **optional for `build-pkg.sh`** — a missing one is
+reported and skipped, keeping ad-hoc and fixture builds (the
+self-update test tree) free of supply-chain-tooling requirements. The
+**official artifacts always carry the metadata**: `release.yml`
+installs the pinned tools, `build-pkg-signed.sh` preflights them, and
+the script reports a binary lacking `.dep-v0` so a `--skip-build`
+reuse can't silently swap in a plain-cargo build.
 
 ## The `container` dependency
 

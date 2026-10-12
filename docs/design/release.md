@@ -4,8 +4,9 @@ Releases are git tags plus a maintenance branch; `cargo publish` after
 tagging makes the release installable via `cargo install
 container-distro` (`--path .` builds a checkout; see [install]), and
 the tag-push workflow attaches the built artifacts -- the macOS
-installer .pkg and the `cargo-binstall` tarball `scripts/build-pkg.sh`
-produces, plus `THIRD-PARTY-NOTICES.yaml` ([packaging]).
+installer .pkg, the `cargo-binstall` tarball, and the CycloneDX SBOM
+`scripts/build-pkg.sh` produces, plus `THIRD-PARTY-NOTICES.yaml`
+([packaging]).
 
 ## Versioning
 
@@ -108,7 +109,8 @@ The mechanical bits are driven by [cargo-release] (`cargo install
 
 6. Pushing the tag runs `.github/workflows/release.yml`, which verifies
    the tag matches the package version, re-runs the tests, builds the
-   .pkg + tarball via `scripts/build-pkg.sh`, and creates a **draft**
+   .pkg + tarball + SBOM via `scripts/build-pkg.sh`, and creates a
+   **draft**
    GitHub Release with the new `CHANGELOG.md` section as notes and the
    artifacts attached (`--prerelease` when the tag carries a `-` suffix
    like `v0.4.0-rc.1`). CI has no signing keychain, so the attached
@@ -137,6 +139,11 @@ The mechanical bits are driven by [cargo-release] (`cargo install
    carries every dep's copyright + license text (MIT/BSD/Apache/Unicode
    all require reproducing them in distributed copies). `cargo install`
    alone doesn't trigger that -- users compile the deps themselves.
+   The SBOM is the consumer-side counterpart: a machine-readable dep
+   inventory for CVE scanning ([packaging]). Official builds also embed
+   the same tree in the binaries — `build-pkg.sh` uses `cargo
+   auditable` when installed, and the signed/CI paths require it — so
+   `cargo audit bin` can inventory an installed copy.
 
 7. Publish to crates.io **from the tagged commit**: `cargo publish`
    (one-time `cargo login` first). `cargo publish --dry-run` packages

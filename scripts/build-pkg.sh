@@ -1,8 +1,14 @@
 #!/bin/sh
-# Build the macOS installer .pkg and the cargo-binstall tarball that the
-# release workflow attaches to GitHub Releases (#14). macOS only — needs
-# cargo, jq, pkgbuild, and productbuild. Output lands in scratch/pkg/
-# (gitignored). `--skip-build` reuses the existing target/release build.
+# Build the macOS installer .pkg, the cargo-binstall tarball, and — when
+# cargo-cyclonedx is installed — the CycloneDX SBOM that the release
+# workflow attaches to GitHub Releases (#14, #28). When cargo-auditable
+# is installed the binaries also embed their dep tree for
+# `cargo audit bin`. Both plugins are recommended but optional here —
+# build-pkg-signed.sh and release.yml (the official release paths)
+# require them, so shipped artifacts always carry the metadata.
+# macOS only — needs cargo, jq, pkgbuild, and productbuild. Output
+# lands in scratch/pkg/ (gitignored). `--skip-build` reuses the
+# existing target/release build.
 #
 # Signing is auto-detected (docs/design/packaging.md):
 #   --sign           require signing — fail when the identities are absent
@@ -36,8 +42,18 @@ IDENTIFIER=io.github.daphnediane.container-distro
 TARGET=aarch64-apple-darwin
 
 if [ -z "$SKIP_BUILD" ]; then
-    step "cargo build --release"
-    cargo build --release
+    # `cargo auditable` is a drop-in cargo wrapper that embeds the
+    # resolved dep tree (zlib JSON, `.dep-v0` section) into each
+    # binary — `cargo audit bin` can then scan an installed copy with
+    # no bookkeeping. Interim until native cargo SBOM embedding lands.
+    if command -v cargo-auditable >/dev/null; then
+        step "cargo auditable build --release"
+        cargo auditable build --release
+    else
+        step "cargo build --release"
+        cargo build --release
+        echo "  (no cargo auditable — binaries won't embed their dep tree; recommended for releases)"
+    fi
 fi
 
 # cargo metadata reports the real target dir — honoring
@@ -49,6 +65,31 @@ R="$(echo "$META" | jq -r '.target_directory')/release"
     echo "release binaries missing — run without --skip-build" >&2
     exit 1
 }
+# Report whether the binaries carry the embedded dep tree — absent on
+# a --skip-build reuse of a plain `cargo build`, or when
+# cargo-auditable wasn't installed above.
+for b in cm container-distro; do
+    otool -l "$R/$b" | grep -q dep-v0 || \
+        echo "  note: $b has no .dep-v0 dep tree (not built via cargo auditable)"
+done
+
+step "CycloneDX SBOM"
+SBOM="container-distro-$version-sbom.cdx"
+mkdir -p "$OUT"
+rm -f "$OUT/$SBOM.json"   # don't leave a stale artifact from a prior run
+if command -v cargo-cyclonedx >/dev/null; then
+    # cargo cyclonedx has no output-dir flag and --override-filename
+    # rejects path separators, so it writes next to Cargo.toml —
+    # generate there and move the file into the output dir. Dev-deps
+    # are always omitted and build-only deps land marked
+    # scope=excluded; --target pins the dep tree to the shipped
+    # platform whatever the build host.
+    cargo cyclonedx --format json --spec-version 1.5 \
+        --target "$TARGET" --override-filename "$SBOM"
+    mv "$SBOM.json" "$OUT/$SBOM.json"
+else
+    echo "  (no cargo cyclonedx — skipping the SBOM; recommended for releases)"
+fi
 
 # Find the first keychain identity with the given cert name under the
 # given search policy. Empty when absent (the unsigned path).
@@ -177,6 +218,6 @@ rm -rf "$OUT/$TDIR"
 
 step "summary"
 pkgutil --payload-files "$COMPONENT_DIR/$COMPONENT" | sed 's/^/  /'
-shasum -a 256 \
-    "$OUT/$PKGNAME.pkg" \
-    "$OUT/$TDIR.tar.gz" | sed 's/^/  /'
+SUMFILES="$OUT/$PKGNAME.pkg $OUT/$TDIR.tar.gz"
+[ -f "$OUT/$SBOM.json" ] && SUMFILES="$SUMFILES $OUT/$SBOM.json"
+shasum -a 256 $SUMFILES | sed 's/^/  /'

@@ -26,4 +26,15 @@ if [ -n "$missing" ]; then
 fi
 export CODESIGN_IDENTITY PKG_SIGN_IDENTITY NOTARY_PROFILE
 
+# Official artifacts always carry the SBOM + embedded dep tree —
+# build-pkg.sh treats the plugins as optional, the signed path doesn't.
+missing=
+for t in cargo-auditable cargo-cyclonedx; do
+    command -v "$t" >/dev/null || missing="$missing $t"
+done
+if [ -n "$missing" ]; then
+    echo "missing tools:$missing — cargo install --locked$missing" >&2
+    exit 1
+fi
+
 exec scripts/build-pkg.sh --sign "$@"

@@ -3,9 +3,10 @@ name: release
 # Pushing an annotated v* tag verifies it against the package version,
 # re-runs the tests, and drafts the GitHub Release from the CHANGELOG
 # section plus the built artifacts (scripts/build-pkg.sh): the macOS
-# installer .pkg, the cargo-binstall tarball, and
+# installer .pkg, the cargo-binstall tarball, the CycloneDX SBOM, and
 # THIRD-PARTY-NOTICES.yaml — the maintainer reviews and publishes the
-# draft. Artifacts are unsigned unless the runner's keychain holds
+# draft. The binaries embed their dep tree (cargo auditable).
+# Artifacts are unsigned unless the runner's keychain holds
 # Developer ID identities (docs/design/packaging.md).
 on:
   push:
@@ -36,6 +37,10 @@ jobs:
           fi
 
       - run: cargo test --workspace
+
+      # The cargo plugins build-pkg.sh calls — pinned so a new upstream
+      # release can't change the artifacts mid-release.
+      - run: cargo install --locked cargo-cyclonedx@0.5.9 cargo-auditable@0.7.7
 
       - name: Build release artifacts
         run: scripts/build-pkg.sh --no-sign
@@ -71,4 +76,5 @@ jobs:
             $prerelease \
             scratch/pkg/container-distro-*.pkg \
             scratch/pkg/container-distro-*.tar.gz \
+            "scratch/pkg/container-distro-${GITHUB_REF_NAME#v}-sbom.cdx.json" \
             THIRD-PARTY-NOTICES.yaml

@@ -15,6 +15,10 @@ maintainer view.
 - `cargo deny`, `cargo audit`, and `cargo bundle-licenses` for the
   release gate; `jq`, `pkgbuild`, `productbuild` (Xcode tools) for
   packaging
+- `cargo cyclonedx` and `cargo auditable` — optional for ad-hoc
+  `build-pkg.sh` runs (skipped with a warning), required on the
+  official release path (`build-pkg-signed.sh`, release.yml): they
+  produce the CycloneDX SBOM and the dep tree embedded in the binaries
 
 ## Build and test
 
@@ -62,23 +66,29 @@ A single crate shipping two binaries over a shared library:
 
 ## Scripts
 
-| Script                                | Purpose                                                             |
-| ------------------------------------- | ------------------------------------------------------------------- |
-| `scripts/install-local.sh`            | Maintainer reinstall: `cargo install --path .` + plugin + man pages |
-| `scripts/dev-clean.sh`                | Remove all installed artifacts (pkg, cargo, manual) — `-n` previews |
-| `scripts/build-pkg.sh`                | Build the .pkg + binstall tarball under `scratch/pkg/`              |
-| `scripts/build-pkg-signed.sh`         | Signed+notarized build; sources `packaging/signing.local.conf`      |
-| `scripts/upload-release-artifacts.sh` | `vX.Y.Z` — upload the signed artifacts over the CI draft release    |
-| `scripts/check-legacy-adoption.sh`    | ≤0.4.2 → journaled upgrade check against the real state dir         |
-| `scripts/make-fake-releases.sh`       | Fake GitHub-releases tree for `--update` testing (below)            |
-| `scripts/release-gate.sh`             | The step-1 release gate in one command                              |
+| Script                                | Purpose                                                                 |
+| ------------------------------------- | ----------------------------------------------------------------------- |
+| `scripts/install-local.sh`            | Maintainer reinstall: `cargo install --path .` + plugin + man pages     |
+| `scripts/dev-clean.sh`                | Remove all installed artifacts (pkg, cargo, manual) — `-n` previews     |
+| `scripts/build-pkg.sh`                | Build the .pkg + binstall tarball + CycloneDX SBOM under `scratch/pkg/` |
+| `scripts/build-pkg-signed.sh`         | Signed+notarized build; sources `packaging/signing.local.conf`          |
+| `scripts/upload-release-artifacts.sh` | `vX.Y.Z` — upload the signed artifacts over the CI draft release        |
+| `scripts/check-legacy-adoption.sh`    | ≤0.4.2 → journaled upgrade check against the real state dir             |
+| `scripts/make-fake-releases.sh`       | Fake GitHub-releases tree for `--update` testing (below)                |
+| `scripts/release-gate.sh`             | The step-1 release gate in one command                                  |
 
 ## Packaging
 
 `scripts/build-pkg.sh` stages the payload — `cm`, `container-distro`,
 the plugin registration, man pages, completions, and the
 uninstall/update scripts — under `scratch/pkg/` and produces the
-component+product `.pkg` and the `cargo-binstall` tarball. Signing is
+component+product `.pkg` and the `cargo-binstall` tarball. With
+`cargo cyclonedx` installed it also produces the CycloneDX SBOM
+(`container-distro-X.Y.Z-sbom.cdx.json`), and with `cargo auditable`
+the binaries embed their dep tree in a `.dep-v0` section —
+`cargo audit bin` can scan an installed copy. Missing plugins are
+skipped with a warning for ad-hoc builds; the official release path
+requires them. Signing is
 auto-detected from the keychain (`--sign` requires it, `--no-sign`
 forces the `-unsigned` artifact); `NOTARY_PROFILE` opts into
 notarize+staple. The signed path is `scripts/build-pkg-signed.sh`
