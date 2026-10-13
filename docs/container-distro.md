@@ -55,24 +55,27 @@ Journal files are `uchg`-locked at rest (design/security.md T6).
 Create a distro from an image and boot it. Name defaults to a derivation
 from the image.
 
-| Option                 | Description                                                                                                                                                                                                 |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `-n, --name`           | Distro name (lowercase DNS-style)                                                                                                                                                                           |
-| `-v, --volume`         | `SRC:DST[:opt,...]` share a host directory (repeatable); opts: `ro`/`rw` plus guest mount flags `nosuid`,`nodev`,`noexec`,`noatime`,`nodiratime`,`relatime`,`sync`,`dirsync`                                |
-| `--automount[=MODE]`   | Share every `/Volumes/<X>` at `/mnt/<x>`; `MODE` is `rw` (default) or `ro` (skips hidden/`com.apple.*`/unreadable volumes). Shares get `nosuid,nodev`; with no `--home-mount`, home follows `MODE` (warned) |
-| `-p, --publish`        | `[HOST_IP:]HOST[:GUEST][/tcp\|udp]` (repeatable; HOST_IP defaults to `127.0.0.1`)                                                                                                                           |
-| `--cpus`               | Virtual CPUs (default: half the host's)                                                                                                                                                                     |
-| `--memory`             | e.g. `8G` (default: half the host's)                                                                                                                                                                        |
-| `--home-mount`         | `rw`/`ro`/`none` — default `none` for `create`/`import` (`rw` via `catalog install`); the *effective* `--automount` mode is used if unset                                                                   |
-| `--network`            | Container network name; `none` for no network                                                                                                                                                               |
-| `--ssh` / `--no-ssh`   | Forward the host SSH agent socket (default: on only when the effective home-mount is `rw`)                                                                                                                  |
-| `--sudo` / `--no-sudo` | Provision passwordless sudo/doas (default: on)                                                                                                                                                              |
-| `--preset`             | The defaults tier: `default`, `restricted`, or `trusted` — journaled so `set --preset` can re-derive it later                                                                                               |
-| `--restricted`         | `--preset restricted`: `--home-mount none --network none --no-ssh --no-sudo` (alias `--untrusted`)                                                                                                          |
-| `--trusted`            | `--preset trusted`: `--home-mount rw --automount rw --ssh`                                                                                                                                                  |
-| `--no-boot`            | Create without booting                                                                                                                                                                                      |
-| `--set-default`        | Make this the default distro (automatic when nothing is)                                                                                                                                                    |
-| `--force`              | Allow the name of an existing `container machine` — see below                                                                                                                                               |
+| Option                 | Description                                                                                                                                                                                                                                                                                         |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-n, --name`           | Distro name (lowercase DNS-style)                                                                                                                                                                                                                                                                   |
+| `-v, --volume`         | `SRC:DST[:opt,...]` share a host directory (repeatable); opts: `ro`/`rw` plus guest mount flags `nosuid`,`nodev`,`noexec`,`noatime`,`nodiratime`,`relatime`,`sync`,`dirsync`                                                                                                                        |
+| `--automount[=MODE]`   | Share every `/Volumes/<X>` at `/mnt/<x>`; `MODE` is `rw` (default) or `ro` (skips hidden/`com.apple.*`/unreadable volumes). Shares get `nosuid,nodev`; with no `--home-mount`, home follows `MODE` (warned)                                                                                         |
+| `-p, --publish`        | `[HOST_IP:]HOST[:GUEST][/tcp\|udp]` (repeatable; HOST_IP defaults to `127.0.0.1`)                                                                                                                                                                                                                   |
+| `--cpus`               | Virtual CPUs (default: half the host's)                                                                                                                                                                                                                                                             |
+| `--memory`             | e.g. `8G` (default: half the host's)                                                                                                                                                                                                                                                                |
+| `--home-mount`         | `rw`/`ro`/`none` — default `none` for `create`/`import` (`rw` via `catalog install`); the *effective* `--automount` mode is used if unset                                                                                                                                                           |
+| `--network`            | Container network name; `none` for no network                                                                                                                                                                                                                                                       |
+| `--ssh` / `--no-ssh`   | Forward the host SSH agent socket (default: on only when the effective home-mount is `rw`)                                                                                                                                                                                                          |
+| `--sudo` / `--no-sudo` | Provision passwordless sudo/doas (default: on)                                                                                                                                                                                                                                                      |
+| `--preset`             | The defaults tier: `default`, `restricted`, or `trusted` — journaled so `set --preset` can re-derive it later                                                                                                                                                                                       |
+| `--restricted`         | `--preset restricted`: `--home-mount none --network none --no-ssh --no-sudo` (alias `--untrusted`)                                                                                                                                                                                                  |
+| `--trusted`            | `--preset trusted`: `--home-mount rw --automount rw --ssh`                                                                                                                                                                                                                                          |
+| `--use-wsl-conf`       | bare flag = `all`, or `FEATURE,...`/`all`/`none` — honor the guest's `/etc/wsl.conf`: `hostname`, `fstab`, `init` (systemd/openrc), `command` ([boot] command, as root), `automount` (lower mounts for `enabled=false`). A bare list pins exactly those; `all` tracks new features as they're added |
+| `--no-wsl-conf`        | Honor nothing from `/etc/wsl.conf` (the same as `--use-wsl-conf=none`)                                                                                                                                                                                                                              |
+| `--ignore-wsl-conf`    | Deny features — with no `--use-wsl-conf`, leaves `all` minus the list                                                                                                                                                                                                                               |
+| `--no-boot`            | Create without booting                                                                                                                                                                                                                                                                              |
+| `--set-default`        | Make this the default distro (automatic when nothing is)                                                                                                                                                                                                                                            |
+| `--force`              | Allow the name of an existing `container machine` — see below                                                                                                                                                                                                                                       |
 
 Creating a distro named after an existing `container machine` is
 **refused** without `--force`: `cm` resolves a shared name to the
@@ -95,6 +98,17 @@ mounts.
 `--restricted` is a **defaults preset, not a sandbox**: explicit flags
 still apply, `set` can reopen anything, and `run --root`/`exec` as `0:0`
 always work. See security.md.
+
+`/etc/wsl.conf` honoring is a **distro-only** feature (machines never
+read it): init reads the guest's own file at every boot for the enabled
+features — WSL's restart-to-apply model — and `container cp` snapshots
+both `wsl.conf` and `wsl-distribution.conf` into the uchg-locked journal
+at boot and before every stop. `none` (the default for ad-hoc creates)
+means the file is never opened and nothing is snapshotted; `trusted`
+and catalog installs ask for `all`. `command` is the dangerous feature —
+it runs image-supplied shell as root — so it lands only where the image
+was already trusted to run code. See
+[design/notes/configuration-files.md] for the per-key support matrix.
 
 ### `run [-n NAME] [OPTIONS] [-- CMD...]`
 
@@ -222,6 +236,9 @@ serializing `set` against start/delete.
 | `--preset`                                    | `default`/`restricted`/`trusted` — change the distro's tier, re-deriving every option you haven't pinned                                                                                            |
 | `--restricted`/`--trusted`                    | `--preset restricted`/`--preset trusted` (alias `--untrusted`)                                                                                                                                      |
 | `--reset`                                     | Un-pin an option back to derived (`--reset home-mount`), clear a list (`--reset mounts`, `--reset publish`), or reset every pin to a tier (`--reset restricted` — also sets the preset); repeatable |
+| `--use-wsl-conf`                              | bare flag = `all`, or `FEATURE,...`/`all`/`none` — fold features into the honored set (`use` allows; `all`/`none` reset the mode; see design/notes/configuration-files.md)                          |
+| `--no-wsl-conf`                               | Honor nothing — drops the snapshots                                                                                                                                                                 |
+| `--ignore-wsl-conf`                           | Deny features from what the stored mode honors — `all` is honoring's off switch                                                                                                                     |
 | `--add-volume`                                | `SRC:DST[:opt,...]` add or replace a mount by guest path (same option set as `-v`)                                                                                                                  |
 | `--rm-volume`                                 | `DST` remove the mount at that guest path                                                                                                                                                           |
 | `--publish`                                   | Add a published port (replaces one on the same host port)                                                                                                                                           |
@@ -259,8 +276,10 @@ on never-booted distros -- there is no `rootfs.ext4` yet.
 
 Create a distro from a rootfs `tar`/`tar.gz` (`-` = stdin) — a `.wsl`
 distribution package works too (it's a rootfs tar; its
-`wsl-distribution.conf` lands in the guest but is only honored by
-`cm --install --from-file`'s name suggestion). Accepts all `create`
+`wsl-distribution.conf` supplies `oobe.defaultName` when no name is
+given and, where the distro honors its config, both packaged config
+files are snapshotted into the journal and `automount.enabled=false`
+lowers the mount defaults). Accepts all `create`
 options including `--restricted`. Importing an image is trusting it
 with your identity -- see security.md.
 
@@ -384,3 +403,4 @@ Keep publishes on loopback unless you want LAN-reachable services -- a
 [install.md]: install.md#man-pages
 [install.md-2]: install.md#shell-completions
 [naming.md]: design/naming.md
+[design/notes/configuration-files.md]: design/notes/configuration-files.md

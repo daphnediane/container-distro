@@ -18,7 +18,9 @@ use crate::container::{self, ImageListEntry, Machine, MachineDetail};
 use crate::naming;
 use crate::oci;
 use crate::ops::{self, CreateOptions};
-use crate::spec::{HomeMount, Intent, LABEL_IMPORTED_FROM, LABEL_ROOTFS_SHA256, OriginSource};
+use crate::spec::{
+    HomeMount, Intent, LABEL_IMPORTED_FROM, LABEL_ROOTFS_SHA256, OriginSource, WslConfMode,
+};
 use crate::table;
 use crate::wsl;
 use crate::{catalog, ops::ImportSource};
@@ -127,6 +129,15 @@ pub fn install_resolved(
                 Some(n) => OriginSource::CatalogImage { name: n.into() },
                 None => OriginSource::Image,
             };
+            // A catalog install's image was curated and verified at
+            // install time — its packaged config is trusted like
+            // `--trusted`'s, as source intent (explicit flags still
+            // win). Only named entries: an image-ref fallback isn't a
+            // catalog install.
+            let mut requested = requested;
+            if name.is_some() {
+                requested.wsl_conf = Some(WslConfMode::all());
+            }
             ops::create(Some(distro_name), opts, image, origin, &requested)
         }
         Resolved::Wsl {
@@ -187,11 +198,13 @@ pub fn import_file(
     if !file.is_file() {
         bail!("{} does not exist", file.display());
     }
+    // One scan yields the name suggestion and the packaged config
+    // files `import` snapshots — no second pass over the tar.
+    let pkg = wsl::package_conf(file).unwrap_or_default();
     let name = requested_name.unwrap_or_else(|| {
         container::default_machine_name(
-            &wsl::distribution_name(file)
-                .ok()
-                .flatten()
+            &pkg.default_name
+                .clone()
                 .or_else(|| name_hint.map(str::to_string))
                 .unwrap_or_else(|| file_default_name(file)),
         )
@@ -204,7 +217,7 @@ pub fn import_file(
     if !opts.force {
         ops::bail_machine_shadow(&name, false)?;
     }
-    ops::import(&name, file, opts, source, requested)
+    ops::import(&name, file, opts, source, requested, Some(&pkg))
 }
 
 /// A `container machine` plus the inspected fields catalog reporting

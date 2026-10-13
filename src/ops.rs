@@ -68,14 +68,15 @@ use crate::container::{
 };
 use crate::naming::{label_key, label_lookup, state_dir};
 use crate::oci;
+use crate::wsl;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::spec::{
-    Automount, DistroOrigin, DistroSpec, HomeMount, HostUser, INIT_DIR, Intent, JournalSpec,
-    LABEL_DISTRO, LABEL_EXPORT_SCRATCH, LABEL_HOME_MOUNT, LABEL_IMPORTED_FROM, LABEL_MACHINE,
-    LABEL_ROOTFS_SHA256, MountSpec, OriginSource, Preset, PublishSpec, ResolveCtx, ResolvedSpec,
-    SpecChanges, automounts, size_bytes,
+    Automount, ConfList, DistroOrigin, DistroSpec, HomeMount, HostUser, INIT_DIR, Intent,
+    JournalSpec, LABEL_DISTRO, LABEL_EXPORT_SCRATCH, LABEL_HOME_MOUNT, LABEL_IMPORTED_FROM,
+    LABEL_MACHINE, LABEL_ROOTFS_SHA256, MountSpec, OriginSource, Preset, PublishSpec, ResolveCtx,
+    ResolvedSpec, SpecChanges, WslConf, WslConfMode, automounts, mode_from_flags, size_bytes,
 };
 
 /// One distro, as reported by [`summaries`] (and `list --format json`).
@@ -221,6 +222,29 @@ pub struct CreateOptions {
     /// still apply — the mirror of --restricted. (`--preset trusted`)
     #[arg(long, conflicts_with = "restricted")]
     pub trusted: bool,
+
+    /// Honor the guest's /etc/wsl.conf — optionally a comma list of
+    /// features: hostname, fstab, init, command, automount, or
+    /// `all`/`none` (bare `--use-wsl-conf` is `all`). A bare list pins
+    /// exactly those features (`none` honors nothing); `command` runs
+    /// the file's [boot] command as root once per boot; `automount`
+    /// lowers automount/home-mount for an archive whose config says
+    /// enabled=false. Default: `all` for --trusted and catalog
+    /// installs, `none` otherwise
+    #[arg(long, value_name = "FEATURE,...|all|none", num_args = 0..=1,
+          require_equals = true, default_missing_value = "all")]
+    pub use_wsl_conf: Option<ConfList>,
+
+    /// Stop honoring /etc/wsl.conf entirely (the same as
+    /// `--use-wsl-conf=none`)
+    #[arg(long, conflicts_with_all = ["use_wsl_conf", "ignore_wsl_conf"])]
+    pub no_wsl_conf: bool,
+
+    /// Deny parts of /etc/wsl.conf — subtracts from what the preset and
+    /// source would grant (`all` ignores the file entirely, the same
+    /// as --no-wsl-conf)
+    #[arg(long, value_name = "FEATURE,...|all|none")]
+    pub ignore_wsl_conf: Option<ConfList>,
 
     /// Create without booting
     #[arg(long)]
@@ -731,6 +755,12 @@ fn flag_pair(on: bool, off: bool) -> Option<bool> {
 /// The `Intent` a `CreateOptions`' flags pin — the user side of the
 /// spec; the source side comes from the catalog entry or machine.
 fn create_intent(opts: &CreateOptions) -> Intent {
+    // `--no-wsl-conf` is `--use-wsl-conf=none` by another name; the
+    // parse-level conflict keeps the two from arriving together.
+    let use_conf = opts
+        .use_wsl_conf
+        .clone()
+        .or_else(|| opts.no_wsl_conf.then(ConfList::none));
     Intent {
         home_mount: opts.home_mount,
         automount: opts.automount,
@@ -739,6 +769,7 @@ fn create_intent(opts: &CreateOptions) -> Intent {
         network: opts.network.clone(),
         cpus: opts.cpus,
         memory: opts.memory.clone(),
+        wsl_conf: mode_from_flags(use_conf.as_ref(), opts.ignore_wsl_conf.as_ref(), None),
     }
 }
 
@@ -808,6 +839,11 @@ impl CreateOptions {
             admin: flag_pair(self.sudo, self.no_sudo),
             add_mounts: self.volumes.clone(),
             add_publish: self.publish.clone(),
+            wsl_conf: self
+                .use_wsl_conf
+                .clone()
+                .or_else(|| self.no_wsl_conf.then(ConfList::none)),
+            wsl_conf_ignore: self.ignore_wsl_conf.clone(),
             ..SpecChanges::default()
         }
     }
@@ -887,6 +923,12 @@ fn boot(name: &str, id: &str, lock: &DistroLock) -> Result<()> {
     let init = format!("{INIT_DIR}/init");
     run_container(&["exec", "--user", "0:0", id, &init, "-u"])
         .with_context(|| format!("user setup failed in `{name}`"))?;
+    // Snapshot the guest config while the container is up — the only
+    // window `container cp` can read it — for host-side consumers now
+    // and later.
+    if let Ok(spec) = lock.spec() {
+        refresh_conf_snapshots(name, id, &spec);
+    }
     report_ports(name);
     Ok(())
 }
@@ -1322,6 +1364,11 @@ pub fn stop(names: &[String]) -> Result<()> {
         let lock = DistroLock::acquire(n)?;
         if let Ok(info) = find(n) {
             if info.is_running() {
+                // Last chance to capture guest config — `cp` needs a
+                // running container.
+                if let Ok(spec) = lock.spec() {
+                    refresh_conf_snapshots(n, info.id(), &spec);
+                }
                 run_container_quiet(&["stop", info.id()])?;
             }
             dismantle(n, info.id(), &lock)?;
@@ -1367,7 +1414,12 @@ fn remove_journal_dir(name: &str) -> Result<()> {
             }
         }
         unlock(&assets);
-        for f in ["rootfs.ext4", "spec.json"] {
+        for f in [
+            "rootfs.ext4",
+            "spec.json",
+            "wsl.conf",
+            "wsl-distribution.conf",
+        ] {
             unlock(&dir.join(f));
         }
         unlock(&dir);
@@ -1790,6 +1842,148 @@ fn read_journal(name: &str) -> Result<DistroSpec> {
         eprintln!("container-distro: {n}");
     }
     Ok(spec)
+}
+
+/// The guest config files snapshotted into a journal:
+/// `(guest path, journal path)`.
+const CONF_FILES: [(&str, &str); 2] = [
+    ("/etc/wsl.conf", "wsl.conf"),
+    ("/etc/wsl-distribution.conf", "wsl-distribution.conf"),
+];
+
+/// The journaled snapshot of a guest config file.
+fn journal_conf_path(name: &str, which: &str) -> Result<PathBuf> {
+    Ok(journal_dir(name)?.join(which))
+}
+
+/// Copy `guest` out of the running container `id` with `container cp`
+/// and return it, capped at 64 KiB. `Ok(None)` means the file doesn't
+/// exist in the guest; other failures are errors for the caller to
+/// warn about. `cp` is runtime-mediated — the file is read through the
+/// container's rootfs without running any guest binary, so an image
+/// can't control how its config is extracted (or feed us a `cat` it
+/// ships).
+fn cp_out(id: &str, guest: &str) -> Result<Option<Vec<u8>>> {
+    let tmp = tempfile::tempdir().context("failed to create a snapshot scratch dir")?;
+    let dst = tmp.path().join("conf");
+    let out = container_cmd()
+        .arg("cp")
+        .arg(format!("{id}:{guest}"))
+        .arg(&dst)
+        .output()?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        // vminitd reports ENOENT for a missing guest path — treat it
+        // as "absent" but leave other failures (container stopped
+        // between our check and the copy, a directory at the path)
+        // for the caller.
+        if stderr.contains("not found") || stderr.contains("No such file") {
+            return Ok(None);
+        }
+        bail!("container cp {guest}: {}", stderr.trim());
+    }
+    let mut text = fs::read(&dst)?;
+    text.truncate(64 * 1024);
+    Ok(Some(text))
+}
+
+/// Refresh `name`'s guest-config snapshots from its running container
+/// `id`. Called at boot (after the container starts) and before every
+/// host-initiated stop — the only windows a `cp` can run, since it
+/// needs a running container. A distro stopped by bare
+/// `container stop` keeps its last snapshot — WSL's restart-to-apply
+/// model makes that its effective config anyway. Skipped entirely
+/// when the distro doesn't read its guest config. Missing guest files
+/// clear any stale snapshot; an ambiguous `cp` failure keeps the old
+/// one and warns rather than silently swapping in nothing.
+fn refresh_conf_snapshots(name: &str, id: &str, spec: &DistroSpec) {
+    if spec.resolve().0.wsl_conf.is_empty() {
+        return;
+    }
+    for (guest, which) in CONF_FILES {
+        match cp_out(id, guest) {
+            Ok(Some(text)) => {
+                let p = journal_conf_path(name, which);
+                let r = p.and_then(|p| {
+                    with_journal_dir_unlocked(name, || {
+                        unlock(&p);
+                        write_nofollow(&p, &text)?;
+                        set_locked(&p, true)
+                    })
+                });
+                if let Err(e) = r {
+                    eprintln!(
+                        "container-distro: warning: can't snapshot {guest} for `{name}`: {e:#}"
+                    );
+                }
+            }
+            Ok(None) => {
+                if let Ok(p) = journal_conf_path(name, which)
+                    && p.exists()
+                {
+                    let r = with_journal_dir_unlocked(name, || {
+                        unlock(&p);
+                        fs::remove_file(&p)
+                            .with_context(|| format!("failed to remove {}", p.display()))
+                    });
+                    if let Err(e) = r {
+                        eprintln!(
+                            "container-distro: warning: can't clear `{name}`'s stale {which} snapshot: {e:#}"
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("container-distro: warning: can't copy {guest} out of `{name}`: {e:#}")
+            }
+        }
+    }
+}
+
+/// Write `name`'s config snapshots from text already extracted —
+/// archive imports at create time, where the distro may never boot
+/// (`--no-boot`). Entries that are `None` clear a stale file instead.
+fn write_conf_snapshots(
+    name: &str,
+    wsl_conf: Option<&str>,
+    distribution_conf: Option<&str>,
+) -> Result<()> {
+    let texts = [wsl_conf, distribution_conf];
+    for (text, (_, which)) in texts.iter().zip(CONF_FILES.iter()) {
+        let p = journal_conf_path(name, which)?;
+        with_journal_dir_unlocked(name, || {
+            unlock(&p);
+            match text {
+                Some(t) => {
+                    write_nofollow(&p, t.as_bytes())?;
+                    set_locked(&p, true)
+                }
+                None => match fs::remove_file(&p) {
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                    r => r.with_context(|| format!("failed to remove {}", p.display())),
+                },
+            }
+        })?;
+    }
+    Ok(())
+}
+
+/// True when `conf` (the text of a `wsl.conf`, if any) declares
+/// `[automount] enabled=false` — the only `wsl.conf` key the host
+/// reads, and only ever to *reduce* sharing. Kept pure for tests.
+fn wsl_automount_disabled(conf: Option<&str>) -> bool {
+    conf.and_then(|c| wsl::ini_value(c, "automount", "enabled"))
+        .is_some_and(|v| v.eq_ignore_ascii_case("false"))
+}
+
+/// Record the package's `automount.enabled=false` as *source* intent —
+/// it caps `automount`/`home_mount` at `none` exactly the way the spec
+/// model resolves everything else: explicit `--automount`/`--home-mount`
+/// always win (they outrank source), preset-derived defaults like
+/// `--trusted`'s rw home get lowered (they're defaults, not intent).
+fn lower_sharing(spec: &mut DistroSpec) {
+    spec.source.automount = Some(Automount::None);
+    spec.source.home_mount = Some(HomeMount::None);
 }
 
 /// Whether `name` has a verified journal: directory and spec exist and
@@ -2301,6 +2495,7 @@ fn spec_diff(want: &ResolvedSpec, actual: &ResolvedSpec) -> Vec<String> {
     field!("ssh", want.ssh, actual.ssh);
     field!("admin", want.admin, actual.admin);
     field!("admin-grant", want.admin_grant, actual.admin_grant);
+    field!("wsl-conf", want.wsl_conf, actual.wsl_conf);
     field!("user", user(&want.user), user(&actual.user));
     let mut list = |name: &str, w: Vec<String>, a: Vec<String>| {
         for m in w.iter().filter(|m| !a.contains(m)) {
@@ -2404,9 +2599,15 @@ pub fn set(name: &str, changes: &SpecChanges) -> Result<()> {
     let was_running = info.as_ref().is_some_and(|i| i.is_running());
     if let Some(info) = &info {
         if was_running {
+            refresh_conf_snapshots(name, info.id(), &old);
             run_container_quiet(&["stop", info.id()])?;
         }
         dismantle(name, info.id(), &lock)?;
+    }
+    // Turning config honoring off also forgets what was captured —
+    // a distro that ignores wsl.conf should hold no guest config.
+    if new.resolve().0.wsl_conf.is_empty() && !old.resolve().0.wsl_conf.is_empty() {
+        let _ = write_conf_snapshots(name, None, None);
     }
     lock.write_spec(&new)?;
     if was_running {
@@ -2460,6 +2661,9 @@ pub fn export(name: &str, output: Option<&Path>) -> Result<()> {
     // Stop + converge before cloning — a running disk's clone would
     // only be crash-consistent.
     let was_running = if let Some(info) = find(name).ok().filter(|i| i.is_running()) {
+        if let Ok(spec) = lock.spec() {
+            refresh_conf_snapshots(name, info.id(), &spec);
+        }
         run_container_quiet(&["stop", info.id()])?;
         true
     } else {
@@ -2507,13 +2711,17 @@ pub enum ImportSource<'a> {
 }
 
 /// Create a distro from a rootfs tar; returns its name. `requested`
-/// is the source side of the spec's intent, as in [`create`].
+/// is the source side of the spec's intent, as in [`create`]. `pkg`
+/// carries the archive's `wsl.conf`/`wsl-distribution.conf` when the
+/// caller already scanned it (catalog imports name the distro from
+/// it); otherwise the archive is scanned here — one pass either way.
 pub fn import(
     name: &str,
     file: &Path,
     opts: &CreateOptions,
     source: ImportSource<'_>,
     requested: &Intent,
+    pkg: Option<&wsl::PackageConf>,
 ) -> Result<String> {
     validate_name(name)?;
     ensure_started()?;
@@ -2552,7 +2760,36 @@ pub fn import(
         }
     }
     oci::load_rootfs(rootfs, &reference, &labels)?;
-    let mut spec = build_spec(name.to_string(), reference, opts, requested)?;
+    // The archive's config files are guest input: extract them while
+    // the tar is already open, for the automount default below and —
+    // when the distro honors guest config — the journal snapshots. An
+    // unreadable tar is `load_rootfs`'s error; a scan failure just
+    // means no config.
+    let scanned;
+    let pkg = match pkg {
+        Some(p) => Some(p.clone()),
+        None => {
+            scanned = wsl::package_conf(rootfs).ok();
+            scanned
+        }
+    };
+    // A catalog download is a vetted package — its config is trusted
+    // like `--trusted`'s, expressed as source intent so an explicit
+    // `--use-wsl-conf none` still wins.
+    let mut requested = requested.clone();
+    if matches!(source, ImportSource::Download { .. }) {
+        requested.wsl_conf = Some(WslConfMode::all());
+    }
+    let mut spec = build_spec(name.to_string(), reference, opts, &requested)?;
+    // `[automount] enabled=false` lowers the sharing defaults — only
+    // where the distro honors its packaged config at all, and only
+    // down (source intent loses to every explicit flag). Image-based
+    // `create` can't see the file before first boot; an archive can.
+    if spec.resolve().0.wsl_conf.contains(WslConf::AUTOMOUNT)
+        && wsl_automount_disabled(pkg.as_ref().and_then(|p| p.wsl_conf.as_deref()))
+    {
+        lower_sharing(&mut spec);
+    }
     spec.origin = Some(stamped_origin(match source {
         ImportSource::Local => OriginSource::File {
             path: file.to_string_lossy().into_owned(),
@@ -2564,7 +2801,25 @@ pub fn import(
         },
     }));
     match create_from_spec(&spec, opts) {
-        Ok(name) => Ok(name),
+        Ok(name) => {
+            // Snapshot the archive's config into the journal — the
+            // `--no-boot` import lands with them in place; a booted
+            // distro refreshes them from the live guest file anyway.
+            if !spec.resolve().0.wsl_conf.is_empty()
+                && let Some(p) = &pkg
+                && (p.wsl_conf.is_some() || p.distribution_conf.is_some())
+                && let Err(e) = write_conf_snapshots(
+                    &name,
+                    p.wsl_conf.as_deref(),
+                    p.distribution_conf.as_deref(),
+                )
+            {
+                eprintln!(
+                    "container-distro: warning: can't snapshot `{name}`'s packaged config: {e:#}"
+                );
+            }
+            Ok(name)
+        }
         Err(e) => {
             // If the create refused the name (machine shadow, plain
             // container, staged state) the distro never landed — don't
@@ -3091,6 +3346,11 @@ fn reject_machine_opts(opts: &CreateOptions) -> Result<()> {
     if opts.sudo || opts.no_sudo {
         bad.push("--sudo/--no-sudo");
     }
+    // `--ignore-wsl-conf` is fine — a machine never honors the file
+    // anyway, so ignoring it asks for nothing the machine doesn't do.
+    if opts.use_wsl_conf.is_some() {
+        bad.push("--use-wsl-conf");
+    }
     if !bad.is_empty() {
         bail!(
             "{} cannot be applied to a machine (supported overrides: \
@@ -3231,6 +3491,7 @@ pub fn migrate_to_machine(
     container::warn_unverified_version();
     let spec = lock.spec()?;
     let was_running = if let Some(info) = find(distro).ok().filter(|i| i.is_running()) {
+        refresh_conf_snapshots(distro, info.id(), &spec);
         run_container_quiet(&["stop", info.id()])?;
         true
     } else {
@@ -3369,6 +3630,7 @@ pub fn rename(old: &str, new: &str, force: bool) -> Result<()> {
     // Converge to the resting state first: the journal move then
     // carries the disk, and no container is left naming `old`.
     let was_running = if let Some(info) = find(old).ok().filter(|i| i.is_running()) {
+        refresh_conf_snapshots(old, info.id(), &spec);
         run_container_quiet(&["stop", info.id()])?;
         true
     } else {
@@ -3387,6 +3649,16 @@ pub fn rename(old: &str, new: &str, force: bool) -> Result<()> {
                 unlock(&src);
                 fs::rename(&src, journal_fs_path(new)?)
                     .with_context(|| format!("failed to move {}", src.display()))?;
+            }
+            // The guest-config snapshots move with the journal too.
+            for (_, which) in CONF_FILES {
+                let src = journal_conf_path(old, which)?;
+                if src.exists() {
+                    unlock(&src);
+                    fs::rename(&src, journal_conf_path(new, which)?)
+                        .with_context(|| format!("failed to move {}", src.display()))?;
+                    set_locked(&journal_conf_path(new, which)?, true)?;
+                }
             }
             Ok(())
         })?;
@@ -3896,6 +4168,7 @@ mod tests {
                 home_mount: Some(HomeMount::Rw),
                 ssh: Some(true),
                 admin: Some(true),
+                wsl_conf: Some(WslConfMode::all()),
                 ..Intent::default()
             },
             source: Intent::default(),

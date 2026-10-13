@@ -10,7 +10,9 @@ use std::path::PathBuf;
 
 use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 use container_distro::ops::CreateOptions;
-use container_distro::spec::{Automount, HomeMount, MountSpec, Preset, PublishSpec, ResetTarget};
+use container_distro::spec::{
+    Automount, ConfList, HomeMount, MountSpec, Preset, PublishSpec, ResetTarget,
+};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -78,7 +80,7 @@ pub enum CatalogCommand {
         #[arg(long, value_name = "FILE")]
         catalog: Option<PathBuf>,
         #[command(flatten)]
-        opts: CreateOptions,
+        opts: Box<CreateOptions>,
     },
 
     /// List cached .wsl catalog downloads
@@ -100,7 +102,7 @@ pub enum Command {
         #[arg(short = 'n', long)]
         name: Option<String>,
         #[command(flatten)]
-        opts: CreateOptions,
+        opts: Box<CreateOptions>,
         /// Image reference, e.g. alpine:latest
         image: String,
     },
@@ -232,6 +234,19 @@ pub enum Command {
         /// Stop auto-managing /Volumes mounts (removes the automounts)
         #[arg(long)]
         no_automount: bool,
+        /// Honor the guest's /etc/wsl.conf — optionally a comma list
+        /// of features: hostname, fstab, init, command, automount, or
+        /// `all`/`none` (a bare flag means `all`)
+        #[arg(long, value_name = "FEATURE,...|all|none", num_args = 0..=1,
+              require_equals = true, default_missing_value = "all")]
+        use_wsl_conf: Option<ConfList>,
+        /// Stop honoring /etc/wsl.conf entirely (drops the snapshots)
+        #[arg(long, conflicts_with_all = ["use_wsl_conf", "ignore_wsl_conf"])]
+        no_wsl_conf: bool,
+        /// Deny parts of /etc/wsl.conf — subtracted from what would
+        /// resolve (`all` drops the snapshots too)
+        #[arg(long, value_name = "FEATURE,...|all|none")]
+        ignore_wsl_conf: Option<ConfList>,
         /// Add (or replace, by DST) a mount: SRC:DST[:ro]
         #[arg(long = "add-volume", value_name = "SRC:DST[:ro]")]
         add_volumes: Vec<MountSpec>,
@@ -267,7 +282,7 @@ pub enum Command {
         name: String,
         file: PathBuf,
         #[command(flatten)]
-        opts: CreateOptions,
+        opts: Box<CreateOptions>,
     },
 
     /// Rename a distro — its filesystem, settings, and default marker
@@ -309,7 +324,7 @@ pub enum Command {
         /// With --out, only the `machine create` subset applies:
         /// --cpus, --memory, --home-mount, --no-boot, --set-default
         #[command(flatten)]
-        opts: CreateOptions,
+        opts: Box<CreateOptions>,
     },
 
     /// Register as a `container` CLI plugin so `container distro`

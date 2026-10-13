@@ -7,13 +7,14 @@
 //! Reading `.wsl` distribution packages.
 //!
 //! A `.wsl` file (WSL 2.4.4+) is a tar — optionally gzipped — holding a
-//! rootfs at the tar root plus `/etc/wsl-distribution.conf`, an INI the
-//! distro ships to describe itself. Its `[oobe]` section carries
-//! `defaultName` (the suggested registration name), `defaultUid`, and a
-//! first-run `command`. We honor `defaultName` only: distros provision
-//! the host user (uid is ours), and running a distro-supplied command
-//! during install is a surface we don't take on silently — see
-//! security.md T4.
+//! rootfs at the tar root plus two optional INI files:
+//! `/etc/wsl-distribution.conf`, the manifest the distro ships to
+//! describe itself, and `/etc/wsl.conf`, per-distro runtime settings.
+//! The manifest's `[oobe]` section carries `defaultName` (the suggested
+//! registration name — honored at import), `defaultUid`, and a
+//! first-run `command` (never run — see security.md T4). `wsl.conf` is
+//! read mostly inside the guest at boot; on the host it is only parsed
+//! for defaults that can *lower* sharing, never raise it.
 
 use std::fs::{self, File, TryLockError};
 use std::io::{BufReader, Read, Seek, Write};
@@ -26,18 +27,39 @@ use tempfile::NamedTempFile;
 
 use crate::naming::APP_NAME;
 
-const CONF_PATH: &str = "etc/wsl-distribution.conf";
+const CONF_DISTRO_PATH: &str = "etc/wsl-distribution.conf";
+const CONF_WSL_PATH: &str = "etc/wsl.conf";
+
+/// Bytes read of each config file — enough for real-world INIs, small
+/// enough that a giant planted file can't stall or fill the journal.
+const CONF_MAX_BYTES: u64 = 64 * 1024;
 
 /// Cap on the `.wsl` download cache. macOS may reclaim the directory
 /// under storage pressure but eviction isn't scheduled, so we prune
 /// oldest-first past this size ourselves.
 const MAX_CACHE_BYTES: u64 = 8 << 30;
 
-/// The `[oobe] defaultName` from `file`'s `etc/wsl-distribution.conf`,
-/// or `None` when the tar has no manifest (plain rootfs tar) or no
-/// name. Accepts a raw or gzipped tar — compression is sniffed, so the
-/// file extension doesn't matter.
-pub fn distribution_name(file: &Path) -> Result<Option<String>> {
+/// Both config files a `.wsl` package can carry, plus the manifest's
+/// name suggestion. Everything here is guest-supplied text: consumers
+/// parse it, they never execute it (`[boot] command` runs only
+/// in-guest under the trusted tier — see security.md).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PackageConf {
+    /// `[oobe] defaultName` — the suggested registration name.
+    pub default_name: Option<String>,
+    /// Text of `etc/wsl.conf`, when the archive ships one (capped at
+    /// [`CONF_MAX_BYTES`]).
+    pub wsl_conf: Option<String>,
+    /// Text of `etc/wsl-distribution.conf`, when it ships one.
+    pub distribution_conf: Option<String>,
+}
+
+/// Read `etc/wsl.conf` and `etc/wsl-distribution.conf` out of `file` —
+/// a raw or gzipped tar (compression sniffed, so the extension doesn't
+/// matter) — in a single pass, stopping once both are found. Only
+/// regular-file entries count; a symlink sitting at either path is
+/// skipped rather than followed into arbitrary archive content.
+pub fn package_conf(file: &Path) -> Result<PackageConf> {
     let mut f = File::open(file).with_context(|| format!("cannot open {}", file.display()))?;
     let mut magic = [0u8; 2];
     let gz = f.read(&mut magic)? == 2 && magic == [0x1f, 0x8b];
@@ -48,41 +70,59 @@ pub fn distribution_name(file: &Path) -> Result<Option<String>> {
         Box::new(BufReader::new(f))
     };
     let mut archive = tar::Archive::new(reader);
+    let mut conf = PackageConf::default();
     for entry in archive.entries().context("cannot read tar")? {
         let entry = entry.context("cannot read tar entry")?;
+        if !entry.header().entry_type().is_file() {
+            continue;
+        }
         let path = entry.path().context("cannot read tar entry path")?;
         let normalized = path.strip_prefix(".").unwrap_or(&path);
-        if normalized == Path::new(CONF_PATH) {
-            let mut text = String::new();
-            entry
-                .take(64 * 1024)
-                .read_to_string(&mut text)
-                .context("cannot read wsl-distribution.conf")?;
-            return Ok(parse_default_name(&text));
+        let slot = if normalized == Path::new(CONF_DISTRO_PATH) {
+            &mut conf.distribution_conf
+        } else if normalized == Path::new(CONF_WSL_PATH) {
+            &mut conf.wsl_conf
+        } else {
+            continue;
+        };
+        drop(path);
+        let mut text = String::new();
+        entry
+            .take(CONF_MAX_BYTES)
+            .read_to_string(&mut text)
+            .context("cannot read package config")?;
+        *slot = Some(text);
+        if conf.wsl_conf.is_some() && conf.distribution_conf.is_some() {
+            break;
         }
     }
-    Ok(None)
+    conf.default_name = conf
+        .distribution_conf
+        .as_deref()
+        .and_then(|t| ini_value(t, "oobe", "defaultName"));
+    Ok(conf)
 }
 
-/// Pull `defaultName` out of the `[oobe]` section of INI text.
-/// Sections and keys are matched case-insensitively.
-fn parse_default_name(ini: &str) -> Option<String> {
-    let mut in_oobe = false;
+/// Pull `key` out of `section` in INI text — sections and keys match
+/// case-insensitively, `#`/`;` comments are skipped, matching
+/// surrounding quotes are stripped, and the first match wins.
+pub fn ini_value(ini: &str, section: &str, key: &str) -> Option<String> {
+    let mut in_section = false;
     for line in ini.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
             continue;
         }
         if line.starts_with('[') {
-            in_oobe = line
+            in_section = line
                 .trim_matches(['[', ']'])
                 .trim()
-                .eq_ignore_ascii_case("oobe");
+                .eq_ignore_ascii_case(section);
             continue;
         }
-        if in_oobe
+        if in_section
             && let Some((k, v)) = line.split_once('=')
-            && k.trim().eq_ignore_ascii_case("defaultname")
+            && k.trim().eq_ignore_ascii_case(key)
         {
             let v = v.trim().trim_matches('"').trim_matches('\'');
             if !v.is_empty() {
@@ -484,7 +524,10 @@ mod tests {
     use super::*;
     use std::io::Write;
 
-    fn tar_with_conf(conf: Option<&str>) -> tempfile::NamedTempFile {
+    fn tar_with_confs(
+        distro_conf: Option<&str>,
+        wsl_conf: Option<&str>,
+    ) -> tempfile::NamedTempFile {
         let f = tempfile::NamedTempFile::new().unwrap();
         let mut builder = tar::Builder::new(f.reopen().unwrap());
         let mut header = tar::Header::new_gnu();
@@ -494,23 +537,29 @@ mod tests {
         builder
             .append_data(&mut header, "etc/os-release", &data[..])
             .unwrap();
-        if let Some(c) = conf {
-            let mut header = tar::Header::new_gnu();
-            header.set_size(c.len() as u64);
-            header.set_cksum();
-            builder
-                .append_data(&mut header, CONF_PATH, c.as_bytes())
-                .unwrap();
+        for (path, text) in [(CONF_DISTRO_PATH, distro_conf), (CONF_WSL_PATH, wsl_conf)] {
+            if let Some(c) = text {
+                let mut header = tar::Header::new_gnu();
+                header.set_size(c.len() as u64);
+                header.set_cksum();
+                builder
+                    .append_data(&mut header, path, c.as_bytes())
+                    .unwrap();
+            }
         }
         builder.finish().unwrap();
         f
+    }
+
+    fn tar_with_conf(conf: Option<&str>) -> tempfile::NamedTempFile {
+        tar_with_confs(conf, None)
     }
 
     #[test]
     fn reads_default_name() {
         let f = tar_with_conf(Some("[oobe]\ndefaultUid = 1000\ndefaultName = Rocky-9\n"));
         assert_eq!(
-            distribution_name(f.path()).unwrap().as_deref(),
+            package_conf(f.path()).unwrap().default_name.as_deref(),
             Some("Rocky-9")
         );
     }
@@ -518,7 +567,97 @@ mod tests {
     #[test]
     fn name_outside_oobe_ignored() {
         let f = tar_with_conf(Some("[shortcut]\ndefaultName = nope\n"));
-        assert_eq!(distribution_name(f.path()).unwrap(), None);
+        assert_eq!(package_conf(f.path()).unwrap().default_name, None);
+    }
+
+    #[test]
+    fn both_conf_files_extracted() {
+        let f = tar_with_confs(
+            Some("[oobe]\ndefaultName = Gentoo\n"),
+            Some("[boot]\nsystemd = true\n\n[automount]\nenabled = false\n"),
+        );
+        let conf = package_conf(f.path()).unwrap();
+        assert_eq!(conf.default_name.as_deref(), Some("Gentoo"));
+        assert_eq!(
+            ini_value(conf.wsl_conf.as_deref().unwrap(), "automount", "enabled"),
+            Some("false".to_string())
+        );
+        assert_eq!(
+            ini_value(conf.wsl_conf.as_deref().unwrap(), "boot", "systemd"),
+            Some("true".to_string())
+        );
+    }
+
+    #[test]
+    fn conf_entry_under_dot_prefix() {
+        // tars may spell entries `./etc/wsl.conf`
+        let f = tempfile::NamedTempFile::new().unwrap();
+        let mut builder = tar::Builder::new(f.reopen().unwrap());
+        let mut header = tar::Header::new_gnu();
+        let data = b"[boot]\nsystemd = false\n";
+        header.set_size(data.len() as u64);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, "./etc/wsl.conf", &data[..])
+            .unwrap();
+        builder.finish().unwrap();
+        let conf = package_conf(f.path()).unwrap();
+        assert!(conf.wsl_conf.is_some());
+        assert_eq!(
+            ini_value(conf.wsl_conf.as_deref().unwrap(), "boot", "SYSTEMD"),
+            Some("false".to_string())
+        );
+    }
+
+    #[test]
+    fn conf_entry_symlink_skipped() {
+        // A link planted at the conf path must not be followed into
+        // arbitrary archive content.
+        let f = tempfile::NamedTempFile::new().unwrap();
+        let mut builder = tar::Builder::new(f.reopen().unwrap());
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Symlink);
+        header.set_size(0);
+        header.set_cksum();
+        builder
+            .append_link(&mut header, CONF_WSL_PATH, "etc/shadow")
+            .unwrap();
+        builder.finish().unwrap();
+        let conf = package_conf(f.path()).unwrap();
+        assert!(conf.wsl_conf.is_none());
+    }
+
+    #[test]
+    fn conf_capped_at_64k() {
+        let big = "x".repeat(200 * 1024);
+        let f = tar_with_confs(None, Some(&format!("[boot]\n{big}")));
+        let conf = package_conf(f.path()).unwrap();
+        assert_eq!(
+            conf.wsl_conf.as_deref().unwrap().len() as u64,
+            CONF_MAX_BYTES
+        );
+    }
+
+    #[test]
+    fn ini_value_parsing() {
+        let ini = "# comment\n[Boot]\n  systemd = True ; trailing text stays\n\
+             command = \"/sbin/openrc default\"\n[BOOT]\nsystemd = ignored (first wins)\n\
+             [user]\ndefault = 'daphne'\n";
+        assert_eq!(
+            ini_value(ini, "boot", "systemd"),
+            Some("True ; trailing text stays".to_string())
+        );
+        assert_eq!(
+            ini_value(ini, "boot", "command"),
+            Some("/sbin/openrc default".to_string())
+        );
+        assert_eq!(
+            ini_value(ini, "user", "default"),
+            Some("daphne".to_string())
+        );
+        assert_eq!(ini_value(ini, "boot", "missing"), None);
+        assert_eq!(ini_value(ini, "nosection", "systemd"), None);
+        assert_eq!(ini_value("systemd=true\n", "boot", "systemd"), None);
     }
 
     #[test]
@@ -530,7 +669,7 @@ mod tests {
         enc.write_all(&std::fs::read(f.path()).unwrap()).unwrap();
         enc.finish().unwrap();
         assert_eq!(
-            distribution_name(gz.path()).unwrap().as_deref(),
+            package_conf(gz.path()).unwrap().default_name.as_deref(),
             Some("my-distro")
         );
     }
@@ -538,6 +677,7 @@ mod tests {
     #[test]
     fn no_conf() {
         let f = tar_with_conf(None);
-        assert_eq!(distribution_name(f.path()).unwrap(), None);
+        let conf = package_conf(f.path()).unwrap();
+        assert_eq!(conf, PackageConf::default());
     }
 }

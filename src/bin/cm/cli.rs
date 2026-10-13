@@ -16,7 +16,7 @@ use anyhow::{Result, bail};
 use clap::{ArgAction, Parser, ValueEnum};
 use container_distro::forward::PortMapping;
 pub use container_distro::spec::HomeMount;
-use container_distro::spec::{MountSpec, Preset, PublishSpec};
+use container_distro::spec::{ConfList, MountSpec, Preset, PublishSpec};
 
 /// What `--install` installs from.
 #[derive(Debug, Clone, PartialEq)]
@@ -68,6 +68,14 @@ pub struct InstallOpts {
     /// `--machine`, opts an untrusted-tier install into the agent-
     /// forwarding tier machines always run at.
     pub trusted: bool,
+    /// Distro-only: honor the guest's /etc/wsl.conf (`FEATURE,...`,
+    /// `all`/`none`; bare flag = `all`).
+    pub use_wsl_conf: Option<ConfList>,
+    /// Distro-only: honor nothing from /etc/wsl.conf.
+    pub no_wsl_conf: bool,
+    /// Deny parts of the guest's /etc/wsl.conf — a no-op on machines,
+    /// which never read it.
+    pub ignore_wsl_conf: Option<ConfList>,
     /// Allow the new machine or distro to share its name with one in
     /// the other backend (`cm` resolves a shared name to the distro).
     pub force: bool,
@@ -342,6 +350,40 @@ pub struct Args {
     #[arg(long = "no-ssh", requires = "install", conflicts_with = "machine")]
     pub no_ssh: bool,
 
+    /// Honor the guest's /etc/wsl.conf in a distro created by --install
+    /// — optionally a comma list of hostname, fstab, init, command,
+    /// automount, or `all`/`none` (bare flag = `all`; default: `all`
+    /// for --trusted and catalog installs, `none` otherwise; implies
+    /// --distro)
+    #[arg(
+        long = "use-wsl-conf",
+        requires = "install",
+        conflicts_with = "machine",
+        value_name = "FEATURE,...|all|none",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "all"
+    )]
+    pub use_wsl_conf: Option<ConfList>,
+
+    /// Honor nothing from a created distro's /etc/wsl.conf
+    /// (`--use-wsl-conf=none` by another name)
+    #[arg(
+        long = "no-wsl-conf",
+        requires = "install",
+        conflicts_with_all = ["use_wsl_conf", "ignore_wsl_conf"]
+    )]
+    pub no_wsl_conf: bool,
+
+    /// Deny parts of a created distro's /etc/wsl.conf
+    /// (harmless with --machine: machines never read the file)
+    #[arg(
+        long = "ignore-wsl-conf",
+        requires = "install",
+        value_name = "FEATURE,...|all|none"
+    )]
+    pub ignore_wsl_conf: Option<ConfList>,
+
     /// Share a host directory into a distro created by --install:
     /// SRC:DST[:opt,...] — ro, rw, and guest mount flags like
     /// nosuid,nodev,noexec (repeatable; implies --distro)
@@ -537,7 +579,9 @@ impl Args {
         {
             bail!("--force only applies to --install, --import, --rename, and --update");
         }
-        // `--machine` can't satisfy distro-only install options.
+        // `--machine` can't satisfy distro-only install options
+        // (`--use-wsl-conf` already conflicts at parse; `--ignore`
+        // asks for nothing a machine doesn't already do).
         if self.machine
             && (self.restricted
                 || self.preset.is_some()
@@ -610,6 +654,9 @@ impl Args {
                 no_ssh: self.no_ssh,
                 restricted: self.restricted,
                 trusted: self.trusted,
+                use_wsl_conf: self.use_wsl_conf.clone(),
+                no_wsl_conf: self.no_wsl_conf,
+                ignore_wsl_conf: self.ignore_wsl_conf.clone(),
                 force: self.force,
                 shares: self.shares.clone(),
                 publish: self.publish.clone(),
@@ -881,6 +928,9 @@ mod tests {
                 machine: false,
                 restricted: false,
                 trusted: false,
+                use_wsl_conf: None,
+                no_wsl_conf: false,
+                ignore_wsl_conf: None,
                 force: false,
                 preset: None,
                 ssh: false,

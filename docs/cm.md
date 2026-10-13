@@ -243,7 +243,11 @@ bare rootfs, so it's rejected with `--machine`. The name comes from
 `oobe.defaultName`, then the catalog NAME for catalog downloads, then
 the file stem. Other manifest keys are
 ignored: distros provision the host user rather than honoring
-`oobe.defaultUid`, and `oobe.command` never runs (design/security.md T4).
+`oobe.defaultUid`, and `oobe.command` never runs (design/security.md
+T4). Both packaged config files are snapshotted into the journal, and
+where the distro honors `wsl-conf` (catalog installs ask for `all`;
+see `--use-wsl-conf`), `wsl.conf`'s `automount.enabled=false` lowers
+the mount defaults at create.
 
 `--install` creates a **distro** (`container distro create`), then
 opens a shell in it (`--no-launch` skips the shell). There is no
@@ -253,8 +257,10 @@ provision your macOS account automatically (same name/uid/gid), so a
 fresh install drops straight into a shell. `--machine` runs
 `container machine create` instead — for WSL-parity testing and
 upstream comparisons — and is rejected alongside the distro-only
-options `--preset`/`--share`/`--publish`/`--restricted`/`--from-file`,
-which have no machine equivalent. A machine forwards your SSH agent at
+options `--preset`/`--share`/`--publish`/`--restricted`/`--from-file`/
+`--use-wsl-conf`,
+which have no machine equivalent (`--ignore-wsl-conf` and
+`--no-wsl-conf` are allowed — machines already behave that way). A machine forwards your SSH agent at
 every boot (upstream has no opt-out), so `--machine` itself is the
 opt-in: an install whose resolved agent setting is off just warns, and
 only an explicit `--no-ssh` pin is refused — `--ssh`, `--trusted`, or

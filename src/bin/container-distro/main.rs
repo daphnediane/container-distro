@@ -17,7 +17,7 @@ use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser};
 use container_distro::ops::{self, DistroSummary, RunOpts};
 use container_distro::plugin;
-use container_distro::spec::{Automount, Intent, OriginSource, Preset, SpecChanges};
+use container_distro::spec::{Automount, ConfList, Intent, OriginSource, Preset, SpecChanges};
 use container_distro::table::{columns, human_bytes, local_datetime};
 use container_distro::{catalog, catalog_ops, wsl};
 
@@ -325,6 +325,9 @@ fn run(cli: Cli) -> Result<()> {
             no_sudo,
             automount,
             no_automount,
+            use_wsl_conf,
+            no_wsl_conf,
+            ignore_wsl_conf,
             add_volumes,
             rm_volumes,
             publish,
@@ -358,6 +361,8 @@ fn run(cli: Cli) -> Result<()> {
                 } else {
                     None
                 },
+                wsl_conf: use_wsl_conf.or(no_wsl_conf.then(ConfList::none)),
+                wsl_conf_ignore: ignore_wsl_conf,
                 automount: automount.or(no_automount.then_some(Automount::None)),
                 add_mounts: add_volumes,
                 remove_mounts: rm_volumes,
@@ -375,7 +380,8 @@ fn run(cli: Cli) -> Result<()> {
                     &file,
                     &opts,
                     ops::ImportSource::Local,
-                    &Intent::default()
+                    &Intent::default(),
+                    None
                 )?
             );
         }

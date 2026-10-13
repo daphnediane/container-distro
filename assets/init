@@ -19,7 +19,29 @@
 #   -c CMD...   run CMD through the user's shell (`$SHELL -c "$*"`)
 #
 # Environment (set at create): CONTAINER_MACHINE_ID, CONTAINER_USER,
-# CONTAINER_UID, CONTAINER_GID, CONTAINER_HOME.
+# CONTAINER_UID, CONTAINER_GID, CONTAINER_HOME, plus the wsl.conf gate:
+#
+#   CONTAINER_WSL_CONF      comma list of honored /etc/wsl.conf feature
+#                           names (hostname, fstab, init, command) —
+#                           unset or empty means the file is never
+#                           opened (restricted, --use-wsl-conf=none, and
+#                           pre-feature distros)
+#
+# Honored /etc/wsl.conf keys, per feature (WSL subset — see
+# docs/design/notes/configuration-files.md):
+#
+#   hostname   [network]  hostname        guest hostname (overrides the
+#                                         distro name)
+#   fstab      [automount] mountFsTab     `mount -a` unless false
+#   init       [boot]     systemd         prefer systemd as PID 1
+#                                         (false: skip it)
+#              [boot]     openrc          project extension — prefer
+#                                         openrc-init / openrc as PID 1
+#                                         (see Gentoo-in-WSL)
+#   command    [boot]     command         run once per boot, as root
+#
+# Everything else is ignored: host-visible settings (mounts, network,
+# published ports) are never taken from guest files.
 
 set -e
 
@@ -56,19 +78,71 @@ user_shell() {
     fi
 }
 
-boot() {
-    if [ -n "${CONTAINER_MACHINE_ID:-}" ]; then
-        echo "$CONTAINER_MACHINE_ID" >/etc/hostname
-        hostname "$CONTAINER_MACHINE_ID" 2>/dev/null || true
-    fi
-    if [ -n "${SSH_AUTH_SOCK:-}" ] && [ -S "$SSH_AUTH_SOCK" ] && [ -n "${CONTAINER_UID:-}" ]; then
-        chown "$CONTAINER_UID:${CONTAINER_GID:-$CONTAINER_UID}" "$SSH_AUTH_SOCK" || true
-    fi
-    for i in /sbin/init /usr/sbin/init /lib/systemd/systemd; do
-        if [ -x "$i" ]; then
-            exec "$i"
-        fi
-    done
+# ini_get FILE SECTION KEY — print the value of KEY in SECTION of an
+# INI file. Sections and keys match case-insensitively; `#`/`;`
+# comments and blank lines are skipped; matching surrounding quotes
+# are stripped; the first match wins. Always exits 0 — a missing or
+# unparsable file is just "unset" to the caller.
+ini_get() {
+    awk -v section="$2" -v key="$3" '
+        BEGIN { section = tolower(section); key = tolower(key); ins = 0 }
+        {
+            line = $0
+            sub(/^[ \t]+/, "", line); sub(/[ \t]+$/, "", line)
+            if (line == "" || line ~ /^[#;]/) next
+            if (line ~ /^\[/) {
+                sec = line
+                gsub(/^\[|\]/, "", sec)
+                gsub(/^[ \t]+|[ \t]+$/, "", sec)
+                ins = (tolower(sec) == section)
+                next
+            }
+            if (ins && index(line, "=") > 0) {
+                i = index(line, "=")
+                k = substr(line, 1, i - 1); v = substr(line, i + 1)
+                gsub(/^[ \t]+|[ \t]+$/, "", k)
+                gsub(/^[ \t]+|[ \t]+$/, "", v)
+                if (tolower(k) == key && v != "") {
+                    c1 = substr(v, 1, 1); c2 = substr(v, length(v), 1)
+                    if ((c1 == "\"" && c2 == "\"") || (c1 == "\047" && c2 == "\047")) {
+                        v = substr(v, 2, length(v) - 2)
+                    }
+                    print v
+                    exit
+                }
+            }
+        }
+        ' "$1" 2>/dev/null || true
+}
+
+# Whether $1 resolves (through symlinks) to a systemd binary.
+is_systemd() {
+    p=$(readlink -f "$1" 2>/dev/null || printf %s "$1")
+    case "$p" in
+    *systemd*) return 0 ;;
+    *) return 1 ;;
+    esac
+}
+
+# Whether $1 resolves to an OpenRC binary.
+is_openrc() {
+    p=$(readlink -f "$1" 2>/dev/null || printf %s "$1")
+    case "$p" in
+    *openrc*) return 0 ;;
+    *) return 1 ;;
+    esac
+}
+
+# Whether CONTAINER_WSL_CONF lists feature $1 — the honored-set
+# membership test. An unset or empty list contains nothing.
+wsl_conf() {
+    case ",${CONTAINER_WSL_CONF:-}," in
+    *",$1,"*) return 0 ;;
+    *) return 1 ;;
+    esac
+}
+
+idle() {
     # No init system (a plain application image): idle as PID 1 and exit
     # cleanly when the container is stopped. `wait` with no arguments —
     # not `wait $!` — blocks in waitpid(-1), so grandchildren orphaned
@@ -78,6 +152,98 @@ boot() {
         sleep 3600 &
         wait || true
     done
+}
+
+boot() {
+    # The guest's own config file, honored only for the feature names
+    # CONTAINER_WSL_CONF lists — restricted and --use-wsl-conf=none
+    # distros get an absent or empty list and the file is never opened.
+    conf=
+    if [ -n "${CONTAINER_WSL_CONF:-}" ] && [ -r /etc/wsl.conf ]; then
+        conf=/etc/wsl.conf
+    fi
+
+    # Hostname: wsl.conf's [network] hostname wins, else the distro
+    # name as before.
+    hn=
+    if [ -n "$conf" ] && wsl_conf hostname; then
+        hn=$(ini_get "$conf" network hostname)
+    fi
+    hn=${hn:-${CONTAINER_MACHINE_ID:-}}
+    if [ -n "$hn" ]; then
+        echo "$hn" >/etc/hostname
+        hostname "$hn" 2>/dev/null || true
+    fi
+    if [ -n "${SSH_AUTH_SOCK:-}" ] && [ -S "$SSH_AUTH_SOCK" ] && [ -n "${CONTAINER_UID:-}" ]; then
+        chown "$CONTAINER_UID:${CONTAINER_GID:-$CONTAINER_UID}" "$SSH_AUTH_SOCK" || true
+    fi
+
+    # [automount] mountFsTab — on unless the config says false.
+    # Guest-local fstab entries only; it can never add host shares.
+    if [ -n "$conf" ] && wsl_conf fstab \
+        && [ "$(ini_get "$conf" automount mountFsTab)" != "false" ]; then
+        mount -a 2>/dev/null || true
+    fi
+
+    # [boot] command — WSL runs it once per boot before init, as root.
+    # Ours requires the `command` feature bit so an ad-hoc or
+    # restricted distro can't get its image's commands executed for it.
+    if [ -n "$conf" ] && wsl_conf command; then
+        bootcmd=$(ini_get "$conf" boot command)
+        if [ -n "$bootcmd" ]; then
+            sh -c "$bootcmd" || echo "init: /etc/wsl.conf [boot] command failed — booting anyway" >&2
+        fi
+    fi
+
+    # PID 1 selection. `openrc` is a project extension (WSL can't
+    # switch inits — Gentoo-in-WSL starts `openrc default` as a boot
+    # command); where it and `systemd` conflict, the platform-specific
+    # directive wins with a warning.
+    want_systemd= want_openrc=
+    if [ -n "$conf" ] && wsl_conf init; then
+        want_systemd=$(ini_get "$conf" boot systemd)
+        want_openrc=$(ini_get "$conf" boot openrc)
+    fi
+    if [ "$want_systemd" = "true" ] && [ "$want_openrc" = "true" ]; then
+        echo "init: /etc/wsl.conf sets both boot.systemd and boot.openrc — using openrc" >&2
+        want_systemd=false
+    fi
+
+    if [ "$want_openrc" = "true" ]; then
+        for i in /sbin/openrc-init /usr/sbin/openrc-init; do
+            [ -x "$i" ] && exec "$i"
+        done
+        for i in /sbin/init /usr/sbin/init; do
+            if [ -x "$i" ] && ! is_systemd "$i" && ! is_openrc "$i"; then
+                exec "$i"
+            fi
+        done
+        # No dedicated init: the Gentoo-in-WSL recipe — start the
+        # default runlevel under our idle PID 1.
+        if [ -x /sbin/openrc ]; then
+            /sbin/openrc default 2>/dev/null || echo "init: openrc default failed" >&2
+        fi
+        idle
+    fi
+
+    if [ "$want_systemd" = "true" ]; then
+        for i in /lib/systemd/systemd /usr/lib/systemd/systemd /sbin/init /usr/sbin/init; do
+            [ -x "$i" ] && exec "$i"
+        done
+        echo "init: /etc/wsl.conf wants systemd but none was found — booting anyway" >&2
+    else
+        for i in /sbin/init /usr/sbin/init /lib/systemd/systemd /usr/lib/systemd/systemd; do
+            [ -x "$i" ] || continue
+            if [ "$want_systemd" = "false" ] && is_systemd "$i"; then
+                continue
+            fi
+            if [ "$want_openrc" = "false" ] && is_openrc "$i"; then
+                continue
+            fi
+            exec "$i"
+        done
+    fi
+    idle
 }
 
 case "${1:-}" in

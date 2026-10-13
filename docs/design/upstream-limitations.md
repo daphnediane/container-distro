@@ -6,13 +6,14 @@ upstream fix that would let the workaround be deleted. "Rung" references
 are the integration levels in [lower-level-integration]; "T#" references
 are the trade-off register in [security].
 
-| Limitation                                           | Workaround shipped                           | Upstream fix                              | Tracking |
-| ---------------------------------------------------- | -------------------------------------------- | ----------------------------------------- | -------- |
-| `export` ignores the rootfs mount source             | scratch-container clone + `container export` | honor `rootfs.json`/`rootFsOverride`      | [#15]    |
-| `machine create`/`machine run` boot races            | plain `create` + retrying boot probe         | fix `--no-boot` + first-boot settle       | [#15]    |
-| `machine run` exec fidelity (stdin, argv, 1st write) | `-i` always; `container exec` for `cm -e`    | attach sequencing; argv-preserving mode   | [#4]     |
-| No mounts outside `$HOME` for machines               | distros (`-v`/`--automount`)                 | [apple/container#1805], [#2278]           | [#3]     |
-| No port publishing / localhost forwarding            | `cm --forward`; distro `-p` publishes        | publish API / listener-watching forwarder | [#5]     |
+| Limitation                                           | Workaround shipped                           | Upstream fix                              | Tracking  |
+| ---------------------------------------------------- | -------------------------------------------- | ----------------------------------------- | --------- |
+| `export` ignores the rootfs mount source             | scratch-container clone + `container export` | honor `rootfs.json`/`rootFsOverride`      | [#15]     |
+| `machine create`/`machine run` boot races            | plain `create` + retrying boot probe         | fix `--no-boot` + first-boot settle       | [#15]     |
+| `machine run` exec fidelity (stdin, argv, 1st write) | `-i` always; `container exec` for `cm -e`    | attach sequencing; argv-preserving mode   | [#4]      |
+| No mounts outside `$HOME` for machines               | distros (`-v`/`--automount`)                 | [apple/container#1805], [#2278]           | [#3]      |
+| No port publishing / localhost forwarding            | `cm --forward`; distro `-p` publishes        | publish API / listener-watching forwarder | [#5]      |
+| `cp`/`exec` reject stopped containers                | conf snapshots refresh at boot + pre-stop    | a copy path that reads a stopped rootfs   | not filed |
 
 ## `container export` can't snapshot a machine (or distro) rootfs
 
@@ -209,6 +210,22 @@ write drop -- a new issue is warranted, citing #1148 as adjacent):
 | [apple/container#2057] -- completed exec state retained        | open   | Exec lifecycle in container-runtime-linux                      |
 | [apple/container#2210] -- exec exit 255 ambiguous              | open   | Exit-code fidelity -- the "codes propagate" claim has a caveat |
 
+## `container cp`/`exec` need a running container
+
+**Status:** worked around for the `wsl.conf` snapshots ([#6]);
+upstream issue not yet filed.
+
+`ContainersService.copyIn`/`copyOut` and `exec` reject non-running
+containers, so the guest→host config snapshots can only refresh while
+a distro is up: right after boot, and just before a host-initiated
+stop (`stop`, `set`, `export`, `rename`, `migrate --out`). A distro
+stopped via bare `container stop` keeps its last-boot snapshot —
+matching WSL's restart-to-apply model anyway.
+
+**Upstream fix:** a copy path that reads a stopped container's rootfs
+(the data is on disk; nothing needs the guest up) would make the
+snapshots exact instead of last-boot.
+
 ## No mounts outside `$HOME` for machines
 
 **Status:** closed for distros; still open for `container machine`
@@ -287,6 +304,7 @@ depends on image contents -- not a mechanism to build on.
 [#3]: https://github.com/daphnediane/container-distro/issues/3
 [#4]: https://github.com/daphnediane/container-distro/issues/4
 [#5]: https://github.com/daphnediane/container-distro/issues/5
+[#6]: https://github.com/daphnediane/container-distro/issues/6
 [#15]: https://github.com/daphnediane/container-distro/issues/15
 [#2278]: https://github.com/apple/container/issues/2278
 [apple/container#1148]: https://github.com/apple/container/issues/1148

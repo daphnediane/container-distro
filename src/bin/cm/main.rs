@@ -434,6 +434,9 @@ fn install(opts: &InstallOpts) -> Result<ExitCode> {
         no_ssh: opts.no_ssh,
         restricted: opts.restricted,
         trusted: opts.trusted,
+        use_wsl_conf: opts.use_wsl_conf.clone(),
+        no_wsl_conf: opts.no_wsl_conf,
+        ignore_wsl_conf: opts.ignore_wsl_conf.clone(),
         force: opts.force,
         ..CreateOptions::default()
     };
@@ -603,6 +606,7 @@ fn import(
             },
             distro::ImportSource::Local,
             &Intent::default(),
+            None,
         )?;
     }
     Ok(ExitCode::SUCCESS)

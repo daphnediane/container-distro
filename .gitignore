@@ -38,7 +38,7 @@
 /target
 
 # Ignore scratch directories
-/scratch
+/scratch*
 /input
 /output
 /docs-to-be-added

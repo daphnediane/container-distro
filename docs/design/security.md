@@ -403,6 +403,43 @@ at build time — so this is the largest unpinned trust step we take.
   shell profile to steer a later `cm --update` at an untrusted
   server, so the override must never fire silently.
 
+### T11. Trusted-tier distros can run image-supplied boot config
+
+Honoring `/etc/wsl.conf` lets a rootfs pick its own init, hostname,
+fstab mounts — and under the `command` feature, run `[boot] command`
+as root at every boot. Guest config is guest content: the file that
+configures a distro is itself attacker-controlled whenever the rootfs
+is.
+
+- **Accepted because:** a trusted/catalog image *already* runs its own
+  code as guest root (its init, its login shells) — `[boot] command`
+  changes nothing an image couldn't do by shipping a different init.
+  The honored set is guest-local by construction (hostname, `mount -a`,
+  init selection): nothing the file can say reaches host mounts,
+  host networking, or published ports.
+- **Mitigations that exist:** honoring is a journaled mode expression
+  (exact set / all-except / tier-relative adjustments), not a bare
+  switch — and `command` is only a functional toggle inside it, not a
+  separate trust gate, because the image's init already runs as root.
+  Tier resolution puts `restricted`'s empty set under every
+  source ask, so no source can reopen a restricted distro; ad-hoc
+  creates honor nothing unless `--use-wsl-conf` opts in. The one
+  host-visible key (`automount.enabled=false`) can only *lower*
+  sharing and loses to every explicit flag — the T6 rule. Snapshots
+  are runtime-mediated `container cp` (no guest binary executes to
+  produce them), size-capped, `uchg`-locked, parse-only, and never
+  consumed for mount/network/publish decisions. `oobe.command` is
+  never executed — an imported rootfs doesn't get to run code before
+  you ask.
+- **Residuals:** the gate is `CONTAINER_WSL_CONF` env on the init
+  exec, not an unmounted asset — the claim is "init never opens the
+  file", not "the guest can't read it" (guest root can read its own
+  filesystem regardless). A symlinked `/etc/wsl.conf` copies whatever
+  it points at into the journal — bounded by the 64 KiB cap and the
+  parse-only consumer. `[boot] command` is image code running as
+  root, accepted only at the same trust tier that already runs the
+  image's own init.
+
 ## Restricted distros
 
 The user-facing description of `--restricted` -- what it sets and what

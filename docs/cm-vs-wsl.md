@@ -124,9 +124,11 @@ shell.
   `update-container.sh`).
 - No GUI app support (WSLg's X11/Wayland) -- see
   [design/notes/gui-apps.md] for what it would take.
-- No equivalents for `--manage`, `--mount` (VHDs), or
-  `wsl.conf` -- see [design/notes/configuration-files.md] for the
-  config-file analysis.
+- No equivalents for `--manage` or `--mount` (VHDs).
+- Distros honor a subset of `wsl.conf` (hostname, mountFsTab,
+  systemd/`boot.openrc` init selection, gated `[boot] command`) behind
+  `--use-wsl-conf`; machines don't -- see
+  [design/notes/configuration-files.md] for the per-key matrix.
 
 [#27]: https://github.com/daphnediane/container-distro/issues/27
 [apple/container#1954]: https://github.com/apple/container/issues/1954
