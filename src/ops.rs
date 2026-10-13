@@ -75,8 +75,8 @@ use serde::{Deserialize, Serialize};
 use crate::spec::{
     Automount, ConfList, DistroOrigin, DistroSpec, HomeMount, HostUser, INIT_DIR, Intent,
     JournalSpec, LABEL_DISTRO, LABEL_EXPORT_SCRATCH, LABEL_HOME_MOUNT, LABEL_IMPORTED_FROM,
-    LABEL_MACHINE, LABEL_ROOTFS_SHA256, MountSpec, OriginSource, Preset, PublishSpec, ResolveCtx,
-    ResolvedSpec, SpecChanges, WslConf, WslConfMode, automounts, mode_from_flags, size_bytes,
+    LABEL_ROOTFS_SHA256, MountSpec, OriginSource, Preset, PublishSpec, ResolveCtx, ResolvedSpec,
+    SpecChanges, WslConf, WslConfMode, automounts, mode_from_flags, size_bytes,
 };
 
 /// One distro, as reported by [`summaries`] (and `list --format json`).
@@ -1605,29 +1605,31 @@ fn snapshot_repo(name: &str) -> String {
 }
 
 /// Whether the image belongs to distro `name`: the `distro` label
-/// `import` sets (C11 — older unlabeled images are left for
-/// `container image prune`).
+/// pre-#32 `import`s set on their per-name snapshot images (C11).
+/// Content-keyed shared images carry no name label — they're not any
+/// one distro's to delete — so unlabeled images are left for
+/// `container image prune`, as before.
 fn is_our_image(image: &container::ImageListEntry, name: &str) -> bool {
     label_lookup(&image.labels(), LABEL_DISTRO).is_some_and(|v| v == name)
 }
 
-/// Best-effort removal of `name`'s imported images, except `keep`.
+/// Best-effort removal of `name`'s imported-image tags, except `keep`.
+/// Two claim shapes: the `local/distro-<name>:` tag prefix (current)
+/// and the `distro` label pre-#32 imports set. `image delete` on a tag
+/// untags only that reference — the shared `local/rootfs:*` tag and
+/// other importers' tags survive; the unused-tag prune frees the
+/// content once nothing references it.
 fn remove_snapshot_images(name: &str, keep: Option<&str>) {
     let Some(images) = container::list_images() else {
         return;
     };
+    let prefix = format!("{}:", snapshot_repo(name));
     for image in &images {
-        let short = image
-            .configuration
-            .name
-            .strip_prefix("docker.io/")
-            .unwrap_or(&image.configuration.name);
-        if is_our_image(image, name) && Some(short) != keep {
-            let _ = container_cmd()
-                .args(["image", "delete", &image.configuration.name])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
+        let reference = &image.configuration.name;
+        let short = reference.strip_prefix("docker.io/").unwrap_or(reference);
+        let claimed = is_our_image(image, name) || short.starts_with(&prefix);
+        if claimed && Some(short) != keep {
+            release_imported_image(reference);
         }
     }
 }
@@ -2703,9 +2705,10 @@ pub fn export(name: &str, output: Option<&Path>) -> Result<()> {
 }
 
 /// Where an imported rootfs came from, recorded in the loaded image's
-/// labels (`imported-from`, plus `rootfs-sha256` for downloads) and the
-/// journal's `origin` — a local path for `Local`, the download itself
-/// for `Download`.
+/// `imported-from` label and the journal's `origin` — a local path for
+/// `Local`, the download itself for `Download`. `Download` also
+/// supplies the verified rootfs SHA-256 the shared image is keyed and
+/// labeled by; `Local` hashes the file.
 #[derive(Debug, Clone, Copy)]
 pub enum ImportSource<'a> {
     /// A local file path (or `-` for stdin).
@@ -2717,6 +2720,177 @@ pub enum ImportSource<'a> {
         sha256: &'a str,
         name: &'a str,
     },
+}
+
+/// A SHA-256 in cache-filename form: lowercase hex, `0x` stripped —
+/// the form the shared image's reference and `rootfs-sha256` label
+/// use. (Mirrors `catalog_ops::normalize_sha`.)
+fn normalized_sha(s: &str) -> String {
+    s.strip_prefix("0x")
+        .or_else(|| s.strip_prefix("0X"))
+        .unwrap_or(s)
+        .to_lowercase()
+}
+
+// Imported rootfs images carry two tags: the shared
+// `local/rootfs:<sha256>` dedup tag and a per-importer
+// `local/{distro,machine}-<name>:imported-<sha256>` tag the
+// journal/machine records and `rm`/`--unregister` untags. 64 hex
+// chars fit well under the 128-char tag limit.
+
+/// The shared content-keyed tag: any later import of the same archive
+/// — another distro, a machine, a retry after a failed create — reuses
+/// it instead of re-running the `.wsl`→OCI wrap and `image load`,
+/// which often outlasts the download itself.
+fn imported_image_ref(sha256: &str) -> String {
+    format!("local/rootfs:{sha256}")
+}
+
+/// The per-distro tag on an imported image (`snapshot_repo` keeps the
+/// `local/distro-<name>` prefix `is_generated_image` and the rename
+/// warning recognize).
+fn distro_import_ref(name: &str, sha256: &str) -> String {
+    format!("{}:imported-{sha256}", snapshot_repo(name))
+}
+
+/// The per-machine tag on an imported image.
+fn machine_import_ref(name: &str, sha256: &str) -> String {
+    format!("local/machine-{name}:imported-{sha256}")
+}
+
+/// The `<sha>` of an `*:imported-<sha>` tag when the suffix parses —
+/// `imported-<ts>` refs from pre-#32 imports don't qualify (their
+/// content tag didn't exist).
+fn imported_ref_sha(reference: &str) -> Option<&str> {
+    let sha = reference.rsplit_once(":imported-")?.1;
+    (sha.len() == 64 && sha.bytes().all(|b| b.is_ascii_hexdigit())).then_some(sha)
+}
+
+/// `container image tag` — a new reference on an existing image.
+fn tag_image(source: &str, target: &str) -> Result<()> {
+    run_container_quiet(&["image", "tag", source, target])
+}
+
+/// Untag `reference`: `image delete` removes just that state entry —
+/// other tags of the same image, and its blobs while any tag remains,
+/// are untouched. Best-effort.
+fn untag_image(reference: &str) {
+    let _ = container_cmd()
+        .args(["image", "delete", reference])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+/// Whether `reference` already names a local image. A listing failure
+/// reads as a miss — the cost is a redundant `image load` of identical
+/// content, nothing worse.
+fn image_cached(reference: &str) -> bool {
+    container::list_images().is_some_and(|imgs| {
+        imgs.iter()
+            .any(|i| container::same_image(&i.configuration.name, reference))
+    })
+}
+
+/// Cap on shared imported-rootfs images no importer references, the
+/// image-side analogue of the `.wsl` download cache's budget — oldest
+/// unused tags are evicted once the set is over it.
+const MAX_IMPORTED_IMAGE_BYTES: u64 = 8 << 30;
+
+/// Load `rootfs` as an image under the shared content tag unless that
+/// tag already exists; returns the shared reference. Shared images
+/// carry `imported-from`/`rootfs-sha256` provenance but deliberately
+/// no `distro`/`machine` name label: the label is per-image, not
+/// per-tag, so a name on it would let one importer's cleanup claim
+/// tags another importer still uses.
+fn ensure_rootfs_image(rootfs: &Path, sha256: &str, labels: &[(String, String)]) -> Result<String> {
+    let reference = imported_image_ref(sha256);
+    if image_cached(&reference) {
+        eprintln!("  reusing imported image {reference}");
+    } else {
+        oci::load_rootfs(rootfs, &reference, labels)?;
+        // A fresh load may itself push the unused set over budget.
+        prune_imported_images();
+    }
+    Ok(reference)
+}
+
+/// Tag the shared `shared` image as `per_ref` (a
+/// `distro_import_ref`/`machine_import_ref`) — the recorded, prunable
+/// ref. Falls back to the shared ref when `image tag` isn't available.
+fn per_importer_ref(shared: &str, per_ref: &str) -> String {
+    match tag_image(shared, per_ref) {
+        Ok(()) => per_ref.to_string(),
+        Err(e) => {
+            eprintln!(
+                "container-distro: warning: `container image tag` failed ({e:#}); \
+                 recording the shared reference {shared}"
+            );
+            shared.to_string()
+        }
+    }
+}
+
+/// Drop `per_ref` (an `*:imported-<sha>` tag), then run the unused-tag
+/// prune — its shared tag may have just become evictable.
+fn release_imported_image(per_ref: &str) {
+    untag_image(per_ref);
+    prune_imported_images();
+}
+
+/// Untag `local/machine-<name>:*` image tags — the import bookkeeping
+/// `machine rm` doesn't know about — after the machine is gone.
+/// Best-effort; a stale tag just keeps its shared image listed as
+/// in-use until pruned.
+pub fn release_machine_images(name: &str) {
+    let Some(images) = container::list_images() else {
+        return;
+    };
+    let prefix = format!("local/machine-{name}:");
+    for i in &images {
+        if i.configuration.name.starts_with(&prefix) {
+            release_imported_image(&i.configuration.name);
+        }
+    }
+}
+
+/// Evict `local/rootfs:*` tags no `*:imported-<sha>` ref still claims,
+/// oldest first, until the unused set is under
+/// `MAX_IMPORTED_IMAGE_BYTES` — the image-side analogue of the `.wsl`
+/// cache's `prune_cache`. Best-effort.
+fn prune_imported_images() {
+    let Some(images) = container::list_images() else {
+        return;
+    };
+    let mut unused: Vec<(&container::ImageListEntry, u64)> = images
+        .iter()
+        .filter_map(|i| {
+            let sha = i.configuration.name.strip_prefix("local/rootfs:")?;
+            let suffix = format!(":imported-{sha}");
+            if images
+                .iter()
+                .any(|o| o.configuration.name.ends_with(&suffix))
+            {
+                return None;
+            }
+            let size: u64 = i.variants.iter().map(|v| v.size.max(0) as u64).sum();
+            Some((i, size))
+        })
+        .collect();
+    // Oldest tag first; a missing creationDate sorts as epoch.
+    unused.sort_by(|a, b| {
+        a.0.configuration
+            .creation_date
+            .cmp(&b.0.configuration.creation_date)
+    });
+    let mut total: u64 = unused.iter().map(|(_, s)| s).sum();
+    for (entry, size) in unused {
+        if total <= MAX_IMPORTED_IMAGE_BYTES {
+            break;
+        }
+        untag_image(&entry.configuration.name);
+        total = total.saturating_sub(size);
+    }
 }
 
 /// Create a distro from a rootfs tar; returns its name. `requested`
@@ -2737,8 +2911,8 @@ pub fn import(
     if distro_exists(name)? {
         bail!("distro `{name}` already exists");
     }
-    // Checked here too so leftover state doesn't orphan the image
-    // `load_rootfs` is about to create; `create_from_spec` re-checks
+    // Checked here too so the conversion can't start only to have the
+    // create refused on leftover state; `create_from_spec` re-checks
     // under the distro lock.
     bail_if_staged(name)?;
     let stdin_copy;
@@ -2748,27 +2922,29 @@ pub fn import(
     } else {
         file
     };
-    let reference = format!("{}:imported-{}", snapshot_repo(name), timestamp());
-    // Labels mark the image as ours and record where it came from —
-    // cleanup and debugging don't have to guess from the name. For a
-    // catalog download that's the URL plus the verified hash; the cache
-    // path would be noise.
-    let mut labels = vec![(label_key(LABEL_DISTRO), name.to_string())];
-    match source {
-        ImportSource::Local => labels.push((
-            label_key(LABEL_IMPORTED_FROM),
-            if file == Path::new("-") {
-                "-".to_string()
-            } else {
-                file.to_string_lossy().into_owned()
-            },
-        )),
-        ImportSource::Download { url, sha256, .. } => {
-            labels.push((label_key(LABEL_IMPORTED_FROM), url.to_string()));
-            labels.push((label_key(LABEL_ROOTFS_SHA256), sha256.to_string()));
-        }
-    }
-    oci::load_rootfs(rootfs, &reference, &labels)?;
+    // Content key for the shared import image: a catalog download's
+    // verified hash is already known; a local file's takes one extra
+    // read pass — cheap next to the OCI wrap a hit can skip.
+    let sha256 = match &source {
+        ImportSource::Download { sha256, .. } => normalized_sha(sha256),
+        ImportSource::Local => oci::hash_file(rootfs)?,
+    };
+    // Provenance labels, no per-distro name label — see
+    // `ensure_rootfs_image`. `imported-from` records the first
+    // importer's source; the journal's `origin` tracks each distro's.
+    let imported_from = match source {
+        ImportSource::Local if file == Path::new("-") => "-".to_string(),
+        ImportSource::Local => file.to_string_lossy().into_owned(),
+        ImportSource::Download { url, .. } => url.to_string(),
+    };
+    let labels = [
+        (label_key(LABEL_ROOTFS_SHA256), sha256.clone()),
+        (label_key(LABEL_IMPORTED_FROM), imported_from),
+    ];
+    let shared = ensure_rootfs_image(rootfs, &sha256, &labels)?;
+    // The journal records the per-distro tag — what `rm` untags — on
+    // top of the shared content tag the dedup keys off.
+    let reference = per_importer_ref(&shared, &distro_import_ref(name, &sha256));
     // The archive's config files are guest input: extract them while
     // the tar is already open, for the automount default below and —
     // when the distro honors guest config — the journal snapshots. An
@@ -2830,17 +3006,11 @@ pub fn import(
             Ok(name)
         }
         Err(e) => {
-            // If the create refused the name (machine shadow, plain
-            // container, staged state) the distro never landed — don't
-            // orphan the image `load_rootfs` just made. When it did
-            // land (a stopped distro whose boot failed) the journal
-            // references the image, so it stays.
-            if !distro_exists(name).unwrap_or(false) {
-                let _ = container_cmd()
-                    .args(["image", "delete", &spec.image])
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status();
+            // The shared tag stays — a cache entry a retry reuses —
+            // but the per-distro tag belongs to a distro that never
+            // landed.
+            if spec.image != shared {
+                untag_image(&spec.image);
             }
             Err(e)
         }
@@ -2985,11 +3155,12 @@ pub fn import_machine(name: &str, file: &Path, force: bool) -> Result<()> {
     } else {
         file
     };
-    let reference = format!("local/machine-{name}:imported-{}", timestamp());
-    // Labels mark the image as ours without `distro`, which would make
-    // `distro rm`/`set` image cleanup claim it.
+    // Content-keyed like distro imports — a machine imported from the
+    // same archive a distro used (or a retry after a failed create)
+    // skips the wrap+load entirely.
+    let sha256 = oci::hash_file(rootfs)?;
     let labels = [
-        (label_key(LABEL_MACHINE), name.to_string()),
+        (label_key(LABEL_ROOTFS_SHA256), sha256.clone()),
         (
             label_key(LABEL_IMPORTED_FROM),
             if file == Path::new("-") {
@@ -2999,21 +3170,21 @@ pub fn import_machine(name: &str, file: &Path, force: bool) -> Result<()> {
             },
         ),
     ];
-    oci::load_rootfs(rootfs, &reference, &labels)?;
+    let shared = ensure_rootfs_image(rootfs, &sha256, &labels)?;
+    // The machine records its own `local/machine-<name>` tag on the
+    // shared image — the tag `--unregister` untags.
+    let reference = per_importer_ref(&shared, &machine_import_ref(name, &sha256));
     // `machine create` boots the machine; its internal boot absorbs the
     // first-boot provisioning reboot. `--no-boot` is avoided on purpose:
     // a `machine run` on a never-booted machine races the boot and fails
-    // every time (upstream #2024-adjacent).
-    let created = run_container(&["machine", "create", "--name", name, &reference]);
-    if created.is_err() {
-        // Don't leave the just-loaded image orphaned behind the failed
-        // create.
-        let _ = container_cmd()
-            .args(["image", "delete", &reference])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        return created;
+    // every time (upstream apple/container#2024-adjacent). A failed create keeps the
+    // shared tag — a cache entry — but drops the per-machine one, which
+    // belongs to a machine that never landed.
+    if let Err(e) = run_container(&["machine", "create", "--name", name, &reference]) {
+        if reference != shared {
+            untag_image(&reference);
+        }
+        return Err(e);
     }
     // Boot probe: the first `machine run` after `machine create` can
     // still lose the race while the VM settles — retry with a pause.
@@ -3514,7 +3685,26 @@ pub fn migrate_to_machine(
         );
     }
     let image = machine_create_image(&spec.image, src.is_some())?;
+    // An imported distro's image ref is the *distro's* tag on shared
+    // content — `rm` untags it below. Give the machine its own
+    // `local/machine-*` tag on the same image first so its recorded
+    // reference stays valid; untag it again if the create fails.
+    let machine_tag = imported_ref_sha(&image).map(|sha| machine_import_ref(&name, sha));
+    let image = match &machine_tag {
+        Some(t) if tag_image(&image, t).is_ok() => t.clone(),
+        Some(_) => {
+            eprintln!(
+                "container-distro: warning: couldn't tag `{image}` for machine `{name}` — \
+                 its recorded reference goes stale when `{distro}` is removed"
+            );
+            image
+        }
+        None => image,
+    };
     if let Err(e) = create_machine(&name, &image, &spec, opts) {
+        if image != spec.image {
+            untag_image(&image);
+        }
         if was_running {
             let _ = ensure_running_locked(distro, &mut lock);
         }
@@ -3733,13 +3923,27 @@ pub fn rename_machine(old: &str, new: &str, force: bool) -> Result<()> {
     if was_running {
         run_container_quiet(&["machine", "stop", old])?;
     }
+    let image = detail
+        .image
+        .as_ref()
+        .map(|i| i.reference.clone())
+        .context("machine has no image reference")?;
+    // An imported machine's image ref is a `local/machine-<old>` tag —
+    // retag it under `new` so the recorded reference stays valid once
+    // `old`'s tags are released. A failed retag just keeps `old`'s ref.
+    let (image, retagged) = match imported_ref_sha(&image) {
+        Some(sha) => {
+            let t = machine_import_ref(new, sha);
+            if tag_image(&image, &t).is_ok() {
+                (t, true)
+            } else {
+                (image, false)
+            }
+        }
+        None => (image, false),
+    };
     // From here a failure tries to leave `old` as it was found.
     let renamed = (|| -> Result<()> {
-        let image = detail
-            .image
-            .as_ref()
-            .map(|i| i.reference.clone())
-            .context("machine has no image reference")?;
         // `machine create` boots the machine; its internal boot
         // materializes the plugin-state disk the swap replaces below.
         let mut a = vec![
@@ -3757,7 +3961,7 @@ pub fn rename_machine(old: &str, new: &str, force: bool) -> Result<()> {
         if let Some(h) = &detail.home_mount {
             a.extend(["--home-mount".into(), h.clone()]);
         }
-        a.push(image);
+        a.push(image.clone());
         run_container(&a.iter().map(String::as_str).collect::<Vec<_>>())?;
         // Replace the machine's filesystem while it is stopped: clone
         // to a sibling then rename over its disk, so an interruption
@@ -3778,8 +3982,11 @@ pub fn rename_machine(old: &str, new: &str, force: bool) -> Result<()> {
         })();
         if let Err(e) = swapped {
             // `new` still holds only its image filesystem — remove it
-            // so a retry isn't blocked.
+            // so a retry isn't blocked, along with the tag we made.
             let _ = run_container_quiet(&["machine", "rm", new]);
+            if retagged {
+                untag_image(&image);
+            }
             return Err(e.context(format!(
                 "failed to move `{old}`'s filesystem into machine `{new}`"
             )));
@@ -3812,6 +4019,10 @@ pub fn rename_machine(old: &str, new: &str, force: bool) -> Result<()> {
     }
     if let Err(e) = run_container_quiet(&["machine", "rm", old]) {
         eprintln!("container-distro: renamed, but removing machine `{old}` failed: {e:#}");
+    } else if retagged {
+        // The retagged image is recorded under `new`; `old`'s
+        // `local/machine-<old>` tag is bookkeeping to release.
+        release_machine_images(old);
     }
     if was_default {
         let _ = run_container_quiet(&["machine", "set-default", new]);
@@ -3842,6 +4053,52 @@ mod tests {
             r#"{{"id":"{id}","status":"running","default":{default}}}"#
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn imported_ref_sha_parses_only_sha_tags() {
+        let sha = "a".repeat(64);
+        assert_eq!(
+            imported_ref_sha(&distro_import_ref("d1", &sha)),
+            Some(sha.as_str())
+        );
+        assert_eq!(
+            imported_ref_sha(&machine_import_ref("m1", &sha)),
+            Some(sha.as_str())
+        );
+        // Pre-#32 timestamp refs and other tags don't qualify.
+        assert_eq!(
+            imported_ref_sha("local/distro-d1:imported-1728000000"),
+            None
+        );
+        assert_eq!(imported_ref_sha("local/rootfs:abc"), None);
+        assert_eq!(imported_ref_sha("alpine:latest"), None);
+    }
+
+    #[test]
+    fn imported_refs_are_tag_shaped() {
+        let sha = "b".repeat(64);
+        assert_eq!(imported_image_ref(&sha), format!("local/rootfs:{sha}"));
+        assert_eq!(
+            distro_import_ref("d1", &sha),
+            format!("local/distro-d1:imported-{sha}")
+        );
+        assert_eq!(
+            machine_import_ref("m1", &sha),
+            format!("local/machine-m1:imported-{sha}")
+        );
+        // Every per-importer ref still reads as a generated
+        // `local/*-*:imported-*` tag, and fits the 128-char tag limit.
+        assert!(distro_import_ref("d1", &sha).len() < 128);
+        assert!(machine_import_ref("m1", &sha).len() < 128);
+    }
+
+    #[test]
+    fn normalized_sha_strips_and_lowercases() {
+        let hex = "AbC".repeat(21) + "d";
+        assert_eq!(normalized_sha(&format!("0x{hex}")), hex.to_lowercase());
+        assert_eq!(normalized_sha(&format!("0X{hex}")), hex.to_lowercase());
+        assert_eq!(normalized_sha(&hex), hex.to_lowercase());
     }
 
     #[test]
@@ -4565,7 +4822,10 @@ mod tests {
     #[test]
     fn our_image_by_label() {
         let img = |name: &str, labels: &[(&str, &str)]| container::ImageListEntry {
-            configuration: container::ImageListConfig { name: name.into() },
+            configuration: container::ImageListConfig {
+                name: name.into(),
+                creation_date: None,
+            },
             variants: vec![container::ImageVariant {
                 config: Some(container::ImageVariantConfig {
                     config: Some(container::ImageUserConfig {
@@ -4575,6 +4835,7 @@ mod tests {
                             .collect(),
                     }),
                 }),
+                size: 0,
             }],
         };
         let distro_key = label_key(LABEL_DISTRO);

@@ -337,7 +337,15 @@ fn unregister(name: &str, sel: Backend) -> Result<ExitCode> {
             distro::delete(true, &[d])?;
             Ok(ExitCode::SUCCESS)
         }
-        Target::Machine(_) => passthru(&["machine", "rm", name]),
+        Target::Machine(_) => {
+            let rc = passthru(&["machine", "rm", name])?;
+            if rc == ExitCode::SUCCESS {
+                // `machine rm` doesn't know about the `local/machine-*`
+                // tags `import` added — release them.
+                distro::release_machine_images(name);
+            }
+            Ok(rc)
+        }
     }
 }
 

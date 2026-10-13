@@ -243,6 +243,10 @@ impl ImageListEntry {
 pub struct ImageListConfig {
     /// The image reference, e.g. `local/distro-d1:imported-1728000000`.
     pub name: String,
+    /// When this tag was recorded — each reference is its own entry,
+    /// so this is the tag's age, used for cache eviction ordering.
+    #[serde(default, rename = "creationDate")]
+    pub creation_date: Option<String>,
 }
 
 /// One platform variant of an [`ImageListEntry`].
@@ -250,6 +254,9 @@ pub struct ImageListConfig {
 pub struct ImageVariant {
     #[serde(default)]
     pub config: Option<ImageVariantConfig>,
+    /// Total size of this variant in bytes.
+    #[serde(default)]
+    pub size: i64,
 }
 
 /// A variant's image-config wrapper (`config.config` in the JSON).

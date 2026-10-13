@@ -305,6 +305,15 @@ since storage is managed by `container`; the two-value form
 stopped; `cm` boots it once to verify and retries the documented
 first-boot flake before warning.
 
+The converted image is keyed on the rootfs's SHA-256
+(`local/rootfs:<sha256>`): importing the same archive again — another
+distro, a `--machine` import, a retry — reuses it instead of
+re-converting, which usually took longer than the download did. Each
+import adds a per-name tag (`local/distro-<name>:imported-<sha>` /
+`local/machine-<name>:imported-<sha>`) that `rm`/`--unregister` untags;
+shared `local/rootfs:*` tags no importer still references are evicted
+oldest-first past a size budget, like the `.wsl` download cache.
+
 ## Port forwarding
 
 `cm --forward HOST[:GUEST]` (repeatable, `-d` picks the target) runs a

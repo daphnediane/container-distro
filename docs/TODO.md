@@ -34,6 +34,22 @@ source of truth. "Rung" references are the integration levels in
 - [ ] **GUI apps (WSLg-style)** -- open; the X11 cookie path needs care
   ([#7]; [gui-apps], security notes there)
 
+## Catalog
+
+### For 1.0 — catalog
+
+- [ ] **Vendor Microsoft's `DistributionInfo.json` as the catalog
+  base** -- pinned MIT-licensed snapshot + our `Image`/`HomeMount`
+  overlay, preferring `.wsl` downloads (verified SHA-256, cached)
+  over bare images; license notice in the pkg license screen;
+  release-gate freshness check like the THIRD-PARTY-NOTICES
+  staleness one ([#31])
+- [x] **Content-keyed image reuse on import** -- shared
+  `local/rootfs:<sha256>` dedup tag + per-importer
+  `local/{distro,machine}-<name>:imported-<sha>` tags; `rm`/
+  `--unregister` untag per-name refs, unused shared tags evicted
+  oldest-first past a size budget ([#32])
+
 ## Interop
 
 ### Post-1.0 — interop
@@ -65,6 +81,8 @@ source of truth. "Rung" references are the integration levels in
 [#15]: https://github.com/daphnediane/container-distro/issues/15
 [#29]: https://github.com/daphnediane/container-distro/issues/29
 [#30]: https://github.com/daphnediane/container-distro/issues/30
+[#31]: https://github.com/daphnediane/container-distro/issues/31
+[#32]: https://github.com/daphnediane/container-distro/issues/32
 [apple/container#1148]: https://github.com/apple/container/issues/1148
 [apple/container#1805]: https://github.com/apple/container/issues/1805
 [apple/container#2278]: https://github.com/apple/container/issues/2278

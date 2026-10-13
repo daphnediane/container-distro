@@ -51,6 +51,14 @@ fn sha256_hex(bytes: &[u8]) -> String {
     hex(&Sha256::digest(bytes))
 }
 
+/// SHA-256 of `path` as lowercase hex — the content key an imported
+/// rootfs's image is named and labeled by.
+pub fn hash_file(path: &Path) -> Result<String> {
+    let f = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    let (h, _) = hash_reader(f).with_context(|| format!("failed to read {}", path.display()))?;
+    Ok(h)
+}
+
 /// `io::Write` sink that only hashes and counts.
 struct HashWriter {
     hasher: Sha256,
