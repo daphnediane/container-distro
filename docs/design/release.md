@@ -57,7 +57,8 @@ The mechanical bits are driven by [cargo-release] (`cargo install
    stale), and a vendored-catalog freshness check (refresh
    `vendor/microsoft/` with `scripts/update-microsoft-catalog.sh`
    when upstream's `DistributionInfo.json` has moved). Then confirm
-   [TODO] lists only still-open work and the user-facing docs reflect
+   [TODO] lists only still-open work — including pruning links to
+   issues that closed this cycle — and the user-facing docs reflect
    what actually shipped. If the release has a GitHub milestone, sweep
    its open issues (`gh issue list --milestone <name> --state open`):
    each gets fixed in this release, re-milestoned/deferred, or

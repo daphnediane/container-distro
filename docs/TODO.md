@@ -14,16 +14,13 @@ the permanent record of what shipped.
 
 ## Machines (WSL parity, mostly upstream-blocked)
 
-### For 1.0 — machines
+### Post-1.0 — machines
 
 - **Configuration files** -- host-side `cm` config (L0) still
   open; the guest `wsl.conf` subset is honored for distros (init
   reads the live file at boot, mode-gated; snapshots in the journal)
-  with deferred keys tracked separately ([#6], [#29], [#30], [#33];
+  with deferred keys tracked separately ([#29], [#33];
   [configuration-files], design/security.md)
-
-### Post-1.0 — machines
-
 - **`cm --export` / `--import` via upstream primitives** -- once
   `container export` honors a machine's rootfs mount source, drop the
   scratch-container workaround; once a `--no-boot` machine can be
@@ -65,13 +62,11 @@ the permanent record of what shipped.
 [#3]: https://github.com/daphnediane/container-distro/issues/3
 [#4]: https://github.com/daphnediane/container-distro/issues/4
 [#5]: https://github.com/daphnediane/container-distro/issues/5
-[#6]: https://github.com/daphnediane/container-distro/issues/6
 [#7]: https://github.com/daphnediane/container-distro/issues/7
 [#8]: https://github.com/daphnediane/container-distro/issues/8
 [#9]: https://github.com/daphnediane/container-distro/issues/9
 [#15]: https://github.com/daphnediane/container-distro/issues/15
 [#29]: https://github.com/daphnediane/container-distro/issues/29
-[#30]: https://github.com/daphnediane/container-distro/issues/30
 [#33]: https://github.com/daphnediane/container-distro/issues/33
 [#34]: https://github.com/daphnediane/container-distro/issues/34
 [apple/container#1148]: https://github.com/apple/container/issues/1148
