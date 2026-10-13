@@ -42,8 +42,8 @@ The mechanical bits are driven by [cargo-release] (`cargo install
   and `cargo publish` runs from it.
 - `allow-branch = ["main", "release/*"]`: releases can only be cut
   from `main` or a release branch.
-- `cargo release version X.Y.Z-dev -x` sets an explicit dev version
-  (the post-release bump step) without tagging.
+- `cargo release version X.Y.Z-dev -x --no-confirm` sets an explicit
+  dev version (the post-release bump step) without tagging.
 
 ## Cutting a minor release (from `main`)
 
@@ -56,8 +56,15 @@ The mechanical bits are driven by [cargo-release] (`cargo install
    `cargo bundle-licenses -f yaml -o THIRD-PARTY-NOTICES.yaml` if
    stale), and a vendored-catalog freshness check (refresh
    `vendor/microsoft/` with `scripts/update-microsoft-catalog.sh`
-   when upstream's `DistributionInfo.json` has moved). Then confirm [TODO] plus the user-facing docs reflect what
-   actually shipped. If `container`'s minor version changed since the
+   when upstream's `DistributionInfo.json` has moved). Then confirm
+   [TODO] lists only still-open work and the user-facing docs reflect
+   what actually shipped. If the release has a GitHub milestone, sweep
+   its open issues (`gh issue list --milestone <name> --state open`):
+   each gets fixed in this release, re-milestoned/deferred, or
+   consciously shipped around -- don't tag with release-scoped work
+   silently open. (Today that's `release-1` gating 1.0; interim minors
+   have no milestone and skip this.) If `container`'s minor version
+   changed since the
    last release, first re-verify the appRoot internals we depend on
    ([Version gating]) and extend `VERIFIED_CONTAINER_MINOR` plus the
    install-offer pin (`PINNED_CONTAINER_VERSION`, `PKG_SHA256`) once
@@ -78,21 +85,25 @@ The mechanical bits are driven by [cargo-release] (`cargo install
    any other still-pre-journal distros on the machine, which is the
    intended upgrade behavior. Keep the check in the gate until
    auto-adoption sunsets in 1.2.0.
-2. Update `CHANGELOG.md` (see [Changelog]): prepend a
-   `## X.Y.Z -- YYYY-MM-DD` section drafted from the commit log since
-   the previous tag (`git log --oneline v<prev>..HEAD`) and the
-   `TODO.md` items those commits completed -- then delete the completed
-   `[x]` entries so the changelog is their permanent record. Commit
-   this *before* releasing: `cargo release` requires a clean tree.
+2. Update `CHANGELOG.md` (see [Changelog]): rename the running
+   `## X.Y.Z-dev` section to `## X.Y.Z -- YYYY-MM-DD`, then audit it
+   against the commit log since the previous tag
+   (`git log --oneline v<prev>..HEAD`) -- add entries for anything that
+   landed without one. Completed work moved out of `TODO.md` as it
+   landed, so nothing done should still linger there. Commit this
+   *before* releasing: `cargo release` requires a clean tree.
 3. Preview then cut the release:
 
    ```bash
-   cargo release release      # dry run: 0.5.0-dev -> 0.5.0, commit, tag
-   cargo release release -x   # bumps, commits "chore: release 0.5.0",
-                              # tags v0.5.0
+   cargo release release                  # dry run: 0.5.0-dev -> 0.5.0
+   cargo release release -x --no-confirm  # bumps, commits
+                                          # "chore: release 0.5.0",
+                                          # tags v0.5.0
    ```
 
-   (Always pass `release` explicitly: it strips the prerelease suffix,
+   (`--no-confirm` skips cargo-release's interactive confirmation
+   prompt, which a non-interactive or agent-driven run can't answer.
+   Always pass `release` explicitly: it strips the prerelease suffix,
    while bare `cargo release` releases the manifest version unchanged
    and would tag `v0.5.0-dev`. `cargo release minor` would bump
    `0.5.0-dev` to `0.6.0` -- only use a level when the dev version
@@ -151,16 +162,23 @@ The mechanical bits are driven by [cargo-release] (`cargo install
    (one-time `cargo login` first). `cargo publish --dry-run` packages
    and verify-builds without uploading. Never publish from a `-dev`
    version -- it would land as a prerelease.
-8. Open the next development cycle on `main`:
+8. Close the issues the release resolves: walk the new changelog
+   section and the cycle's `[#N]` commit refs against the open tracker
+   (`gh issue list`), and close anything now shipped with a comment
+   naming `vX.Y.Z`. (Candidates are easiest to spot during the step-2
+   commit-log audit; close them only once the release is actually out.)
+9. Open the next development cycle on `main`:
 
    ```bash
-   cargo release version X.Y.0-dev -x   # next minor, e.g. 0.6.0-dev
+   cargo release version X.Y.0-dev -x --no-confirm   # next minor, e.g. 0.6.0-dev
    git commit -am "chore: start X.Y development"
    git push
    ```
 
-   (message format per `.devin/rules/comment-file.md`)
-9. Sanity-check the tag:
+   The same commit starts a fresh, empty `## X.Y.0-dev` section at the
+   top of `CHANGELOG.md` to collect the new cycle's entries. (Message
+   format per `.devin/rules/comment-file.md`.)
+10. Sanity-check the tag:
 
    ```bash
    git checkout vX.Y.Z && cargo test --workspace
@@ -183,23 +201,26 @@ git branch release/X.Y vX.Y.0
    in-flight builds report a prerelease:
 
    ```bash
-   cargo release version X.Y.Z-dev -x   # e.g. 0.5.1-dev
+   cargo release version X.Y.Z-dev -x --no-confirm   # e.g. 0.5.1-dev
    git commit -am "chore: start X.Y.Z development"
    ```
 
 2. Cherry-pick the fixes (`git cherry-pick -x <sha>` records the
    source commit) or land them directly on the branch.
-3. Prepend the `CHANGELOG.md` section the same way as a minor release;
+3. Draft and prepend the `CHANGELOG.md` `## X.Y.Z -- YYYY-MM-DD`
+   section -- a release branch has no running `-dev` section, so build
+   it from the branch commits (`git log --oneline v<prev-patch>..HEAD`);
    commit.
 4. Cut the patch release: `cargo release release` then
-   `cargo release release -x` -- strips `-dev`, commits
+   `cargo release release -x --no-confirm` -- strips `-dev`, commits
    `chore: release X.Y.Z`, tags `vX.Y.Z`.
 5. Push the branch and tag, publish the draft GitHub Release the
-   workflow creates, then `cargo publish` from the tag.
+   workflow creates, `cargo publish` from the tag, and close the issues
+   the patch resolves.
 6. Re-open the branch's dev cycle:
 
    ```bash
-   cargo release version X.Y.Z-dev -x   # e.g. 0.5.2-dev
+   cargo release version X.Y.Z-dev -x --no-confirm   # e.g. 0.5.2-dev
    git commit -am "chore: start X.Y.Z development"
    git push origin release/X.Y
    ```
@@ -208,11 +229,15 @@ git branch release/X.Y vX.Y.0
 
 `CHANGELOG.md` (repo root) records user-facing changes per release,
 newest first -- `## X.Y.Z -- YYYY-MM-DD` sections grouped Added /
-Changed / Fixed. It's drafted at release time from the commit log since
-the previous tag plus the `TODO.md` entries being retired: completed
-`[x]` items are deleted from `TODO.md` in the release commit, so the
-changelog is their permanent record and TODO stays a list of work that
-remains.
+Changed / Fixed. The top section is the running draft for the
+in-flight release, titled `## X.Y.Z-dev` after the dev version in
+`Cargo.toml`: entries land there as work completes -- a finished
+`TODO.md` item is removed from TODO and recorded in the dev section in
+the same commit, and user-facing work that was never a TODO item gets
+an entry directly. At release time the `-dev` heading is renamed to
+`## X.Y.Z -- YYYY-MM-DD` and the section is audited against the commit
+log for anything missed, so the changelog stays the permanent record
+and TODO stays a list of work that remains.
 
 ## Notes
 

@@ -1,10 +1,14 @@
 # Changelog
 
-User-facing changes per release, newest first. Written at release time
-from the commit log and the TODO items completed since the previous
-tag -- see docs/design/release.md.
+User-facing changes per release, newest first. The top `## X.Y.Z-dev`
+section is the running draft for the in-flight release (matching the
+dev version in `Cargo.toml`): entries land there as work completes --
+finished `docs/TODO.md` items move here, other user-facing changes get
+entries directly. At release time the `-dev` heading is renamed to
+`## X.Y.Z -- YYYY-MM-DD` and audited against the commit log -- see
+docs/design/release.md.
 
-## Unreleased
+## 0.7.0-dev
 
 ### Added
 
@@ -33,6 +37,29 @@ tag -- see docs/design/release.md.
   frozen into the journal at create, so a host upgrade just changes
   what future boots get.
 - `cm --install` gains `--preset` and `--ssh`/`--no-ssh`.
+- The built-in catalog is now Microsoft's `DistributionInfo.json`
+  vendored under `vendor/microsoft/`, merged with the
+  `src/catalog.json` overlay (upstream fields win, the overlay fills
+  gaps); entries prefer a `.wsl` source and fall back to `Image`. A
+  catalog-freshness check runs in the release gate and the MIT license
+  ships in the pkg.
+- **Content-keyed image reuse on import**: imported rootfs images get a
+  shared `local/rootfs:<sha256>` dedup tag plus per-importer
+  `local/{distro,machine}-<name>:imported-<sha>` tags; `rm`/
+  `--unregister` untag the per-name refs, and unused shared tags are
+  evicted oldest-first past a size budget.
+- **macOS terminal profiles** (`windowsterminal.enabled`, default
+  true): a Terminal.app settings set and an iTerm2 dynamic profile that
+  launch `cm -d NAME`; refreshed on rename, removed on delete/
+  `migrate --out`.
+- A `wsl.conf` subset is honored for distros: init reads the live file
+  at boot (mode-gated; snapshots in the journal). Host-side `cm`
+  config and the remaining keys are still open work.
+- Release builds ship a CycloneDX SBOM
+  (`container-distro-X.Y.Z-sbom.cdx.json`) and embed their cargo
+  dependency tree (built with `cargo auditable`), so `cargo audit bin`
+  can inventory an installed copy. The pkg installer gains a license
+  step.
 
 ### Changed
 
@@ -48,6 +75,17 @@ tag -- see docs/design/release.md.
   regardless (upstream has no opt-out), so choosing `--machine` is the
   opt-in. Only an explicit opt-out still refuses: `--no-ssh` at
   install, or a distro with `set --no-ssh` recorded on migrate.
+- **`cm --shutdown` stops the services it started**: `ensure_started`
+  leaves a `services-started` marker when it ran `container system
+  start`; `--shutdown` now `system stop`s when the marker exists and no
+  machines/containers remain running. `--shutdown --system` stays the
+  explicit big hammer.
+
+### Fixed
+
+- The journal drift check no longer reports drift for image refs that
+  only differ in normalization, or for cpus/memory left unpinned at
+  create.
 
 ## 0.6.0 -- 2026-10-11
 
