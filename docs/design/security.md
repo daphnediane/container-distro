@@ -444,6 +444,37 @@ is.
   root, accepted only at the same trust tier that already runs the
   image's own init.
 
+### T12. Packaged conf gates writes into terminal-app preferences
+
+Creating/importing a distro writes a Terminal.app settings set into
+`com.apple.Terminal`'s `Window Settings` and, when iTerm2 exists, a
+dynamic profile under `~/Library/Application Support/iTerm2` — host
+preference stores a package shouldn't normally reach.
+
+- **Accepted because:** the writes are user-level only (cfprefsd/
+  plist file + iTerm2's documented drop-in dir — no privilege, no
+  daemon), and they *are* the `windowsterminal` feature — WSL does
+  the equivalent on install. A `.wsl` is already trusted to run its
+  own guest code (T4); shaping a host profile named for the distro
+  is far below that.
+- **Mitigations that exist:** the package supplies exactly one value
+  — the `windowsterminal.enabled` boolean. The profile name, title,
+  and `cm -d` command are host-generated (distro names are already
+  validated), and `ProfileTemplate` styling is not read at all
+  ([#34]). The
+  `ContainerDistroDistro` marker plus the ` (cm)` fallback mean a
+  generated profile can never overwrite or delete a user's own
+  same-named one. iTerm2's drop-in is our own file — an unparsable
+  one is left alone rather than rewritten. Removal edits the plist
+  directly (and AppleScript only against an already-running
+  Terminal), so cleanup can't be tricked into launching a window.
+- **Residuals:** Terminal's live settings model loads `Window
+  Settings` lazily, so a profile deleted while Terminal runs could
+  linger in its in-memory view until a pref reload — cosmetic, and
+  the plist (the persistent copy) is still clean. `enabled=false`
+  is package opt-out, not a boundary: the conf is honored even for
+  ad-hoc imports because it only *suppresses* host writes.
+
 ## Restricted distros
 
 The user-facing description of `--restricted` -- what it sets and what
@@ -548,6 +579,7 @@ Each open gap adds attack surface; flagging the traps up front.
 [#18]: https://github.com/daphnediane/container-distro/issues/18
 [#19]: https://github.com/daphnediane/container-distro/issues/19
 [#20]: https://github.com/daphnediane/container-distro/issues/20
+[#34]: https://github.com/daphnediane/container-distro/issues/34
 [apple/container#2325]: https://github.com/apple/container/issues/2325
 [configuration-files]: notes/configuration-files.md
 [gui-apps]: notes/gui-apps.md

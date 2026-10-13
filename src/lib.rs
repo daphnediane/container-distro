@@ -52,5 +52,6 @@ pub mod ops;
 pub mod plugin;
 pub mod spec;
 pub mod table;
+pub mod terminal;
 pub mod update;
 pub mod wsl;

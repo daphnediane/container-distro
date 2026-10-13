@@ -68,6 +68,7 @@ use crate::container::{
 };
 use crate::naming::{label_key, label_lookup, state_dir};
 use crate::oci;
+use crate::terminal;
 use crate::wsl;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -260,6 +261,11 @@ pub struct CreateOptions {
     /// shadowing the machine, so the collision is refused without this
     #[arg(long)]
     pub force: bool,
+
+    /// Don't generate macOS terminal profiles (Terminal.app settings
+    /// set + iTerm2 dynamic profile) for the new distro
+    #[arg(long)]
+    pub no_terminal_profile: bool,
 }
 
 impl CreateOptions {
@@ -985,6 +991,17 @@ fn no_default(
 }
 
 fn create_from_spec(spec: &DistroSpec, opts: &CreateOptions) -> Result<String> {
+    create_from_spec_with_conf(spec, opts, None)
+}
+
+/// [`create_from_spec`] plus `conf` — the packaged
+/// `wsl-distribution.conf` text an archive import already scanned —
+/// for terminal-profile metadata.
+fn create_from_spec_with_conf(
+    spec: &DistroSpec,
+    opts: &CreateOptions,
+    conf: Option<&str>,
+) -> Result<String> {
     check_sources(spec)?;
     container::warn_unverified_version();
     ensure_state()?;
@@ -1040,6 +1057,9 @@ fn create_from_spec(spec: &DistroSpec, opts: &CreateOptions) -> Result<String> {
         );
     if set_default {
         write_default(Some(&spec.name))?;
+    }
+    if !opts.no_terminal_profile {
+        terminal::sync(&spec.name, conf);
     }
     Ok(spec.name.clone())
 }
@@ -1466,6 +1486,7 @@ pub fn delete(force: bool, names: &[String]) -> Result<()> {
         remove_journal_dir(n)?;
         cleanup_preserved(n);
         remove_snapshot_images(n, None);
+        terminal::remove(n);
         if default_name().as_deref() == Some(n) {
             write_default(None)?;
         }
@@ -2985,7 +3006,11 @@ pub fn import(
             name: name.to_string(),
         },
     }));
-    match create_from_spec(&spec, opts) {
+    match create_from_spec_with_conf(
+        &spec,
+        opts,
+        pkg.as_ref().and_then(|p| p.distribution_conf.as_deref()),
+    ) {
         Ok(name) => {
             // Snapshot the archive's config into the journal — the
             // `--no-boot` import lands with them in place; a booted
@@ -3470,6 +3495,9 @@ fn migrate_to_distro(
     {
         write_default(Some(name))?;
     }
+    if !opts.no_terminal_profile {
+        terminal::sync(name, None);
+    }
     Ok(name.to_string())
 }
 
@@ -3766,6 +3794,7 @@ pub fn migrate_to_machine(
         remove_journal_dir(distro)?;
         cleanup_preserved(distro);
         remove_snapshot_images(distro, None);
+        terminal::remove(distro);
         if default_name().as_deref() == Some(distro) {
             write_default(None)?;
         }
@@ -3876,6 +3905,13 @@ pub fn rename(old: &str, new: &str, force: bool) -> Result<()> {
     if default_name().as_deref() == Some(old) {
         write_default(Some(new))?;
     }
+    terminal::rename(
+        old,
+        new,
+        fs::read_to_string(journal_conf_path(new, "wsl-distribution.conf")?)
+            .ok()
+            .as_deref(),
+    );
     drop(lock);
     // An imported distro's snapshot image keeps `old` in its reference
     // and labels — cleanup keys off the new name, so `rm` won't find

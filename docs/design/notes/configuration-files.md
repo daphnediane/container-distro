@@ -25,9 +25,9 @@ Two config files, split by scope:
 - **`/etc/wsl-distribution.conf`** -- inside the distro rootfs, shipped
   by the *distro author* in a `.wsl` package ([build-custom-distro]):
   `[oobe] defaultName`/`defaultUid`/`command` (the command runs once at
-  first launch), `[shortcut] icon`/`name` for the Start-menu entry, and
-  a `terminal profile` GUID. Metadata about the distribution, not user
-  config.
+  first launch), `[shortcut] enabled`/`icon` for the Start-menu entry,
+  and `[windowsterminal] enabled`/`ProfileTemplate` for the terminal
+  profile. Metadata about the distribution, not user config.
 
 The first two are the interesting split: things the *guest* needs to
 know at boot live in the guest; things describing the *VM itself* live
@@ -151,12 +151,14 @@ exposure is an odd file in the journal, nothing more.
 
 `/etc/wsl-distribution.conf`:
 
-| Key                               | Verdict                                                                  |
-| --------------------------------- | ------------------------------------------------------------------------ |
-| `oobe.defaultName`                | honored — distro-name suggestion at `.wsl` import                        |
-| `oobe.defaultUid`                 | not honored — we provision the host account                              |
-| `oobe.command`                    | **not run** — deferred (account setup doesn't map; see security) ([#29]) |
-| `shortcut.*`, `windowsterminal.*` | deferred — macOS Terminal/iTerm2 profiles ([#30])                        |
+| Key                               | Verdict                                                                   |
+| --------------------------------- | ------------------------------------------------------------------------- |
+| `oobe.defaultName`                | honored — distro-name suggestion at `.wsl` import                         |
+| `oobe.defaultUid`                 | not honored — we provision the host account                               |
+| `oobe.command`                    | **not run** — deferred (account setup doesn't map; see security) ([#29])  |
+| `windowsterminal.enabled`         | honored — gates generated Terminal/iTerm2 profiles (default true) ([#30]) |
+| `windowsterminal.ProfileTemplate` | **not read** — deferred (WT-fragment styling doesn't map 1:1) ([#34])     |
+| `shortcut.*`                      | deferred — macOS launcher entries ([#33])                                 |
 
 ### Rejected alternative: host-side file/directory mount
 
@@ -179,8 +181,13 @@ snapshot model keeps `/etc/wsl.conf` a normal guest file.
 - **`user.default` + `oobe.command`** ([#29]) — need a decision on
   when auto-provisioning should be skipped (a distro declaring its
   own account model); the snapshots already land the data.
-- **Terminal profiles** (`shortcut.*`/`windowsterminal.*`) ([#30]) —
-  macOS Terminal/iTerm2 profile generation; possibly impractical.
+- **Windows-Terminal profile templates** ([#34]) —
+  `windowsterminal.ProfileTemplate` styling (colors/fonts) isn't
+  mapped to Terminal.app/iTerm2 profile fields yet; native
+  `[macosterminal]`/`[iterm2]` extension sections are the other half
+  of that issue.
+- **Launcher entries** (`shortcut.*`) ([#33]) — a Start-menu
+  equivalent: a clickable host-side launcher into the distro.
 - **`interop.*`** — a `\\wsl$` host-side equivalent is the blocker
   ([#27]); likely hard to near-impossible.
 - **`~/.wslconfig` per-machine VM config** — resources stay per-distro
@@ -190,4 +197,6 @@ snapshot model keeps `/etc/wsl.conf` a normal guest file.
 [#27]: https://github.com/daphnediane/container-distro/issues/27
 [#29]: https://github.com/daphnediane/container-distro/issues/29
 [#30]: https://github.com/daphnediane/container-distro/issues/30
+[#33]: https://github.com/daphnediane/container-distro/issues/33
+[#34]: https://github.com/daphnediane/container-distro/issues/34
 [build-custom-distro]: https://learn.microsoft.com/en-us/windows/wsl/build-custom-distro
