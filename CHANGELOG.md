@@ -8,7 +8,7 @@ entries directly. At release time the `-dev` heading is renamed to
 `## X.Y.Z -- YYYY-MM-DD` and audited against the commit log -- see
 docs/design/release.md.
 
-## 0.7.0-dev
+## 0.7.0 -- 2026-10-13
 
 ### Added
 
@@ -86,6 +86,8 @@ docs/design/release.md.
 - The journal drift check no longer reports drift for image refs that
   only differ in normalization, or for cpus/memory left unpinned at
   create.
+- The pkg installer's welcome/conclusion pages carry `lang`/`viewport`
+  metadata (HTML validity; Installer.app rendering unchanged).
 
 ## 0.6.0 -- 2026-10-11
 
