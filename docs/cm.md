@@ -116,18 +116,18 @@ materializes a fresh one (see [container-distro.md]).
 
 ## Managing
 
-| Option                | Description                                                           |
-| --------------------- | --------------------------------------------------------------------- |
-| `-s, --set-default`   | Set the default distro or machine                                     |
-| `-t, --terminate`     | Stop a running distro or machine                                      |
-| `--shutdown`          | Stop all running machines and distros; services stay up               |
-| `--shutdown --system` | Also `container system stop` (stops *all* containers, not just ours)  |
-| `--status`            | `container system status`                                             |
-| `--update [VERSION]`  | Update container-distro itself via the release `.pkg` + Installer.app |
-| `--unregister`        | Delete a distro or machine and its storage                            |
-| `--rename OLD NEW`    | Rename a machine or distro; `--machine`/`--distro` selects on a clash |
-| `--migrate NAME`      | Make NAME an instance of the selected backend (see below)             |
-| `--version`           | Print `cm` and `container` versions (`not installed` when missing)    |
+| Option                | Description                                                                                                               |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `-s, --set-default`   | Set the default distro or machine                                                                                         |
+| `-t, --terminate`     | Stop a running distro or machine                                                                                          |
+| `--shutdown`          | Stop all running machines and distros; also stops `container` services when `cm` started them and nothing is left running |
+| `--shutdown --system` | Always `container system stop` (stops *all* containers, not just ours)                                                    |
+| `--status`            | `container system status`                                                                                                 |
+| `--update [VERSION]`  | Update container-distro itself via the release `.pkg` + Installer.app                                                     |
+| `--unregister`        | Delete a distro or machine and its storage                                                                                |
+| `--rename OLD NEW`    | Rename a machine or distro; `--machine`/`--distro` selects on a clash                                                     |
+| `--migrate NAME`      | Make NAME an instance of the selected backend (see below)                                                                 |
+| `--version`           | Print `cm` and `container` versions (`not installed` when missing)                                                        |
 
 `--unregister` and `-t` resolve distros first, like `-d` -- so they act
 on a distro when a same-named machine exists.

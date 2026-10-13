@@ -366,11 +366,16 @@ fn migrate(name: &str, sel: Backend) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-/// WSL `--shutdown`: stop every running machine and distro. Services stay
-/// up unless `system` is set, since `container system stop` also stops
+/// WSL `--shutdown`: stop every running machine and distro. Services
+/// stop too when `system` is set, or when our tooling started them and
+/// the post-stop world is completely idle — "stop what we started"
+/// (#11), since a bare `container system stop` also tears down
 /// unrelated containers.
 fn shutdown(system: bool) -> Result<ExitCode> {
     if !container::system_running() {
+        // Services are already down; any "we started them" marker
+        // left behind is stale.
+        container::clear_services_marker();
         return Ok(ExitCode::SUCCESS);
     }
     let mut code = ExitCode::SUCCESS;
@@ -393,10 +398,20 @@ fn shutdown(system: bool) -> Result<ExitCode> {
         eprintln!("cm: {e:#}");
         code = ExitCode::FAILURE;
     }
-    if system {
+    // `is_ok_and` keeps this conservative: when the running-state
+    // probe fails we can't prove idleness, so the services stay up.
+    let ours_and_idle = container::services_started_by_us()
+        && container::list_machines().is_ok_and(|ms| !ms.iter().any(|m| m.is_running()))
+        && container::list_containers().is_ok_and(|cs| !cs.iter().any(|c| c.is_running()));
+    if ours_and_idle && !system {
+        eprintln!("cm: stopping container services (started by cm; nothing left running)");
+    }
+    if system || ours_and_idle {
         let c = passthru(&["system", "stop"])?;
         if c != ExitCode::SUCCESS {
             code = c;
+        } else {
+            container::clear_services_marker();
         }
     }
     Ok(code)

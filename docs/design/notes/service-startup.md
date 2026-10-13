@@ -1,6 +1,6 @@
 # Gap: service startup / shutdown semantics
 
-- **Status:** by design at L0
+- **Status:** implemented at L0 — "stop what we started" shipped
 - **Fix level:** structural -- unchanged at every level ≤ [L2.5], since
   the services *are* the product
 - **Tracking:** [#11]
@@ -14,11 +14,17 @@ auto-starts its VM transparently.
 
 `cm` auto-starts `container` services before machine ops
 (`ensure_started` → `container system start`), matching WSL's
-transparent-start behavior. The divergence is at shutdown:
-`cm --shutdown` stops all *machines* but leaves `container` services
-(apiserver, plugins) running -- `container system stop` is the full
-shutdown, but that also stops unrelated containers, which is too broad
-for a WSL `--shutdown` semantic.
+transparent-start behavior — and records it: `ensure_started` writes a
+`services-started` marker in the state dir when *it* ran
+`system start` (not when services were already up). At shutdown,
+`cm --shutdown` stops all machines and distros, then — when the
+marker exists and a fresh listing shows no machines and no regular
+containers still running — finishes with `container system stop` and
+clears the marker. A user-started service tree (no marker) or a busy
+one (anything left running) is left alone; `--shutdown --system`
+remains the explicit "stop everything regardless" hammer. The marker
+is cleared whenever `system stop` succeeds or services are found
+already down, so a stale one can't survive across reboots.
 
 ## Options
 
@@ -51,12 +57,11 @@ for a WSL `--shutdown` semantic.
 
 ## Recommendation
 
-Keep `--shutdown` conservative by default, but the "stop what we
-started" refinement is a worthwhile L0 enhancement -- it makes `cm` a
-better guest on a shared system without changing the default contract.
-Ship it behind correct detection (state file + double-check idleness);
-add the explicit `cm --shutdown --all`/`--system` variant regardless,
-since it's two lines and unambiguous.
+Shipped per the L0 "stop what we started" option above: marker +
+idle double-check, conservative on any probe failure (a failed
+`list` keeps services up). The remaining caveats stand — another
+client can adopt our services between the check and the stop, whose
+worst cost is that the next invocation re-starts.
 
 [#11]: https://github.com/daphnediane/container-distro/issues/11
 [L2.5]: ../lower-level-integration.md#the-plugin-route-l25

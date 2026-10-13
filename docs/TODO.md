@@ -60,15 +60,20 @@ source of truth. "Rung" references are the integration levels in
 
 ## Plumbing / internals
 
+### For 1.0 — plumbing
+
+- [x] **Service startup semantics** -- `ensure_started` leaves a
+  `services-started` marker when it ran `system start`;
+  `cm --shutdown` now `system stop`s when the marker exists and no
+  machines/containers remain running ("stop what we started");
+  `--shutdown --system` stays the explicit big hammer ([#11];
+  [service-startup])
+
 ### Post-1.0 — plumbing
 
 - [ ] **Subprocess overhead** -- one `container` spawn per op plus
   `system status` checks; only worth fixing (XPC/Swift client libraries,
   L1/L2) if it ever hurts ([#9]; [subprocess-overhead])
-- [ ] **Service startup semantics** -- `cm --shutdown` stops machines
-  but leaves `container` services up by design; revisit only if a
-  narrower "stop what we started" primitive appears upstream ([#11];
-  [service-startup])
 
 [#3]: https://github.com/daphnediane/container-distro/issues/3
 [#4]: https://github.com/daphnediane/container-distro/issues/4

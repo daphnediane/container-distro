@@ -7,6 +7,7 @@
 //! Thin wrappers around the `container` CLI.
 
 use std::env;
+use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -454,6 +455,30 @@ pub fn container_disk_usage(app_root: &Path, id: &str) -> Option<u64> {
     Some(meta.blocks() * 512)
 }
 
+/// The marker `ensure_started` leaves when it — not an earlier
+/// `container system start` by the user or another tool — brought the
+/// services up. `cm --shutdown` uses it for its "stop what we
+/// started" rule: only stop services this project's tooling started
+/// (#11).
+fn services_marker() -> Result<PathBuf> {
+    Ok(crate::naming::state_dir()?.join("services-started"))
+}
+
+/// Whether our tooling started the currently running services — the
+/// marker `ensure_started` wrote when it ran `system start`.
+#[must_use]
+pub fn services_started_by_us() -> bool {
+    services_marker().is_ok_and(|p| p.is_file())
+}
+
+/// Forget that we started the services: after `system stop`, or when
+/// services are already down and the marker is stale.
+pub fn clear_services_marker() {
+    if let Ok(p) = services_marker() {
+        let _ = fs::remove_file(p);
+    }
+}
+
 /// Start `container` services if they are not already running.
 pub fn ensure_started() -> Result<()> {
     require_installed()?;
@@ -466,6 +491,33 @@ pub fn ensure_started() -> Result<()> {
         .context("failed to run `container system start`")?;
     if !status.success() {
         bail!("`container system start` exited with {status}");
+    }
+    // Record that this start was ours, so a later `cm --shutdown` can
+    // stop services it finds idle (best-effort bookkeeping — a write
+    // failure just means --shutdown stays conservative).
+    if let Ok(marker) = services_marker()
+        && let Some(parent) = marker.parent()
+    {
+        let _ = fs::create_dir_all(parent);
+        let by = env::args()
+            .next()
+            .and_then(|a| {
+                PathBuf::from(a)
+                    .file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+            })
+            .unwrap_or_else(|| "?".into());
+        let at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let _ = fs::write(
+            &marker,
+            format!(
+                "{{\"by\":{by:?},\"pid\":{},\"at\":{at}}}\n",
+                std::process::id()
+            ),
+        );
     }
     Ok(())
 }
