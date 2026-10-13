@@ -2462,24 +2462,33 @@ fn spec_diff(want: &ResolvedSpec, actual: &ResolvedSpec) -> Vec<String> {
     let user = |u: &HostUser| format!("{}({}:{})", u.name, u.uid, u.gid);
     field!("image", want.image, actual.image);
     field!("preset", want.preset.as_str(), actual.preset.as_str());
-    field!(
-        "cpus",
-        want.cpus.map_or("default".to_string(), |c| c.to_string()),
-        actual.cpus.map_or("default".to_string(), |c| c.to_string())
-    );
+    // Unpinned resources are "the host picks" — `create` materializes
+    // them into the container config, and a reconstructed spec can't
+    // tell a host-picked 7 from a pinned one, so any value is
+    // consistent with a `None` journal. Only a pin can drift.
+    if let Some(w) = want.cpus
+        && actual.cpus != Some(w)
+    {
+        out.push(format!(
+            "cpus: journal {w}, running {}",
+            actual.cpus.map_or("default".to_string(), |c| c.to_string())
+        ));
+    }
     // Both sides of a memory compare go through `size_bytes` so unit
     // spelling doesn't matter; an unparseable side falls back to a
     // string compare.
     let mem = |o: &Option<String>| o.as_deref().and_then(size_bytes);
-    if match (mem(&want.memory), mem(&actual.memory)) {
-        (Some(w), Some(a)) => w != a,
-        _ => want.memory != actual.memory,
-    } {
-        out.push(format!(
-            "memory: journal {}, running {}",
-            opt(&want.memory),
-            opt(&actual.memory)
-        ));
+    if let Some(w) = &want.memory {
+        let drifts = match (mem(&want.memory), mem(&actual.memory)) {
+            (Some(w), Some(a)) => w != a,
+            _ => Some(w.as_str()) != actual.memory.as_deref(),
+        };
+        if drifts {
+            out.push(format!(
+                "memory: journal {w}, running {}",
+                opt(&actual.memory)
+            ));
+        }
     }
     field!(
         "home-mount",
@@ -4219,6 +4228,33 @@ mod tests {
                 .any(|d| d == "mounts: running has `/x:/y` the journal doesn't"),
             "{diff:?}"
         );
+    }
+
+    /// An unpinned journal resource is "the host picks": whatever the
+    /// host materialized into the container (a reconstructed spec
+    /// can't distinguish it from a pin) is consistent — only a journal
+    /// pin mismatching the running value is drift.
+    #[test]
+    fn spec_diff_unpinned_resources_dont_drift() {
+        let mut want = spec();
+        want.explicit.cpus = None;
+        want.explicit.memory = None;
+        let want = resolved(&want);
+
+        // Host picked 7/32768M — the reconstruction pins the
+        // materialized values; not drift.
+        let mut actual = spec();
+        actual.explicit.cpus = Some(7);
+        actual.explicit.memory = Some("32768M".into());
+        assert!(spec_diff(&want, &resolved(&actual)).is_empty());
+
+        // A pinned journal value that doesn't match the run is drift.
+        let mut want = spec();
+        want.explicit.memory = None;
+        let want = resolved(&want);
+        let diff = spec_diff(&want, &resolved(&actual));
+        assert!(diff.iter().any(|d| d.starts_with("cpus:")), "{diff:?}");
+        assert!(!diff.iter().any(|d| d.starts_with("memory:")), "{diff:?}");
     }
 
     /// The journal lock contract: `spec.json` is `uchg`-locked at rest
