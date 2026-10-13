@@ -2483,7 +2483,15 @@ fn spec_diff(want: &ResolvedSpec, actual: &ResolvedSpec) -> Vec<String> {
         o.as_deref().unwrap_or("default")
     }
     let user = |u: &HostUser| format!("{}({}:{})", u.name, u.uid, u.gid);
-    field!("image", want.image, actual.image);
+    // `inspect` reports the expanded reference (`docker.io/local/...`)
+    // while the journal keeps the shorthand — same_image applies
+    // registry/tag defaults so the spellings compare equal.
+    if !container::same_image(&want.image, &actual.image) {
+        out.push(format!(
+            "image: journal {}, running {}",
+            want.image, actual.image
+        ));
+    }
     field!("preset", want.preset.as_str(), actual.preset.as_str());
     // Unpinned resources are "the host picks" — `create` materializes
     // them into the container config, and a reconstructed spec can't
@@ -4548,6 +4556,24 @@ mod tests {
         let diff = spec_diff(&want, &resolved(&actual));
         assert!(diff.iter().any(|d| d.starts_with("cpus:")), "{diff:?}");
         assert!(!diff.iter().any(|d| d.starts_with("memory:")), "{diff:?}");
+    }
+
+    /// The journal stores the shorthand ref; `inspect` expands it
+    /// (`docker.io/local/...`) — the same image either way, not drift.
+    #[test]
+    fn spec_diff_image_ref_spelling_isnt_drift() {
+        let mut want = spec();
+        want.image = "local/distro-d1:imported-abc123".into();
+        let want = resolved(&want);
+
+        let mut actual = spec();
+        actual.image = "docker.io/local/distro-d1:imported-abc123".into();
+        assert!(spec_diff(&want, &resolved(&actual)).is_empty());
+
+        let mut actual = spec();
+        actual.image = "docker.io/local/distro-d1:imported-def456".into();
+        let diff = spec_diff(&want, &resolved(&actual));
+        assert!(diff.iter().any(|d| d.starts_with("image:")), "{diff:?}");
     }
 
     /// The journal lock contract: `spec.json` is `uchg`-locked at rest
