@@ -38,12 +38,12 @@ source of truth. "Rung" references are the integration levels in
 
 ### For 1.0 — catalog
 
-- [ ] **Vendor Microsoft's `DistributionInfo.json` as the catalog
-  base** -- pinned MIT-licensed snapshot + our `Image`/`HomeMount`
-  overlay, preferring `.wsl` downloads (verified SHA-256, cached)
-  over bare images; license notice in the pkg license screen;
-  release-gate freshness check like the THIRD-PARTY-NOTICES
-  staleness one ([#31])
+- [x] **Vendor Microsoft's `DistributionInfo.json` as the catalog
+  base** -- pinned copy in `vendor/microsoft/` merged with the
+  `src/catalog.json` overlay (upstream fields win, overlay fills
+  gaps); `Entry::source` prefers `.wsl` and falls back to `Image`;
+  `check-catalog-freshness.sh` in the release gate; MIT license
+  shipped in the pkg ([#31])
 - [x] **Content-keyed image reuse on import** -- shared
   `local/rootfs:<sha256>` dedup tag + per-importer
   `local/{distro,machine}-<name>:imported-<sha>` tags; `rm`/

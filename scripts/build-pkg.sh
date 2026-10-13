@@ -129,6 +129,9 @@ mkdir -p "$PAYLOAD/bin" "$PAYLOAD/share/doc/container-distro"
 cp "$R/cm" "$R/container-distro" packaging/uninstall-container-distro.sh \
     packaging/update-container-distro.sh "$PAYLOAD/bin/"
 cp LICENSE THIRD-PARTY-NOTICES.yaml "$PAYLOAD/share/doc/container-distro/"
+# The vendored Microsoft manifest's license — not a crate, so
+# THIRD-PARTY-NOTICES.yaml doesn't cover it (#31).
+cp vendor/microsoft/LICENSE "$PAYLOAD/share/doc/container-distro/LICENSE-microsoft-wsl"
 # Everything else in the payload is produced by the binaries' own
 # install commands — the same output a manual install writes.
 "$R/container-distro" install-plugin \
@@ -181,6 +184,11 @@ cp packaging/welcome.html packaging/conclusion.html "$RESOURCES/"
         /^  package_version:/ { ver=$NF }
         /^  license: /        { print "  " name " " ver " — " substr($0, index($0, ":") + 2) }
     ' THIRD-PARTY-NOTICES.yaml
+    echo
+    echo "The built-in distribution catalog incorporates Microsoft's"
+    echo "DistributionInfo.json (github.com/microsoft/WSL), MIT-licensed"
+    echo "(c) Microsoft Corporation; the license text is installed as"
+    echo "LICENSE-microsoft-wsl alongside the binaries."
 } > "$RESOURCES/licenses.txt"
 # A signed pkg keeps the clean name; unsigned builds (CI without a
 # keychain) get Apple's own -unsigned convention — the maintainer adds
@@ -213,6 +221,7 @@ TDIR="container-distro-$TARGET-v$version"
 rm -rf "$OUT/$TDIR" "$OUT/$TDIR.tar.gz"
 mkdir -p "$OUT/$TDIR"
 cp "$R/cm" "$R/container-distro" LICENSE THIRD-PARTY-NOTICES.yaml "$OUT/$TDIR/"
+cp vendor/microsoft/LICENSE "$OUT/$TDIR/LICENSE-microsoft-wsl"
 tar -czf "$OUT/$TDIR.tar.gz" -C "$OUT" "$TDIR"
 rm -rf "$OUT/$TDIR"
 

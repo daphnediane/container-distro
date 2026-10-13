@@ -39,9 +39,11 @@ cargo test --workspace
 `PROPTEST_CASES=100000 cargo test --workspace` deepens the pass.
 `scripts/release-gate.sh` runs the whole pre-release gate: fmt,
 clippy, tests, an `sh -n` syntax pass on `assets/*`, `cargo audit`,
-`cargo deny check` (license policy in `deny.toml`), and a
+`cargo deny check` (license policy in `deny.toml`), a
 THIRD-PARTY-NOTICES.yaml freshness check (regenerate with
-`cargo bundle-licenses -f yaml -o THIRD-PARTY-NOTICES.yaml`).
+`cargo bundle-licenses -f yaml -o THIRD-PARTY-NOTICES.yaml`), and a
+freshness check on the vendored Microsoft catalog (refresh
+`vendor/microsoft/` with `scripts/update-microsoft-catalog.sh`).
 
 Man pages and shell completions are generated at runtime from the
 clap definitions — never edit generated output; change the

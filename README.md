@@ -186,6 +186,12 @@ Unicode-3.0; policy enforced by `deny.toml`). Their copyright and
 license texts are collected in THIRD-PARTY-NOTICES.yaml -- ship that
 file with any prebuilt binaries.
 
+The built-in distro catalog incorporates Microsoft's
+`DistributionInfo.json` from the [WSL] repository (MIT License,
+(c) Microsoft Corporation). The vendored copy and its license live in
+`vendor/microsoft/`; installers ship the license text as
+`LICENSE-microsoft-wsl`.
+
 ## AI Coding Declaration
 
 Development of this project has been assisted by AI coding tools:

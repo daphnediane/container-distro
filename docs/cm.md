@@ -191,15 +191,22 @@ registers `Ubuntu`, and cm registers `ubuntu`. An install from a bare
 image reference (or `--from-image`) derives the name from the image
 instead (`alpine:latest` → `alpine-latest`).
 
-The catalog is a compiled-in list (`src/catalog.json`)
-whose schema is Microsoft's `DistributionInfo.json` — the file behind
-`wsl --list --online`, in the `microsoft/WSL` repo — extended with an
-`Image` field. Each `ModernDistributions` vendor group holds entries
-with a `Name`, `FriendlyName`, and either `Image` (an OCI reference;
-installs can create a machine or distro) or per-arch `Amd64Url` /
-`Arm64Url` `.wsl` downloads (`{"Url", "Sha256"}`; the rootfs is
-fetched, verified, and imported as a distro). An optional `HomeMount`
-field (`rw`/`ro`/`none`) pins the entry's home-share default. Downloads are cached
+The catalog is compiled in and merged from two files: a pinned,
+verbatim copy of Microsoft's `DistributionInfo.json` — the manifest
+behind `wsl --list --online`, MIT-licensed in `vendor/microsoft/` —
+and a small overlay (`src/catalog.json`) that adds entries Microsoft
+doesn't publish (Alpine, Rocky, Oracle, UBI) and fills extension
+fields on entries it does. The schema is Microsoft's plus our
+`Image`/`HomeMount` extensions. Each `ModernDistributions` vendor
+group holds entries with a `Name`, `FriendlyName`, an optional `Image`
+(an OCI reference) and per-arch `Amd64Url` / `Arm64Url` `.wsl`
+downloads (`{"Url", "Sha256"}`; the rootfs is fetched, verified, and
+imported as a distro). The `.wsl` download wins when one exists for
+the host arch — a verified, content-addressed fetch — and `Image` is
+the fallback for archs the download doesn't cover (`archlinux` has no
+upstream arm64 `.wsl`, so Apple Silicon installs its image). An
+optional `HomeMount` field (`rw`/`ro`/`none`) pins the entry's
+home-share default. Downloads are cached
 content-addressed (`<sha256>.wsl`) under the Darwin per-user cache
 directory (`cm -l --cache` lists it, `cm --purge-cache` empties it),
 so a second install skips the fetch; the OS may reclaim the cache
@@ -215,7 +222,7 @@ entries show as `NAME (superseded)`). Entries with no source
 for the host arch are hidden from `-l -o` and refused at install,
 which is why amd64-only `.wsl` distributions (SLES, eLxr) don't appear
 on Apple Silicon. `--catalog FILE` substitutes a custom file in the
-same schema — Microsoft's own manifest works verbatim. It is an
+same schema, replacing the built-in merge. It is an
 explicit per-invocation override, never auto-loaded from `$HOME`,
 since anything under `$HOME` is guest-writable and a default search
 path would let a distro rewrite familiar names to hostile images (see

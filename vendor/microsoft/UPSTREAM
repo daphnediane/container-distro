@@ -1,0 +1,3 @@
+repo: microsoft/WSL
+path: distributions/DistributionInfo.json
+commit: 341f1ddf76f089ff6351590b03f92bad30041725

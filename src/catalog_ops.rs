@@ -969,25 +969,34 @@ mod tests {
     #[test]
     fn catalog_install_names_after_the_entry() {
         let cat = builtin();
-        let Resolved::Image { image, name, .. } = resolve(&cat, None, false).unwrap() else {
-            panic!("the catalog default should resolve to an image");
+        // The default entry (Ubuntu) is a .wsl install on this host —
+        // upstream publishes arm64+amd64 downloads.
+        let Resolved::Wsl {
+            name, requested, ..
+        } = resolve(&cat, None, false).unwrap()
+        else {
+            panic!("the catalog default should resolve to a .wsl download");
         };
-        assert_eq!(image, "docker.io/library/ubuntu:latest");
-        assert_eq!(name, Some("Ubuntu"));
-        assert_eq!(container::default_machine_name(name.unwrap()), "ubuntu");
-        let Resolved::Image { requested, .. } = resolve(&cat, None, false).unwrap() else {
-            unreachable!()
-        };
+        assert_eq!(name, "Ubuntu");
+        assert_eq!(container::default_machine_name(name), "ubuntu");
         // Catalog entries relax the home-mount default to rw — a
         // `source` intent, so an explicit flag or a tighter preset
         // still beats it.
         assert_eq!(requested.home_mount, Some(HomeMount::Rw));
         for arg in ["ubuntu", "UBUNTU-24.04"] {
-            let Resolved::Image { name, .. } = resolve(&cat, Some(arg), false).unwrap() else {
-                panic!("{arg} should resolve to an image");
+            let Resolved::Wsl { name, .. } = resolve(&cat, Some(arg), false).unwrap() else {
+                panic!("{arg} should resolve to a .wsl download");
             };
-            assert!(name.is_some(), "{arg}");
+            assert!(!name.is_empty(), "{arg}");
         }
+        // An overlay entry with no .wsl download still resolves to
+        // its image.
+        let Resolved::Image { image, name, .. } = resolve(&cat, Some("alpine"), false).unwrap()
+        else {
+            panic!("Alpine should resolve to an image");
+        };
+        assert_eq!(image, "docker.io/library/alpine:latest");
+        assert_eq!(name, Some("Alpine"));
     }
 
     #[test]
@@ -1021,7 +1030,9 @@ mod tests {
     #[test]
     fn entry_info_serializes_catalog_and_local_state() {
         let cat = builtin();
-        let entry = catalog::lookup(&cat.entries, "ubuntu").unwrap();
+        // An image-sourced entry keeps the machine/distro matching
+        // by image reference.
+        let entry = catalog::lookup(&cat.entries, "alpine").unwrap();
         let probe = StatusProbe {
             cached: Vec::new(),
             images: Vec::new(),
@@ -1043,7 +1054,7 @@ mod tests {
                     home_mount: None,
                     platform: None,
                     image: Some(container::ImageInfo {
-                        reference: "docker.io/library/ubuntu:latest".into(),
+                        reference: "docker.io/library/alpine:latest".into(),
                     }),
                     cpus: None,
                     memory: None,
@@ -1054,14 +1065,14 @@ mod tests {
                 ops::DistroSummary {
                     id: "dev".into(),
                     status: "running".into(),
-                    image: Some("docker.io/library/ubuntu:latest".into()),
+                    image: Some("docker.io/library/alpine:latest".into()),
                     ..ops::DistroSummary::default()
                 },
             )]),
         };
         let info = info_for_entry(&cat, entry, &probe);
-        assert_eq!(info.name, "Ubuntu");
-        assert!(info.catalog_default);
+        assert_eq!(info.name, "Alpine");
+        assert!(!info.catalog_default);
         assert_eq!(info.local.machines.len(), 1);
         assert_eq!(info.local.distros.len(), 1);
         assert_eq!(info.local.conflicts.len(), 1);
@@ -1075,7 +1086,7 @@ mod tests {
 
         let json = serde_json::to_value(&info).unwrap();
         assert_eq!(json["source"]["type"], "image");
-        assert_eq!(json["source"]["image"], "docker.io/library/ubuntu:latest");
+        assert_eq!(json["source"]["image"], "docker.io/library/alpine:latest");
         assert_eq!(json["local"]["state"], "absent");
         assert_eq!(json["local"]["machines"][0]["id"], "dev");
         assert_eq!(json["local"]["distros"][0]["id"], "dev");

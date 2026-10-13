@@ -152,8 +152,10 @@ create`, and `preset` the recorded tier.
 ### `catalog`
 
 The installable-distro catalog is the same compiled-in list
-`cm -l -o` uses — Microsoft's `DistributionInfo.json` schema plus our
-`Image` extension. `create` remains the explicit image path and
+`cm -l -o` uses — Microsoft's vendored `DistributionInfo.json`
+(`vendor/microsoft/`, MIT-licensed) merged with our `catalog.json`
+overlay, which adds entries and `Image`/`HomeMount` fields.
+`create` remains the explicit image path and
 `import` remains the explicit local-file path; `catalog` resolves
 friendly catalog names and `.wsl` downloads.
 

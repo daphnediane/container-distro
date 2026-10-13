@@ -187,15 +187,19 @@ path (T1) — but importing a hostile rootfs still hands it your identity.
   stronger long-term answer and is tracked as a separate item. If
   pinning is revisited, store `Digest` as a separate catalog field
   and pull `name@digest` — never `name:tag@digest`.
-- **Strategic direction.** `.wsl` rootfs packages are the preferred
-  catalog source where they exist: they have a vendor release
-  cadence, a mandatory SHA-256 in the schema, and a content-addressed
-  download cache — the verified-bits property `Image` entries lack.
-  Microsoft's own `DistributionInfo.json` (the manifest behind
-  `wsl --list --online`, in the MIT-licensed `microsoft/WSL` repo)
-  works verbatim via `--catalog FILE`, so tracking it — or caching
-  a vetted copy — is a candidate for replacing `Image` entries
-  wholesale.
+- **Strategic direction — implemented.** `.wsl` rootfs packages are
+  the preferred catalog source where they exist: they have a vendor
+  release cadence, a mandatory SHA-256 in the schema, and a
+  content-addressed download cache — the verified-bits property
+  `Image` entries lack. The built-in catalog is now Microsoft's own
+  `DistributionInfo.json` (vendored verbatim in `vendor/microsoft/`
+  under its MIT license) merged with a small overlay; `Entry::source`
+  prefers the arch's `.wsl` and falls back to `Image`, so `Image`
+  survives only for entries/archs with no `.wsl`. The overlay can
+  never override an upstream field — a stale overlay can't downgrade
+  a verified download — and `scripts/check-catalog-freshness.sh`
+  gates releases on the vendored copy matching upstream. A custom
+  `--catalog FILE` still replaces the merge outright.
 
 ### T5. `container` is resolved from `PATH` (or `CONTAINER_CLI`)
 

@@ -777,22 +777,28 @@ mod tests {
     fn catalog_install_names_after_the_entry() {
         let cat = builtin();
         // `wsl --install` registers `Ubuntu` — a catalog install takes
-        // the entry's NAME, not an image-derived `ubuntu-latest`.
-        let catalog_ops::Resolved::Image { image, name, .. } =
+        // the entry's NAME, not a file- or image-derived name. The
+        // default is a `.wsl` install on this host.
+        let catalog_ops::Resolved::Wsl { name, .. } =
             resolve(&cat, &InstallSource::Default).unwrap()
         else {
-            panic!("the catalog default should resolve to an image");
+            panic!("the catalog default should resolve to a .wsl download");
         };
-        assert_eq!(image, "docker.io/library/ubuntu:latest");
-        assert_eq!(name, Some("Ubuntu"));
-        assert_eq!(container::default_machine_name(name.unwrap()), "ubuntu");
+        assert_eq!(name, "Ubuntu");
+        assert_eq!(container::default_machine_name(name), "ubuntu");
         for arg in ["ubuntu", "UBUNTU-24.04"] {
             let source = InstallSource::CatalogOrImage(arg.to_string());
-            let catalog_ops::Resolved::Image { name, .. } = resolve(&cat, &source).unwrap() else {
-                panic!("{arg} should resolve to an image");
+            let catalog_ops::Resolved::Wsl { name, .. } = resolve(&cat, &source).unwrap() else {
+                panic!("{arg} should resolve to a .wsl download");
             };
-            assert!(name.is_some(), "{arg}");
+            assert!(!name.is_empty(), "{arg}");
         }
+        // Overlay entries without a `.wsl` download resolve to images.
+        let source = InstallSource::CatalogOrImage("alpine".to_string());
+        let catalog_ops::Resolved::Image { name, .. } = resolve(&cat, &source).unwrap() else {
+            panic!("alpine should resolve to an image");
+        };
+        assert_eq!(name, Some("Alpine"));
     }
 
     #[test]

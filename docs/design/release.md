@@ -54,7 +54,9 @@ The mechanical bits are driven by [cargo-release] (`cargo install
    needs network; license policy lives in `deny.toml`), and a
    `THIRD-PARTY-NOTICES.yaml` freshness check (regenerate with
    `cargo bundle-licenses -f yaml -o THIRD-PARTY-NOTICES.yaml` if
-   stale). Then confirm [TODO] plus the user-facing docs reflect what
+   stale), and a vendored-catalog freshness check (refresh
+   `vendor/microsoft/` with `scripts/update-microsoft-catalog.sh`
+   when upstream's `DistributionInfo.json` has moved). Then confirm [TODO] plus the user-facing docs reflect what
    actually shipped. If `container`'s minor version changed since the
    last release, first re-verify the appRoot internals we depend on
    ([Version gating]) and extend `VERIFIED_CONTAINER_MINOR` plus the

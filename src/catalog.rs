@@ -20,13 +20,17 @@
 //! here and are hidden from `-l -o`, matching WSL-on-ARM (which hides
 //! entries without `Arm64Url`).
 //!
-//! The built-in catalog (`catalog.json`, compiled in with
-//! `include_str!`) mixes Docker Official/Verified-Publisher images
-//! with canonical non-docker.io registries and a few `.wsl` downloads
-//! taken verbatim — URL and SHA-256 — from Microsoft's manifest.
-//! `cm --catalog FILE` swaps in a user catalog but is an explicit
-//! per-invocation flag, never auto-loaded from `$HOME` (security.md:
-//! anything under `$HOME` is guest-writable).
+//! The built-in catalog merges two compiled-in files:
+//! `vendor/microsoft/DistributionInfo.json` — a pinned, verbatim copy
+//! of Microsoft's manifest (MIT-licensed, refreshed at release time
+//! by `scripts/check-catalog-freshness.sh`) — and `catalog.json`, a
+//! small overlay. The overlay adds entries Microsoft doesn't publish
+//! and fills extension fields (`Image`, `HomeMount`, a missing arch
+//! download) on entries it does; on a name collision Microsoft's
+//! fields always win. `cm --catalog FILE` swaps in a user catalog
+//! instead of the merge, and is an explicit per-invocation flag,
+//! never auto-loaded from `$HOME` (security.md: anything under
+//! `$HOME` is guest-writable).
 //!
 //! Entry `Name`s deliberately contain no `/`, `:`, or `@`, so any
 //! argument shaped like a real image reference can never collide —
@@ -41,8 +45,15 @@ use serde::Deserialize;
 
 use crate::table;
 
-/// The compiled-in catalog — the same schema `--catalog` accepts.
-const BUILTIN: &str = include_str!("catalog.json");
+/// The compiled-in overlay — the same schema `--catalog` accepts.
+/// Merged over [`UPSTREAM`] for the built-in catalog.
+const OVERLAY: &str = include_str!("catalog.json");
+
+/// The pinned, vendored copy of Microsoft's `DistributionInfo.json`
+/// (`vendor/microsoft/`, with its MIT `LICENSE` and the upstream
+/// commit in `UPSTREAM`). Verbatim — edit via
+/// `scripts/update-microsoft-catalog.sh`, not by hand.
+const UPSTREAM: &str = include_str!("../vendor/microsoft/DistributionInfo.json");
 
 /// A `.wsl` rootfs download: a URL plus the SHA-256 the download is
 /// verified against. The hash is mandatory — a verified download of a
@@ -82,8 +93,9 @@ pub struct Entry {
     /// `Default` doesn't name an entry.
     #[serde(default)]
     pub default: bool,
-    /// Our extension: a fully-qualified OCI image reference. Wins over
-    /// the `.wsl` downloads — images can become machines or distros.
+    /// Our extension: a fully-qualified OCI image reference, used
+    /// when the entry has no `.wsl` download for the host arch —
+    /// the verified-download path is preferred where both exist.
     #[serde(default)]
     pub image: Option<String>,
     /// `.wsl` rootfs downloads per arch, Microsoft's shape.
@@ -110,19 +122,20 @@ pub enum Source<'a> {
 }
 
 impl Entry {
-    /// The install source for `arch` (`"arm64"`/`"amd64"`), or `None`
-    /// when the entry offers nothing this host can use.
+    /// The install source for `arch` (`"arm64"`/`"amd64"`): the `.wsl`
+    /// download when one exists for the arch — a verified, cached
+    /// fetch — else the `Image`, else `None` when the entry offers
+    /// nothing this host can use.
     #[must_use]
     pub fn source(&self, arch: &str) -> Option<Source<'_>> {
-        if let Some(i) = &self.image {
-            return Some(Source::Image(i));
-        }
         let dl = match arch {
             "arm64" | "aarch64" => &self.arm64_url,
             "amd64" | "x86_64" => &self.amd64_url,
-            _ => return None,
+            _ => &None,
         };
-        dl.as_ref().map(Source::Wsl)
+        dl.as_ref()
+            .map(Source::Wsl)
+            .or_else(|| self.image.as_deref().map(Source::Image))
     }
 
     /// Whether the entry can be installed on `arch`.
@@ -198,7 +211,47 @@ fn parse(text: &str, source: &str) -> Result<Catalog> {
     })
 }
 
-/// The catalog to use: `path`'s JSON, or the built-in list.
+/// Merge `overlay` over `base` for the built-in catalog. An overlay
+/// entry matching a base name (case-insensitive) only fills fields
+/// the base entry lacks — Microsoft's URL/SHA/friendly-name fields
+/// always win, so a stale overlay can't silently downgrade a
+/// download — plus its `Default` flag; a non-matching entry appends.
+/// The overlay's top-level `Default` wins when it names an entry.
+fn merge(base: Catalog, overlay: Catalog) -> Catalog {
+    let mut entries = base.entries;
+    for e in overlay.entries {
+        if let Some(m) = entries
+            .iter_mut()
+            .find(|x| x.name.eq_ignore_ascii_case(&e.name))
+        {
+            if m.image.is_none() {
+                m.image = e.image;
+            }
+            if m.amd64_url.is_none() {
+                m.amd64_url = e.amd64_url;
+            }
+            if m.arm64_url.is_none() {
+                m.arm64_url = e.arm64_url;
+            }
+            if m.friendly_name.is_empty() {
+                m.friendly_name = e.friendly_name;
+            }
+            if m.home_mount.is_none() {
+                m.home_mount = e.home_mount;
+            }
+            m.default |= e.default;
+        } else {
+            entries.push(e);
+        }
+    }
+    Catalog {
+        default_name: overlay.default_name.or(base.default_name),
+        entries,
+    }
+}
+
+/// The catalog to use: `path`'s JSON, or the built-in merge of the
+/// vendored Microsoft manifest and our overlay.
 pub fn load(path: Option<&Path>) -> Result<Catalog> {
     match path {
         Some(p) => {
@@ -206,7 +259,11 @@ pub fn load(path: Option<&Path>) -> Result<Catalog> {
                 .with_context(|| format!("cannot read catalog {}", p.display()))?;
             parse(&text, &p.display().to_string())
         }
-        None => parse(BUILTIN, "built-in"),
+        None => {
+            let base = parse(UPSTREAM, "vendored Microsoft manifest")?;
+            let overlay = parse(OVERLAY, "built-in overlay")?;
+            Ok(merge(base, overlay))
+        }
     }
 }
 
@@ -367,13 +424,9 @@ mod tests {
     #[test]
     fn lookup_is_case_insensitive() {
         let cat = load(None).unwrap();
-        assert_eq!(
-            lookup(&cat.entries, "Ubuntu-24.04")
-                .unwrap()
-                .image
-                .as_deref(),
-            Some("docker.io/library/ubuntu:24.04")
-        );
+        let u = lookup(&cat.entries, "Ubuntu-24.04").unwrap();
+        assert!(u.image.is_none());
+        assert!(u.arm64_url.is_some());
         assert_eq!(lookup(&cat.entries, "ubuntu").unwrap().name, "Ubuntu");
         assert_eq!(
             lookup(&cat.entries, "KALI-LINUX").unwrap().name,
@@ -381,6 +434,102 @@ mod tests {
         );
         assert_eq!(lookup(&cat.entries, "alpine").unwrap().name, "Alpine");
         assert!(lookup(&cat.entries, "nixos").is_none());
+    }
+
+    #[test]
+    fn builtin_merges_upstream_and_overlay() {
+        let cat = load(None).unwrap();
+        // `archlinux` collides: upstream's amd64 `.wsl` is kept and
+        // the overlay's `Image` fills the missing arm64 source.
+        let arch = lookup(&cat.entries, "archlinux").unwrap();
+        assert!(arch.amd64_url.is_some());
+        assert_eq!(
+            arch.image.as_deref(),
+            Some("docker.io/library/archlinux:latest")
+        );
+        match arch.source("amd64").unwrap() {
+            Source::Wsl(_) => {}
+            Source::Image(_) => panic!("amd64 should prefer the .wsl download"),
+        }
+        match arch.source("arm64").unwrap() {
+            Source::Image(i) => assert!(i.contains("archlinux")),
+            Source::Wsl(_) => panic!("arm64 has no .wsl — the Image fills in"),
+        }
+        // Overlay-only entries append after the upstream list.
+        let alpine = lookup(&cat.entries, "Alpine").unwrap();
+        assert!(matches!(alpine.source("arm64"), Some(Source::Image(_))));
+        assert!(cat.entries.len() > 20);
+        // Upstream entries the overlay doesn't touch come through
+        // verbatim — Ubuntu is a `.wsl` install on both arches.
+        let ubuntu = lookup(&cat.entries, "Ubuntu").unwrap();
+        assert!(matches!(ubuntu.source("arm64"), Some(Source::Wsl(_))));
+        assert!(matches!(ubuntu.source("amd64"), Some(Source::Wsl(_))));
+    }
+
+    #[test]
+    fn merge_keeps_base_fields_and_appends_extras() {
+        let base = parse(
+            r#"{"ModernDistributions":{"v":[
+                {"Name":"a","FriendlyName":"base a",
+                 "Amd64Url":{"Url":"u1","Sha256":"s1"}},
+                {"Name":"b","Image":"base:1"}]},
+              "Default":"b"}"#,
+            "base",
+        )
+        .unwrap();
+        let overlay = parse(
+            r#"{"ModernDistributions":{"v":[
+                {"Name":"a","FriendlyName":"overlay a",
+                 "Image":"overlay:1",
+                 "Amd64Url":{"Url":"u2","Sha256":"s2"},
+                 "Arm64Url":{"Url":"u3","Sha256":"s3"},
+                 "Default":true},
+                {"Name":"c","Image":"overlay:2"}]},
+              "Default":"c"}"#,
+            "overlay",
+        )
+        .unwrap();
+        let cat = merge(base, overlay);
+        assert_eq!(cat.entries.len(), 3);
+        let a = lookup(&cat.entries, "a").unwrap();
+        assert_eq!(a.friendly_name, "base a");
+        assert_eq!(a.image.as_deref(), Some("overlay:1"));
+        assert_eq!(a.amd64_url.as_ref().unwrap().url, "u1");
+        assert_eq!(a.arm64_url.as_ref().unwrap().url, "u3");
+        assert!(a.default);
+        assert_eq!(cat.entries[2].name, "c");
+        assert_eq!(cat.default_entry().unwrap().name, "c");
+    }
+
+    #[test]
+    fn source_prefers_the_wsl_download() {
+        // An entry offering both resolves to the verified `.wsl` on
+        // the arch it covers and to the `Image` elsewhere.
+        let e = Entry {
+            name: "x".into(),
+            friendly_name: String::new(),
+            default: false,
+            image: Some("img:1".into()),
+            amd64_url: Some(Download {
+                url: "u".into(),
+                sha256: "s".into(),
+            }),
+            arm64_url: None,
+            home_mount: None,
+        };
+        assert!(matches!(e.source("amd64"), Some(Source::Wsl(_))));
+        for arch in ["arm64", "riscv"] {
+            // Archs the .wsl doesn't cover fall back to the image —
+            // an OCI ref isn't arch-bound.
+            assert_eq!(
+                match e.source(arch) {
+                    Some(Source::Image(i)) => i,
+                    _ => panic!("{arch} should fall back to the image"),
+                },
+                "img:1"
+            );
+        }
+        assert!(Entry { image: None, ..e }.source("arm64").is_none());
     }
 
     #[test]
@@ -493,7 +642,7 @@ mod tests {
     fn render_verbose_adds_status_columns() {
         let cat = load(None).unwrap();
         let mut status = vec![EntryStatus::default(); cat.entries.len()];
-        let i = cat.entries.iter().position(|e| e.name == "Ubuntu").unwrap();
+        let i = cat.entries.iter().position(|e| e.name == "Alpine").unwrap();
         status[i].local = Local::Yes;
         status[i].instances = vec![("dev".into(), true), ("old".into(), false)];
         let i = cat
@@ -509,13 +658,16 @@ mod tests {
             lines[3].split_whitespace().collect::<Vec<_>>(),
             ["NAME", "FRIENDLY", "NAME", "LOCAL", "INSTANCES"]
         );
-        let ubuntu = lines.iter().find(|l| l.starts_with("Ubuntu ")).unwrap();
-        assert!(ubuntu.contains("pulled"));
-        assert!(ubuntu.contains("dev (running), old"));
+        let alpine = lines.iter().find(|l| l.starts_with("Alpine ")).unwrap();
+        assert!(alpine.contains("pulled"));
+        assert!(alpine.contains("dev (running), old"));
         let rlc = lines.iter().find(|l| l.starts_with("RLCPlus-10")).unwrap();
         assert!(rlc.contains("downloading"));
-        let alpine = lines.iter().find(|l| l.starts_with("Alpine")).unwrap();
-        assert!(alpine.trim_end().ends_with('-'));
+        let oracle = lines
+            .iter()
+            .find(|l| l.starts_with("OracleLinux-9"))
+            .unwrap();
+        assert!(oracle.trim_end().ends_with('-'));
     }
 
     #[test]
@@ -536,9 +688,9 @@ mod tests {
                 "INSTANCES"
             ]
         );
-        let ubuntu = lines.iter().find(|l| l.starts_with("Ubuntu ")).unwrap();
-        assert!(ubuntu.contains("image"));
-        assert!(ubuntu.contains("docker.io/library/ubuntu:latest"));
+        let alpine = lines.iter().find(|l| l.starts_with("Alpine ")).unwrap();
+        assert!(alpine.contains("image"));
+        assert!(alpine.contains("docker.io/library/alpine:latest"));
         let rlc_entry = cat.entries.iter().find(|e| e.name == "RLCPlus-10").unwrap();
         let rlc = lines.iter().find(|l| l.starts_with("RLCPlus-10")).unwrap();
         assert!(rlc.contains(".wsl"));
