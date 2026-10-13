@@ -16,7 +16,7 @@ use anyhow::{Result, bail};
 use clap::{ArgAction, Parser, ValueEnum};
 use container_distro::forward::PortMapping;
 pub use container_distro::spec::HomeMount;
-use container_distro::spec::{ConfList, MountSpec, Preset, PublishSpec};
+use container_distro::spec::{Arch, ConfList, MountSpec, Preset, PublishSpec};
 
 /// What `--install` installs from.
 #[derive(Debug, Clone, PartialEq)]
@@ -44,6 +44,9 @@ pub struct InstallOpts {
     pub no_launch: bool,
     pub cpus: Option<u32>,
     pub memory: Option<String>,
+    /// `--arch`: the guest arch — amd64 selects x86-64 sources and runs
+    /// under Rosetta.
+    pub arch: Option<Arch>,
     pub home_mount: Option<HomeMount>,
     /// Create a `container distro` — the default; `wants_machine()`
     /// reports the `--machine` opt-out. Distro-only options
@@ -298,6 +301,13 @@ pub struct Args {
     #[arg(long = "memory", requires = "install", value_name = "SIZE")]
     pub memory: Option<String>,
 
+    /// CPU architecture for what --install or --import creates —
+    /// `amd64` selects x86-64 images and .wsl catalog downloads, run
+    /// under Rosetta translation on Apple silicon. With --list it
+    /// filters the listing to entries/instances of that arch
+    #[arg(long = "arch", value_enum, value_name = "ARCH")]
+    pub arch: Option<Arch>,
+
     /// Home directory mount for what --install creates (default: none —
     /// rw only for distros installed from a catalog entry, which implies
     /// trust in that catalog)
@@ -493,6 +503,7 @@ pub enum Action {
         online: bool,
         cache: bool,
         catalog: Option<PathBuf>,
+        arch: Option<Arch>,
     },
     /// Empty the `.wsl` download cache.
     PurgeCache,
@@ -527,6 +538,7 @@ pub enum Action {
         install_location: Option<String>,
         file: String,
         backend: Backend,
+        arch: Option<Arch>,
         force: bool,
     },
     /// Rename a distro or machine to a fresh name — the machine form
@@ -578,6 +590,15 @@ impl Args {
                 || self.update.is_some())
         {
             bail!("--force only applies to --install, --import, --rename, and --update");
+        }
+        // `--arch` selects what an install or import materializes, and
+        // which arch `--list` shows/filters for; anywhere else it
+        // silently does nothing, so reject it.
+        if self.arch.is_some() && self.install.is_none() && self.import.is_none() && !self.list {
+            bail!("--arch only applies to --install, --import, and --list");
+        }
+        if self.arch.is_some() && self.cache {
+            bail!("--arch does not apply to --list --cache");
         }
         // `--machine` can't satisfy distro-only install options
         // (`--use-wsl-conf` already conflicts at parse; `--ignore`
@@ -646,6 +667,7 @@ impl Args {
                 no_launch: self.no_launch,
                 cpus: self.cpus,
                 memory: self.memory.clone(),
+                arch: self.arch,
                 home_mount: self.home_mount,
                 distro: self.distro,
                 machine: self.machine,
@@ -674,6 +696,7 @@ impl Args {
                 install_location: (i.len() == 3).then(|| i[1].clone()),
                 file: i.last().unwrap().clone(),
                 backend: self.backend(),
+                arch: self.arch,
                 force: self.force,
             }
         } else if let Some(r) = &self.rename {
@@ -705,6 +728,7 @@ impl Args {
                 online: self.online,
                 cache: self.cache,
                 catalog: self.catalog.clone(),
+                arch: self.arch,
             }
         } else {
             return self.validate_run();
@@ -860,7 +884,8 @@ mod tests {
                 verbosity: 0,
                 online: false,
                 cache: false,
-                catalog: None
+                catalog: None,
+                arch: None
             }
         );
         let args = parse(&["cm", "-l", "-q"]).unwrap();
@@ -923,6 +948,7 @@ mod tests {
                 no_launch: false,
                 cpus: None,
                 memory: None,
+                arch: None,
                 home_mount: None,
                 distro: false,
                 machine: false,
@@ -1023,7 +1049,8 @@ mod tests {
                 verbosity: 0,
                 online: true,
                 cache: false,
-                catalog: None
+                catalog: None,
+                arch: None
             }
         );
         let args = parse(&["cm", "--list", "--online"]).unwrap();
@@ -1052,6 +1079,32 @@ mod tests {
             }
         ));
         assert!(parse(&["cm", "-l", "-o", "--running"]).is_err());
+    }
+
+    #[test]
+    fn list_arch() {
+        for mode in ["-l", "-l -o"] {
+            let mut argv = vec!["cm"];
+            argv.extend(mode.split(' '));
+            argv.extend(["--arch", "amd64"]);
+            let args = parse(&argv).unwrap();
+            assert_eq!(
+                args.action().unwrap(),
+                Action::List {
+                    running_only: false,
+                    quiet: false,
+                    verbosity: 0,
+                    online: mode.contains('o'),
+                    cache: false,
+                    catalog: None,
+                    arch: Some(Arch::Amd64),
+                }
+            );
+        }
+        // The .wsl cache is content-addressed — an arch filter is
+        // meaningless there.
+        let args = parse(&["cm", "-l", "--cache", "--arch", "amd64"]).unwrap();
+        assert!(args.action().is_err());
     }
 
     #[test]
@@ -1226,6 +1279,7 @@ mod tests {
                 file: "in.tar".into(),
                 backend: Backend::Auto,
                 force: false,
+                arch: None,
             }
         );
         // Two values omit the ignored location.
@@ -1238,6 +1292,7 @@ mod tests {
                 file: "in.tar".into(),
                 backend: Backend::Auto,
                 force: false,
+                arch: None,
             }
         );
         // `--distro` selects the distro import (the default anyway); `-`
@@ -1251,6 +1306,7 @@ mod tests {
                 file: "-".into(),
                 backend: Backend::Distro,
                 force: false,
+                arch: None,
             }
         );
         // `--machine` selects the machine import.
@@ -1263,6 +1319,7 @@ mod tests {
                 file: "in.tar".into(),
                 backend: Backend::Machine,
                 force: false,
+                arch: None,
             }
         );
         assert!(parse(&["cm", "--import", "u1"]).is_err());

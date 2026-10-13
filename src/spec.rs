@@ -344,6 +344,58 @@ impl FromStr for HomeMount {
     }
 }
 
+/// The architecture a distro's userspace is built for: `arm64` (the
+/// Apple silicon host's own) or `amd64` (x86-64, run under Rosetta
+/// translation — `container` enables it automatically when the
+/// requested platform is amd64 on an arm64 host). Pinned at
+/// create/import like `image` is: the journaled rootfs can't change
+/// arch, so `set` has no flag for it — recreations re-apply the
+/// recorded one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Arch {
+    /// 64-bit ARM (`aarch64`) — native on Apple silicon.
+    #[value(alias = "aarch64")]
+    Arm64,
+    /// x86-64 — Rosetta-translated on Apple silicon.
+    #[value(alias = "x86_64")]
+    Amd64,
+}
+
+impl Arch {
+    /// The OCI spelling (`container`'s `--arch` value).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Arch::Arm64 => "arm64",
+            Arch::Amd64 => "amd64",
+        }
+    }
+
+    /// The host's own arch — what an unset `--arch` resolves to.
+    pub fn host() -> Arch {
+        crate::oci::host_arch().parse().unwrap_or(Arch::Arm64)
+    }
+}
+
+impl fmt::Display for Arch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for Arch {
+    type Err = anyhow::Error;
+    /// `x86_64`/`aarch64` normalize to the OCI spellings — the forms
+    /// `container inspect` platform fields and catalog entries use.
+    fn from_str(s: &str) -> Result<Self> {
+        match s {
+            "arm64" | "aarch64" => Ok(Arch::Arm64),
+            "amd64" | "x86_64" => Ok(Arch::Amd64),
+            _ => bail!("invalid architecture `{s}` (expected arm64 or amd64)"),
+        }
+    }
+}
+
 /// How a distro auto-manages `/Volumes` mounts — the same value space
 /// as [`HomeMount`]. `Ro` mounts volumes read-only.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
@@ -1176,6 +1228,11 @@ pub struct DistroOrigin {
 pub struct DistroSpec {
     pub name: String,
     pub image: String,
+    /// The guest architecture the rootfs is built for, like `image`
+    /// pinned at create: `amd64` runs under Rosetta. `None` is the
+    /// host arch. Not `set`-table — a recreate swaps containers, never
+    /// the filesystem's arch.
+    pub arch: Option<Arch>,
     /// User-specified `--mount`-style shares. Automounts are *not*
     /// stored here — they're recomputed from `/Volumes` at
     /// materialize time.
@@ -1217,6 +1274,8 @@ pub struct DistroSpec {
 pub struct ResolvedSpec {
     pub name: String,
     pub image: String,
+    /// The guest architecture — `spec.arch` or the host's.
+    pub arch: Arch,
     pub user: HostUser,
     /// User mounts — automounts are computed at materialize, never
     /// stored or resolved.
@@ -1272,6 +1331,10 @@ impl ResolvedSpec {
 pub(crate) struct JournalSpec {
     pub name: String,
     pub image: String,
+    /// The pinned guest arch; absent means the host's — and is how
+    /// pre-arch journals read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arch: Option<Arch>,
     pub cpus: Option<u64>,
     pub memory: Option<String>,
     pub home_mount: HomeMount,
@@ -1376,6 +1439,7 @@ impl JournalSpec {
         DistroSpec {
             name: self.name.clone(),
             image: self.image.clone(),
+            arch: self.arch,
             mounts: self
                 .mounts
                 .iter()
@@ -1547,6 +1611,10 @@ impl ResolvedSpec {
             "--memory",
             self.memory.clone().unwrap_or_else(|| ctx.memory.clone()),
         );
+        // `container` auto-enables Rosetta when the platform is amd64
+        // on an arm64 host — no `--rosetta` needed (and it would error
+        // on a non-arm64 host).
+        push("--arch", self.arch.as_str().into());
         push("--cap-add", "ALL".into());
         push("--masked-path", "NONE".into());
         push("--read-only-path", "NONE".into());
@@ -1671,6 +1739,13 @@ impl DistroSpec {
                 .as_ref()
                 .map(|i| i.reference.clone())
                 .unwrap_or_default(),
+            // The running container's platform is the arch's recorded
+            // truth — a spec reconstructed from it keeps it.
+            arch: cfg
+                .platform
+                .as_ref()
+                .map(|p| p.architecture.parse())
+                .transpose()?,
             cpus: resources.and_then(|r| r.cpus),
             memory: resources
                 .and_then(|r| r.memory_in_bytes)
@@ -1914,6 +1989,7 @@ impl DistroSpec {
             ResolvedSpec {
                 name: self.name.clone(),
                 image: self.image.clone(),
+                arch: self.arch.unwrap_or_else(Arch::host),
                 user: self.user.clone(),
                 mounts: self.mounts.clone(),
                 publish: self.publish.clone(),
@@ -2021,6 +2097,7 @@ impl DistroSpec {
         JournalSpec {
             name: self.name.clone(),
             image: self.image.clone(),
+            arch: self.arch,
             cpus: r.cpus,
             memory: r.memory.clone(),
             home_mount: r.home_mount,
@@ -2428,6 +2505,7 @@ mod tests {
         DistroSpec {
             name: "d1".into(),
             image: "alpine:latest".into(),
+            arch: None,
             mounts: vec!["/Volumes/X:/mnt/x".parse().unwrap()],
             publish: vec!["8080:80".parse().unwrap()],
             user: user(),

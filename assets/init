@@ -154,6 +154,21 @@ idle() {
     done
 }
 
+# vminitd arms Rosetta for amd64 guests as a binfmt_misc `x86_64` entry
+# pointing at /run/rosetta/rosetta — and systemd-binfmt.service flushes
+# every registration at boot, after which no amd64 binary execs again.
+# Mask the unit before handing PID 1 to systemd (`systemctl mask` is the
+# same /dev/null symlink, but no systemd is running to ask yet). Only
+# when the Rosetta registration is confirmed — a native amd64 guest
+# would keep the unit.
+mask_binfmt_flush() {
+    d=/proc/sys/fs/binfmt_misc
+    [ -f "$d/x86_64" ] || mount -t binfmt_misc binfmt_misc "$d" 2>/dev/null || true
+    grep -q 'interpreter /run/rosetta' "$d/x86_64" 2>/dev/null || return 0
+    mkdir -p /etc/systemd/system 2>/dev/null || true
+    ln -sf /dev/null /etc/systemd/system/systemd-binfmt.service 2>/dev/null || true
+}
+
 boot() {
     # The guest's own config file, honored only for the feature names
     # CONTAINER_WSL_CONF lists — restricted and --use-wsl-conf=none
@@ -228,7 +243,10 @@ boot() {
 
     if [ "$want_systemd" = "true" ]; then
         for i in /lib/systemd/systemd /usr/lib/systemd/systemd /sbin/init /usr/sbin/init; do
-            [ -x "$i" ] && exec "$i"
+            if [ -x "$i" ]; then
+                mask_binfmt_flush
+                exec "$i"
+            fi
         done
         echo "init: /etc/wsl.conf wants systemd but none was found — booting anyway" >&2
     else
@@ -240,6 +258,7 @@ boot() {
             if [ "$want_openrc" = "false" ] && is_openrc "$i"; then
                 continue
             fi
+            is_systemd "$i" && mask_binfmt_flush
             exec "$i"
         done
     fi

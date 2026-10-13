@@ -231,6 +231,7 @@
         "vmnet",
         "vsock",
         "VZNAT",
+        "waitpid",
         "Wawona",
         "wayoa",
         "waypipe",

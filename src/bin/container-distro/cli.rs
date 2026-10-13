@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 use container_distro::ops::CreateOptions;
 use container_distro::spec::{
-    Automount, ConfList, HomeMount, MountSpec, Preset, PublishSpec, ResetTarget,
+    Arch, Automount, ConfList, HomeMount, MountSpec, Preset, PublishSpec, ResetTarget,
 };
 
 #[derive(Debug, Parser)]
@@ -53,6 +53,10 @@ pub enum CatalogCommand {
         /// Use FILE instead of the built-in catalog
         #[arg(long, value_name = "FILE")]
         catalog: Option<PathBuf>,
+        /// List entries installable on ARCH — amd64 selects x86-64
+        /// sources (Rosetta-translated on Apple silicon)
+        #[arg(long, value_enum, value_name = "ARCH")]
+        arch: Option<Arch>,
     },
 
     /// Show one catalog entry and its local state
@@ -122,6 +126,9 @@ pub enum Command {
         /// Only running distros
         #[arg(long)]
         running: bool,
+        /// Only distros of this architecture
+        #[arg(long, value_enum, value_name = "ARCH")]
+        arch: Option<Arch>,
         #[arg(long, value_enum, default_value_t = Format::Table)]
         format: Format,
     },
@@ -421,13 +428,30 @@ mod tests {
         ])
         .unwrap();
         let Command::Catalog {
-            command: CatalogCommand::List { verbose, catalog },
+            command:
+                CatalogCommand::List {
+                    verbose,
+                    catalog,
+                    arch,
+                },
         } = cli.command
         else {
             panic!("expected catalog list");
         };
         assert_eq!(verbose, 2);
         assert_eq!(catalog.as_deref(), Some(Path::new("cat.json")));
+        assert_eq!(arch, None);
+
+        let cli = parse(&["distro", "catalog", "list", "--arch", "amd64"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Catalog {
+                command: CatalogCommand::List {
+                    arch: Some(Arch::Amd64),
+                    ..
+                }
+            }
+        ));
 
         let cli = parse(&[
             "distro",

@@ -25,7 +25,7 @@ use cli::{Action, Args, Backend, InstallOpts, InstallSource, ShellType};
 use container_distro::container::{self, ArgvMode};
 use container_distro::forward::PortMapping;
 use container_distro::ops::{self as distro, CreateOptions, RunOpts};
-use container_distro::spec::Intent;
+use container_distro::spec::{Arch, Intent};
 use container_distro::{catalog, catalog_ops, wsl};
 use list::Entry;
 
@@ -68,7 +68,8 @@ fn run(args: Args) -> Result<ExitCode> {
             online,
             cache,
             catalog,
-        } => list(running_only, quiet, verbosity, online, cache, catalog),
+            arch,
+        } => list(running_only, quiet, verbosity, online, cache, catalog, arch),
         Action::PurgeCache => {
             let (count, bytes) = wsl::purge_cache();
             println!(
@@ -88,8 +89,16 @@ fn run(args: Args) -> Result<ExitCode> {
             install_location,
             file,
             backend,
+            arch,
             force,
-        } => import(&name, install_location.as_deref(), &file, backend, force),
+        } => import(
+            &name,
+            install_location.as_deref(),
+            &file,
+            backend,
+            arch,
+            force,
+        ),
         Action::Rename {
             old,
             new,
@@ -241,6 +250,7 @@ fn list(
     online: bool,
     cache: bool,
     catalog_file: Option<PathBuf>,
+    arch: Option<Arch>,
 ) -> Result<ExitCode> {
     if online {
         print!(
@@ -250,7 +260,8 @@ fn list(
                 verbosity,
                 true,
                 backend::distros_enabled(),
-                "cm --install <Distro>"
+                "cm --install <Distro>",
+                arch.unwrap_or_else(Arch::host),
             )?
         );
         return Ok(ExitCode::SUCCESS);
@@ -270,19 +281,30 @@ fn list(
         if running_only && !m.is_running() {
             continue;
         }
-        let detail = if verbosity >= 2 {
+        // --arch filters on a machine's platform, which only inspect
+        // reports.
+        let detail = if verbosity >= 2 || arch.is_some() {
             container::inspect_machine(&m.id).ok()
         } else {
             None
         };
         machine_entries.push(Entry::from_machine(&m, detail.as_ref()));
     }
-    let entries = list::merge(
+    let mut entries = list::merge(
         machine_entries,
         distros.iter().map(Entry::from_distro).collect(),
     );
+    if let Some(arch) = arch {
+        entries.retain(|e| {
+            e.platform
+                .as_deref()
+                .is_some_and(|p| p.rsplit('/').next() == Some(arch.as_str()))
+        });
+    }
     if entries.is_empty() {
-        if running_only {
+        if let Some(arch) = arch {
+            eprintln!("No {arch} container machines or distros are installed.");
+        } else if running_only {
             eprintln!("There are no running container machines or distros.");
         } else {
             eprintln!(
@@ -429,10 +451,11 @@ fn shutdown(system: bool) -> Result<ExitCode> {
 fn resolve<'a>(
     cat: &'a catalog::Catalog,
     source: &'a InstallSource,
+    arch: Arch,
 ) -> Result<catalog_ops::Resolved<'a>> {
     match source {
-        InstallSource::Default => catalog_ops::resolve(cat, None, false),
-        InstallSource::CatalogOrImage(a) => catalog_ops::resolve(cat, Some(a), true),
+        InstallSource::Default => catalog_ops::resolve(cat, None, arch, false),
+        InstallSource::CatalogOrImage(a) => catalog_ops::resolve(cat, Some(a), arch, true),
         InstallSource::Image(image) => Ok(catalog_ops::Resolved::Image {
             image,
             name: None,
@@ -451,6 +474,7 @@ fn install(opts: &InstallOpts) -> Result<ExitCode> {
         publish: opts.publish.clone(),
         cpus: opts.cpus.map(u64::from),
         memory: opts.memory.clone(),
+        arch: opts.arch,
         home_mount: opts.home_mount,
         preset: opts.preset,
         ssh: opts.ssh,
@@ -467,7 +491,7 @@ fn install(opts: &InstallOpts) -> Result<ExitCode> {
         return install_from_file(opts, &create, file, None, distro::ImportSource::Local);
     }
     let cat = catalog::load(opts.catalog.as_deref())?;
-    let resolved = resolve(&cat, &opts.source)?;
+    let resolved = resolve(&cat, &opts.source, opts.arch.unwrap_or_else(Arch::host))?;
     let (image, hint, requested) = match &resolved {
         catalog_ops::Resolved::Image {
             image,
@@ -603,6 +627,7 @@ fn import(
     install_location: Option<&str>,
     file: &str,
     sel: Backend,
+    arch: Option<Arch>,
     force: bool,
 ) -> Result<ExitCode> {
     container::validate_name(name)?;
@@ -611,7 +636,7 @@ fn import(
     }
     let file = Path::new(file);
     if sel == Backend::Machine {
-        distro::import_machine(name, file, force)?;
+        distro::import_machine(name, file, arch, force)?;
     } else {
         if !backend::distros_enabled() {
             bail!(
@@ -624,6 +649,7 @@ fn import(
             name,
             file,
             &CreateOptions {
+                arch,
                 force,
                 ..CreateOptions::default()
             },
@@ -795,7 +821,7 @@ mod tests {
         // the entry's NAME, not a file- or image-derived name. The
         // default is a `.wsl` install on this host.
         let catalog_ops::Resolved::Wsl { name, .. } =
-            resolve(&cat, &InstallSource::Default).unwrap()
+            resolve(&cat, &InstallSource::Default, Arch::host()).unwrap()
         else {
             panic!("the catalog default should resolve to a .wsl download");
         };
@@ -803,17 +829,37 @@ mod tests {
         assert_eq!(container::default_machine_name(name), "ubuntu");
         for arg in ["ubuntu", "UBUNTU-24.04"] {
             let source = InstallSource::CatalogOrImage(arg.to_string());
-            let catalog_ops::Resolved::Wsl { name, .. } = resolve(&cat, &source).unwrap() else {
+            let catalog_ops::Resolved::Wsl { name, .. } =
+                resolve(&cat, &source, Arch::host()).unwrap()
+            else {
                 panic!("{arg} should resolve to a .wsl download");
             };
             assert!(!name.is_empty(), "{arg}");
         }
         // Overlay entries without a `.wsl` download resolve to images.
         let source = InstallSource::CatalogOrImage("alpine".to_string());
-        let catalog_ops::Resolved::Image { name, .. } = resolve(&cat, &source).unwrap() else {
+        let catalog_ops::Resolved::Image { name, .. } =
+            resolve(&cat, &source, Arch::host()).unwrap()
+        else {
             panic!("alpine should resolve to an image");
         };
         assert_eq!(name, Some("Alpine"));
+    }
+
+    /// `--arch amd64` switches the catalog lookup to the entry's x86-64
+    /// download — installed tagged `amd64` so `container` runs it under
+    /// Rosetta.
+    #[test]
+    fn amd64_install_picks_the_amd64_download() {
+        let cat = builtin();
+        let source = InstallSource::CatalogOrImage("ubuntu".to_string());
+        let catalog_ops::Resolved::Wsl { download, .. } =
+            resolve(&cat, &source, Arch::Amd64).unwrap()
+        else {
+            panic!("Ubuntu should resolve to a .wsl download on amd64");
+        };
+        let entry = catalog::lookup(&cat.entries, "Ubuntu").unwrap();
+        assert_eq!(download, entry.amd64_url.as_ref().unwrap());
     }
 
     #[test]
@@ -825,7 +871,9 @@ mod tests {
             InstallSource::CatalogOrImage("quay.io/x/y:1".to_string()),
             InstallSource::Image("alpine:3".to_string()),
         ] {
-            let catalog_ops::Resolved::Image { name, .. } = resolve(&cat, &source).unwrap() else {
+            let catalog_ops::Resolved::Image { name, .. } =
+                resolve(&cat, &source, Arch::host()).unwrap()
+            else {
                 panic!("{source:?} should resolve to an image");
             };
             assert_eq!(name, None, "{source:?}");
@@ -836,7 +884,8 @@ mod tests {
     fn wsl_catalog_entries_keep_their_name() {
         let cat = builtin();
         let source = InstallSource::CatalogOrImage("rlcplus-9".to_string());
-        let catalog_ops::Resolved::Wsl { name, .. } = resolve(&cat, &source).unwrap() else {
+        let catalog_ops::Resolved::Wsl { name, .. } = resolve(&cat, &source, Arch::host()).unwrap()
+        else {
             panic!("RLCPlus-9 should resolve to a .wsl download");
         };
         assert_eq!(name, "RLCPlus-9");

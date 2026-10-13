@@ -17,7 +17,9 @@ use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser};
 use container_distro::ops::{self, DistroSummary, RunOpts};
 use container_distro::plugin;
-use container_distro::spec::{Automount, ConfList, Intent, OriginSource, Preset, SpecChanges};
+use container_distro::spec::{
+    Arch, Automount, ConfList, Intent, OriginSource, Preset, SpecChanges,
+};
 use container_distro::table::{columns, human_bytes, local_datetime};
 use container_distro::{catalog, catalog_ops, wsl};
 
@@ -202,7 +204,11 @@ fn print_table(rows: &[DistroSummary]) {
 
 fn catalog_command(command: CatalogCommand) -> Result<()> {
     match command {
-        CatalogCommand::List { verbose, catalog } => {
+        CatalogCommand::List {
+            verbose,
+            catalog,
+            arch,
+        } => {
             print!(
                 "{}",
                 catalog_ops::render_online(
@@ -210,7 +216,8 @@ fn catalog_command(command: CatalogCommand) -> Result<()> {
                     verbose,
                     true,
                     true,
-                    "container distro catalog install <DISTRO>"
+                    "container distro catalog install <DISTRO>",
+                    arch.unwrap_or_else(Arch::host),
                 )?
             );
         }
@@ -265,10 +272,18 @@ fn run(cli: Cli) -> Result<()> {
         Command::List {
             quiet,
             running,
+            arch,
             format,
         } => {
             container_distro::container::ensure_started()?;
-            let rows = ops::summaries(running)?;
+            let mut rows = ops::summaries(running)?;
+            if let Some(arch) = arch {
+                rows.retain(|r| {
+                    r.platform
+                        .as_deref()
+                        .is_some_and(|p| p.rsplit('/').next() == Some(arch.as_str()))
+                });
+            }
             if quiet {
                 rows.iter().for_each(|r| println!("{}", r.id));
             } else if format == Format::Json {

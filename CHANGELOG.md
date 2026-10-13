@@ -10,6 +10,25 @@ docs/design/release.md.
 
 ## 0.8.0-dev
 
+### Added
+
+- **amd64 (x86-64) distros on Apple silicon**: `--arch amd64` on
+  `cm --install`/`--import`, `container distro create`/`import`, and
+  `catalog install` selects x86-64 sources — catalog entries resolve
+  their `Amd64Url` `.wsl` download (amd64-only entries like SLES become
+  installable), images are fetched as `linux/amd64`, and imported
+  rootfs archives are labeled `linux/amd64`. `container` auto-enables
+  Rosetta, so the amd64 userspace runs translated on the arm64 kernel.
+  The arch is journaled with the distro, so recreation/`set` keeps it.
+  For systemd distros, init masks `systemd-binfmt.service` when the
+  Rosetta registration is armed — its boot-time binfmt_misc flush would
+  otherwise drop x86-64 handling mid-boot.
+- **`--arch` on listings**: `cm -l --arch ARCH` and
+  `container distro list --arch ARCH` filter installed machines and
+  distros to that arch; `cm -l -o --arch ARCH` and
+  `container distro catalog list --arch ARCH` render the catalog for
+  that arch (status columns match against the selected arch's source).
+
 ## 0.7.0 -- 2026-10-13
 
 ### Added

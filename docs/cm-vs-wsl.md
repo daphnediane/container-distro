@@ -122,6 +122,12 @@ shell.
   tooling itself (the release `.pkg`, via Installer.app) -- not
   installed distros, and not `container` (that's Apple's
   `update-container.sh`).
+- `--arch arm64|amd64` is a `cm` extension with no WSL equivalent: it
+  selects the guest userspace arch at `--install`/`--import` (`amd64`
+  picks x86-64 catalog `.wsl`s or image variants and runs translated
+  under Rosetta -- amd64-only entries like SLES become installable)
+  and filters `-l`/`-l -o` to that arch. The arch is recorded with the
+  distro, so a recreated container keeps it.
 - No GUI app support (WSLg's X11/Wayland) -- see
   [design/notes/gui-apps.md] for what it would take.
 - No equivalents for `--manage` or `--mount` (VHDs).

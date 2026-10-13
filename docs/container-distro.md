@@ -78,6 +78,7 @@ from the image.
 | `-p, --publish`         | `[HOST_IP:]HOST[:GUEST][/tcp\|udp]` (repeatable; HOST_IP defaults to `127.0.0.1`)                                                                                                                                                                                                                   |
 | `--cpus`                | Virtual CPUs (default: half the host's)                                                                                                                                                                                                                                                             |
 | `--memory`              | e.g. `8G` (default: half the host's)                                                                                                                                                                                                                                                                |
+| `--arch`                | `arm64`/`amd64` — the guest arch (default: the host's). `amd64` selects x86-64 sources and runs translated under Rosetta on Apple silicon. Journaled — `set` can't change it                                                                                                                        |
 | `--home-mount`          | `rw`/`ro`/`none` — default `none` for `create`/`import` (`rw` via `catalog install`); the *effective* `--automount` mode is used if unset                                                                                                                                                           |
 | `--network`             | Container network name; `none` for no network                                                                                                                                                                                                                                                       |
 | `--ssh` / `--no-ssh`    | Forward the host SSH agent socket (default: on only when the effective home-mount is `rw`)                                                                                                                                                                                                          |
@@ -144,11 +145,12 @@ Uses `container exec`, so argv is exact -- nothing is re-split.
 
 ### `list` (alias `ls`)
 
-| Option        | Description                 |
-| ------------- | --------------------------- |
-| `-q, --quiet` | Names only                  |
-| `--running`   | Only running distros        |
-| `--format`    | `table` (default) or `json` |
+| Option        | Description                                 |
+| ------------- | ------------------------------------------- |
+| `-q, --quiet` | Names only                                  |
+| `--running`   | Only running distros                        |
+| `--arch`      | Only distros of that arch (`arm64`/`amd64`) |
+| `--format`    | `table` (default) or `json`                 |
 
 The table shows NAME, IMAGE, CREATED, STATE, IP, CPUS, MEMORY, DISK,
 MOUNTS, PORTS, and a `*` in DEFAULT. MOUNTS lists your mounts plus a
@@ -175,16 +177,22 @@ overlay, which adds entries and `Image`/`HomeMount` fields.
 `import` remains the explicit local-file path; `catalog` resolves
 friendly catalog names and `.wsl` downloads.
 
-| Command                                                  | Description                                                                                                                                             |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `catalog list [-v ...] [--catalog FILE]`                 | `NAME`/`FRIENDLY NAME`; `-v` adds local state and instances (machines and distros), repeated `-v` adds the install source and image ref or download URL |
-| `catalog info DISTRO [--catalog FILE] [--format FORMAT]` | Show the entry's catalog fields plus cache, image, and existing distro state (`FORMAT` is `table` or `json`)                                            |
-| `catalog install [DISTRO] [OPTIONS]`                     | Install a catalog entry (`catalog list` shows names); bare installs the default entry                                                                   |
-| `catalog cache [--catalog FILE]`                         | Show cached `.wsl` downloads, their catalog entry, and the image they were imported as                                                                  |
-| `catalog purge`                                          | Delete cached `.wsl` downloads (imported distros/images are unaffected)                                                                                 |
+| Command                                                  | Description                                                                                                                                                                                                                         |
+| -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `catalog list [-v ...] [--catalog FILE] [--arch ARCH]`   | `NAME`/`FRIENDLY NAME`; `-v` adds local state and instances (machines and distros), repeated `-v` adds the install source and image ref or download URL. `--arch` renders for that arch — `amd64` reveals amd64-only `.wsl` entries |
+| `catalog info DISTRO [--catalog FILE] [--format FORMAT]` | Show the entry's catalog fields plus cache, image, and existing distro state (`FORMAT` is `table` or `json`)                                                                                                                        |
+| `catalog install [DISTRO] [OPTIONS]`                     | Install a catalog entry (`catalog list` shows names); bare installs the default entry                                                                                                                                               |
+| `catalog cache [--catalog FILE]`                         | Show cached `.wsl` downloads, their catalog entry, and the image they were imported as                                                                                                                                              |
+| `catalog purge`                                          | Delete cached `.wsl` downloads (imported distros/images are unaffected)                                                                                                                                                             |
 
 `catalog install` accepts every `create` option (`-n`, mounts, ports,
-resources, `--restricted`, `--no-boot`, `--set-default`, …). It only
+resources, `--restricted`, `--no-boot`, `--set-default`, `--arch`, …).
+`--arch amd64` resolves the entry's x86-64 source — its `Amd64Url`
+`.wsl` when it has one (amd64-only entries become installable), else
+the `linux/amd64` image — and the distro runs translated under Rosetta;
+init masks `systemd-binfmt.service` on translated guests, since its
+boot-time `binfmt_misc` flush would drop the Rosetta `x86_64`
+registration mid-boot. `catalog install` only
 resolves catalog entries — use `create IMAGE` for an image reference and
 `import NAME FILE` for a local tar/`.wsl`. Image-backed entries become
 the same distro `create` would make, named for the catalog entry unless
@@ -298,7 +306,10 @@ distribution package works too (it's a rootfs tar; its
 given and, where the distro honors its config, both packaged config
 files are snapshotted into the journal and `automount.enabled=false`
 lowers the mount defaults). Accepts all `create`
-options including `--restricted`. Importing an image is trusting it
+options including `--restricted`. `--arch` declares the archive's
+architecture (default: the host's) — `--arch amd64` labels the
+imported image `linux/amd64` so `container` runs it under Rosetta.
+Importing an image is trusting it
 with your identity -- see security.md.
 
 The converted image is content-keyed (`local/rootfs:<sha256>`): a

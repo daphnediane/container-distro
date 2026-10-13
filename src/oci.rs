@@ -193,8 +193,13 @@ pub fn build_layout(
 }
 
 /// Load `rootfs` (a tar or tar.gz path) into the `container` image store
-/// as `reference`, for `linux/<host arch>`, carrying `labels`.
-pub fn load_rootfs(rootfs: &Path, reference: &str, labels: &[(String, String)]) -> Result<()> {
+/// as `reference`, for `linux/<arch>`, carrying `labels`.
+pub fn load_rootfs(
+    rootfs: &Path,
+    reference: &str,
+    arch: &str,
+    labels: &[(String, String)],
+) -> Result<()> {
     let layout = tempfile::Builder::new()
         .prefix("cm-import-")
         .suffix(".tar")
@@ -207,7 +212,7 @@ pub fn load_rootfs(rootfs: &Path, reference: &str, labels: &[(String, String)]) 
         rootfs,
         io::BufWriter::new(layout.as_file()),
         reference,
-        host_arch(),
+        arch,
         labels,
     )?;
     eprintln!("  loading image into the container store …");

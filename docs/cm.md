@@ -105,6 +105,7 @@ guest's very first write; see [exec-stdio].
 | `-l -v -v`         | Plus `container`-specific columns incl. `KIND` (`machine`/`distro`), IP, resources                |
 | `-l --all`         | Accepted for WSL compatibility; `-l` already lists stopped entries                                |
 | `-l --running`     | Only running machines and distros                                                                 |
+| `-l --arch ARCH`   | Only machines and distros of that arch; `-l -o --arch` lists that arch's catalog                  |
 | `-l -o, --online`  | The installable-distro catalog (`NAME FRIENDLY NAME`) instead of installed ones                   |
 | `-l -o -v`         | Plus `LOCAL`/`INSTANCES` status columns; `-v -v` adds `SOURCE`/`REF` (image ref or download URL)  |
 | `-l --cache`       | The `.wsl` download cache: SHA-256, size, catalog entry, and the image it loaded                  |
@@ -165,6 +166,7 @@ pkg) is the same update as a script.
 
 ```text
 cm --install [DISTRO|IMAGE] [--name NAME] [--no-launch]
+                  [--arch arm64|amd64]
                   [--cpus N] [--memory SIZE] [--home-mount rw|ro|none]
                   [--preset default|restricted|trusted] [--ssh|--no-ssh]
                   [--machine] [--restricted|--trusted] [--force]
@@ -202,7 +204,7 @@ group holds entries with a `Name`, `FriendlyName`, an optional `Image`
 (an OCI reference) and per-arch `Amd64Url` / `Arm64Url` `.wsl`
 downloads (`{"Url", "Sha256"}`; the rootfs is fetched, verified, and
 imported as a distro). The `.wsl` download wins when one exists for
-the host arch — a verified, content-addressed fetch — and `Image` is
+the selected arch — a verified, content-addressed fetch — and `Image` is
 the fallback for archs the download doesn't cover (`archlinux` has no
 upstream arm64 `.wsl`, so Apple Silicon installs its image). An
 optional `HomeMount` field (`rw`/`ro`/`none`) pins the entry's
@@ -219,9 +221,9 @@ an in-flight import. The lockfile doubles as a sidecar: it records the
 source URL and catalog NAME as JSON, so `--list --cache` identifies a
 file even after the catalog points that entry at a newer SHA-256 (such
 entries show as `NAME (superseded)`). Entries with no source
-for the host arch are hidden from `-l -o` and refused at install,
-which is why amd64-only `.wsl` distributions (SLES, eLxr) don't appear
-on Apple Silicon. `--catalog FILE` substitutes a custom file in the
+for the selected arch are hidden from `-l -o` and refused at install —
+amd64-only `.wsl` distributions (SLES, eLxr) appear once `--arch amd64`
+selects the x86-64 catalog. `--catalog FILE` substitutes a custom file in the
 same schema, replacing the built-in merge. It is an
 explicit per-invocation override, never auto-loaded from `$HOME`,
 since anything under `$HOME` is guest-writable and a default search
@@ -229,6 +231,22 @@ path would let a distro rewrite familiar names to hostile images (see
 design/security.md). The same catalog is available to the plugin through
 `container distro catalog`; `container distro create` itself still
 takes image refs only.
+
+`--arch amd64` installs for x86-64 instead of the host's arm64:
+catalog entries resolve their `Amd64Url` `.wsl` (amd64-only entries
+like SLES become installable), image-backed entries fetch the
+`linux/amd64` variant, and `container` auto-enables Rosetta so the
+amd64 userspace runs translated on the arm64 kernel — this is userland
+translation, not a full x86 VM, so no AVX. One wrinkle:
+`systemd-binfmt.service` flushes all `binfmt_misc` registrations at
+boot, which would drop the Rosetta `x86_64` entry mid-boot, so init
+masks it (a `/dev/null` symlink, what `systemctl mask` writes) whenever
+the Rosetta registration is armed. `--arch` also applies to
+`--import` (the imported rootfs is labeled `linux/amd64`, so
+`container` treats it as an amd64 image) and to `-l`: `-l -o
+--arch amd64` lists the amd64 catalog, and `-l --arch amd64` filters
+installed machines and distros down to amd64 ones (`container distro
+list`/`catalog list` take the same flag).
 
 `cm -l -o -v` annotates the catalog with local state: `LOCAL` is
 `pulled` for an image already in `container image list`, `cached` for
@@ -310,7 +328,9 @@ since storage is managed by `container`; the two-value form
 `--import NAME FILE` omits it. Names are lowercase DNS-style, as
 `machine create` requires. Like `wsl --import`, the result is left
 stopped; `cm` boots it once to verify and retries the documented
-first-boot flake before warning.
+first-boot flake before warning. `--arch` declares the rootfs's
+architecture (default: the host's) — `--arch amd64` labels the imported
+image `linux/amd64` so `container` runs it under Rosetta.
 
 The converted image is keyed on the rootfs's SHA-256
 (`local/rootfs:<sha256>`): importing the same archive again — another

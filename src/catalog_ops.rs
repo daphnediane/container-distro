@@ -19,7 +19,7 @@ use crate::naming;
 use crate::oci;
 use crate::ops::{self, CreateOptions};
 use crate::spec::{
-    HomeMount, Intent, LABEL_IMPORTED_FROM, LABEL_ROOTFS_SHA256, OriginSource, WslConfMode,
+    Arch, HomeMount, Intent, LABEL_IMPORTED_FROM, LABEL_ROOTFS_SHA256, OriginSource, WslConfMode,
 };
 use crate::table;
 use crate::wsl;
@@ -53,10 +53,13 @@ pub enum Resolved<'a> {
 /// name match is case-insensitive. With `image_fallback`, a non-match is
 /// treated as an OCI image reference (`cm --install DISTRO|IMAGE`);
 /// without it, non-matches are an error (`container distro catalog
-/// install`, where image installs already have `create`).
+/// install`, where image installs already have `create`). `arch` picks
+/// the `.wsl` download — `amd64` selects the x86-64 rootfs, which the
+/// import tags so `container` runs it under Rosetta.
 pub fn resolve<'a>(
     cat: &'a catalog::Catalog,
     arg: Option<&'a str>,
+    arch: Arch,
     image_fallback: bool,
 ) -> Result<Resolved<'a>> {
     let entry = match arg {
@@ -74,7 +77,7 @@ pub fn resolve<'a>(
         },
     };
     let requested = Intent::only_home_mount(entry.home_mount.unwrap_or(HomeMount::Rw));
-    match entry.source(oci::host_arch()) {
+    match entry.source(arch.as_str()) {
         Some(catalog::Source::Image(i)) => Ok(Resolved::Image {
             image: i,
             name: Some(&entry.name),
@@ -88,7 +91,7 @@ pub fn resolve<'a>(
         None => bail!(
             "{:?} is not available for {} (no image or .wsl download for that architecture)",
             entry.name,
-            oci::host_arch()
+            arch
         ),
     }
 }
@@ -102,7 +105,16 @@ pub fn install(
     opts: &CreateOptions,
     image_fallback: bool,
 ) -> Result<String> {
-    install_resolved(resolve(cat, arg, image_fallback)?, requested_name, opts)
+    install_resolved(
+        resolve(
+            cat,
+            arg,
+            opts.arch.unwrap_or_else(Arch::host),
+            image_fallback,
+        )?,
+        requested_name,
+        opts,
+    )
 }
 
 /// Install an already-resolved source as a distro. Image entries become
@@ -465,10 +477,11 @@ impl StatusProbe {
             .collect()
     }
 
-    /// The local state for one catalog entry.
-    pub fn status_of(&self, e: &catalog::Entry) -> catalog::EntryStatus {
+    /// The local state for one catalog entry, against `arch`'s
+    /// resolution of it (`amd64` picks the x86-64 source).
+    pub fn status_of(&self, e: &catalog::Entry, arch: Arch) -> catalog::EntryStatus {
         let mut st = catalog::EntryStatus::default();
-        let Some(source) = e.source(oci::host_arch()) else {
+        let Some(source) = e.source(arch.as_str()) else {
             return st;
         };
         let machines: Vec<_> = self
@@ -851,31 +864,34 @@ pub fn render_info(info: &CatalogEntryInfo) -> String {
     out
 }
 
-/// Render the installable catalog, optionally with local state. A
-/// plain listing never touches `container`; verbose probes are
-/// best-effort and never block.
+/// Render the installable catalog for `arch`, optionally with local
+/// state. A plain listing never touches `container`; verbose probes
+/// are best-effort and never block.
 pub fn render_online(
     catalog_file: Option<&Path>,
     verbosity: u8,
     include_machines: bool,
     include_distros: bool,
     install_command: &str,
+    arch: Arch,
 ) -> Result<String> {
     let cat = catalog::load(catalog_file)?;
-    let arch = oci::host_arch();
     if verbosity == 0 {
         return Ok(catalog::render_with_command(
             &cat.entries,
-            arch,
+            arch.as_str(),
             install_command,
         ));
     }
     let probe = StatusProbe::gather(include_machines, include_distros);
-    let status: Vec<catalog::EntryStatus> =
-        cat.entries.iter().map(|e| probe.status_of(e)).collect();
+    let status: Vec<catalog::EntryStatus> = cat
+        .entries
+        .iter()
+        .map(|e| probe.status_of(e, arch))
+        .collect();
     Ok(catalog::render_verbose_with_command(
         &cat.entries,
-        arch,
+        arch.as_str(),
         &status,
         verbosity,
         install_command,
@@ -973,7 +989,7 @@ mod tests {
         // upstream publishes arm64+amd64 downloads.
         let Resolved::Wsl {
             name, requested, ..
-        } = resolve(&cat, None, false).unwrap()
+        } = resolve(&cat, None, Arch::host(), false).unwrap()
         else {
             panic!("the catalog default should resolve to a .wsl download");
         };
@@ -984,14 +1000,16 @@ mod tests {
         // still beats it.
         assert_eq!(requested.home_mount, Some(HomeMount::Rw));
         for arg in ["ubuntu", "UBUNTU-24.04"] {
-            let Resolved::Wsl { name, .. } = resolve(&cat, Some(arg), false).unwrap() else {
+            let Resolved::Wsl { name, .. } = resolve(&cat, Some(arg), Arch::host(), false).unwrap()
+            else {
                 panic!("{arg} should resolve to a .wsl download");
             };
             assert!(!name.is_empty(), "{arg}");
         }
         // An overlay entry with no .wsl download still resolves to
         // its image.
-        let Resolved::Image { image, name, .. } = resolve(&cat, Some("alpine"), false).unwrap()
+        let Resolved::Image { image, name, .. } =
+            resolve(&cat, Some("alpine"), Arch::host(), false).unwrap()
         else {
             panic!("Alpine should resolve to an image");
         };
@@ -1006,7 +1024,7 @@ mod tests {
             image,
             name,
             requested,
-        } = resolve(&cat, Some("quay.io/x/y:1"), true).unwrap()
+        } = resolve(&cat, Some("quay.io/x/y:1"), Arch::host(), true).unwrap()
         else {
             panic!("a qualified ref should fall back to an image");
         };
@@ -1014,14 +1032,16 @@ mod tests {
         assert_eq!(name, None);
         // A bare image asked for nothing — no source intent.
         assert!(requested.is_empty());
-        let err = resolve(&cat, Some("quay.io/x/y:1"), false).unwrap_err();
+        let err = resolve(&cat, Some("quay.io/x/y:1"), Arch::host(), false).unwrap_err();
         assert!(err.to_string().contains("not in the distro catalog"));
     }
 
     #[test]
     fn wsl_catalog_entries_keep_their_name() {
         let cat = builtin();
-        let Resolved::Wsl { name, .. } = resolve(&cat, Some("rlcplus-9"), false).unwrap() else {
+        let Resolved::Wsl { name, .. } =
+            resolve(&cat, Some("rlcplus-9"), Arch::host(), false).unwrap()
+        else {
             panic!("RLCPlus-9 should resolve to a .wsl download");
         };
         assert_eq!(name, "RLCPlus-9");
@@ -1077,7 +1097,7 @@ mod tests {
         assert_eq!(info.local.distros.len(), 1);
         assert_eq!(info.local.conflicts.len(), 1);
         assert_eq!(
-            probe.status_of(entry).instances,
+            probe.status_of(entry, Arch::Arm64).instances,
             vec![
                 ("dev (machine)".to_string(), true),
                 ("dev (distro)".to_string(), true),

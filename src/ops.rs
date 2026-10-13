@@ -74,7 +74,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::spec::{
-    Automount, ConfList, DistroOrigin, DistroSpec, HomeMount, HostUser, INIT_DIR, Intent,
+    Arch, Automount, ConfList, DistroOrigin, DistroSpec, HomeMount, HostUser, INIT_DIR, Intent,
     JournalSpec, LABEL_DISTRO, LABEL_EXPORT_SCRATCH, LABEL_HOME_MOUNT, LABEL_IMPORTED_FROM,
     LABEL_ROOTFS_SHA256, MountSpec, OriginSource, Preset, PublishSpec, ResolveCtx, ResolvedSpec,
     SpecChanges, WslConf, WslConfMode, automounts, mode_from_flags, size_bytes,
@@ -178,6 +178,13 @@ pub struct CreateOptions {
     /// Memory, e.g. 8G (default: half the host's)
     #[arg(long)]
     pub memory: Option<String>,
+
+    /// CPU architecture the distro's userspace is built for — `amd64`
+    /// (x86-64) runs under Rosetta translation on Apple silicon. Pinned
+    /// at create: the filesystem is already one arch, so `set` keeps it
+    /// and can't change it
+    #[arg(long, value_enum, value_name = "ARCH")]
+    pub arch: Option<Arch>,
 
     /// How to share your macOS home directory (default: none —
     /// read-write only for distros installed through a catalog entry,
@@ -789,6 +796,7 @@ fn options_spec(opts: &CreateOptions, source: &Intent) -> DistroSpec {
         // `resolve` never reads identity — `build_spec` fills it in.
         name: String::new(),
         image: String::new(),
+        arch: opts.arch,
         mounts: opts.volumes.clone(),
         publish: opts.publish.clone(),
         user: HostUser::default(),
@@ -1113,7 +1121,13 @@ fn summarize(c: &ContainerInfo, default: Option<&str>, app_root: Option<&Path>) 
         disk_size: app_root.and_then(|r| container::container_disk_usage(r, c.id())),
         created_date,
         image: cfg.image.as_ref().map(|i| i.reference.clone()),
-        platform: cfg.platform.as_ref().map(ToString::to_string),
+        // A stopped distro has no container to report a platform; the
+        // journal's arch is what it materializes as.
+        platform: cfg
+            .platform
+            .as_ref()
+            .map(ToString::to_string)
+            .or_else(|| resolved.as_ref().map(|r| format!("linux/{}", r.arch))),
         home_mount: label_lookup(&cfg.labels, LABEL_HOME_MOUNT).cloned(),
         mounts: resolved
             .as_ref()
@@ -2492,6 +2506,7 @@ fn spec_diff(want: &ResolvedSpec, actual: &ResolvedSpec) -> Vec<String> {
             want.image, actual.image
         ));
     }
+    field!("arch", want.arch.as_str(), actual.arch.as_str());
     field!("preset", want.preset.as_str(), actual.preset.as_str());
     // Unpinned resources are "the host picks" — `create` materializes
     // them into the container config, and a reconstructed spec can't
@@ -2832,12 +2847,17 @@ const MAX_IMPORTED_IMAGE_BYTES: u64 = 8 << 30;
 /// no `distro`/`machine` name label: the label is per-image, not
 /// per-tag, so a name on it would let one importer's cleanup claim
 /// tags another importer still uses.
-fn ensure_rootfs_image(rootfs: &Path, sha256: &str, labels: &[(String, String)]) -> Result<String> {
+fn ensure_rootfs_image(
+    rootfs: &Path,
+    sha256: &str,
+    arch: Arch,
+    labels: &[(String, String)],
+) -> Result<String> {
     let reference = imported_image_ref(sha256);
     if image_cached(&reference) {
         eprintln!("  reusing imported image {reference}");
     } else {
-        oci::load_rootfs(rootfs, &reference, labels)?;
+        oci::load_rootfs(rootfs, &reference, arch.as_str(), labels)?;
         // A fresh load may itself push the unused set over budget.
         prune_imported_images();
     }
@@ -2970,7 +2990,14 @@ pub fn import(
         (label_key(LABEL_ROOTFS_SHA256), sha256.clone()),
         (label_key(LABEL_IMPORTED_FROM), imported_from),
     ];
-    let shared = ensure_rootfs_image(rootfs, &sha256, &labels)?;
+    // The OCI image carries the requested arch so `create` picks the
+    // amd64 platform — and Rosetta — without a separate flag.
+    let shared = ensure_rootfs_image(
+        rootfs,
+        &sha256,
+        opts.arch.unwrap_or_else(Arch::host),
+        &labels,
+    )?;
     // The journal records the per-distro tag — what `rm` untags — on
     // top of the shared content tag the dedup keys off.
     let reference = per_importer_ref(&shared, &distro_import_ref(name, &sha256));
@@ -3173,7 +3200,7 @@ pub fn export_machine(machine: &str, output: Option<&Path>) -> Result<()> {
 /// first `machine run` after `machine create` can lose a race while the
 /// VM restarts after provisioning, for stock and imported images alike
 /// — and leaves the machine stopped, like `wsl --import`.
-pub fn import_machine(name: &str, file: &Path, force: bool) -> Result<()> {
+pub fn import_machine(name: &str, file: &Path, arch: Option<Arch>, force: bool) -> Result<()> {
     validate_name(name)?;
     ensure_started()?;
     if container::list_machines()?.iter().any(|m| m.id == name) {
@@ -3191,6 +3218,7 @@ pub fn import_machine(name: &str, file: &Path, force: bool) -> Result<()> {
     // Content-keyed like distro imports — a machine imported from the
     // same archive a distro used (or a retry after a failed create)
     // skips the wrap+load entirely.
+    let arch = arch.unwrap_or_else(Arch::host);
     let sha256 = oci::hash_file(rootfs)?;
     let labels = [
         (label_key(LABEL_ROOTFS_SHA256), sha256.clone()),
@@ -3203,7 +3231,7 @@ pub fn import_machine(name: &str, file: &Path, force: bool) -> Result<()> {
             },
         ),
     ];
-    let shared = ensure_rootfs_image(rootfs, &sha256, &labels)?;
+    let shared = ensure_rootfs_image(rootfs, &sha256, arch, &labels)?;
     // The machine records its own `local/machine-<name>` tag on the
     // shared image — the tag `--unregister` untags.
     let reference = per_importer_ref(&shared, &machine_import_ref(name, &sha256));
@@ -3213,7 +3241,15 @@ pub fn import_machine(name: &str, file: &Path, force: bool) -> Result<()> {
     // every time (upstream apple/container#2024-adjacent). A failed create keeps the
     // shared tag — a cache entry — but drops the per-machine one, which
     // belongs to a machine that never landed.
-    if let Err(e) = run_container(&["machine", "create", "--name", name, &reference]) {
+    if let Err(e) = run_container(&[
+        "machine",
+        "create",
+        "--name",
+        name,
+        "--arch",
+        arch.as_str(),
+        &reference,
+    ]) {
         if reference != shared {
             untag_image(&reference);
         }
@@ -3327,6 +3363,13 @@ fn spec_from_machine(name: &str, m: &MachineDetail, opts: &CreateOptions) -> Res
     let mut spec = DistroSpec {
         name: name.to_string(),
         image,
+        // An explicit --arch wins over the machine's recorded platform —
+        // the same explicit-beats-source precedence as the options.
+        arch: opts.arch.or_else(|| {
+            m.platform
+                .as_ref()
+                .and_then(|p| p.architecture.parse::<Arch>().ok())
+        }),
         mounts: opts.volumes.clone(),
         publish: opts.publish.clone(),
         user,
@@ -3654,6 +3697,7 @@ pub fn create_machine(
     if let Some(m) = &resolved.memory {
         a.extend(["--memory".into(), m.clone()]);
     }
+    a.extend(["--arch".into(), resolved.arch.as_str().into()]);
     a.extend(["--home-mount".into(), resolved.home_mount.as_str().into()]);
     a.push(image.to_string());
     let a: Vec<&str> = a.iter().map(String::as_str).collect();
@@ -3677,6 +3721,14 @@ pub fn migrate_to_machine(
     // Refuse distro-only flags before the distro is stopped — the same
     // check runs inside `create_machine` for the shared entry point.
     reject_machine_opts(opts)?;
+    // The carried rootfs is already one arch — `machine create` can't
+    // be pointed at another, so an explicit --arch would silently
+    // no-op. Refuse it instead (the machine keeps the distro's arch).
+    if opts.arch.is_some() {
+        bail!(
+            "`--arch` cannot be applied to `migrate --out` — the machine keeps the distro's architecture"
+        );
+    }
     // Keeping the source means the result can't take its name — the
     // same-name distro+machine pair is exactly the shadow the create
     // paths refuse.
@@ -4004,6 +4056,15 @@ pub fn rename_machine(old: &str, new: &str, force: bool) -> Result<()> {
         }
         if let Some(h) = &detail.home_mount {
             a.extend(["--home-mount".into(), h.clone()]);
+        }
+        // Keep the machine's platform — an amd64 machine renamed to an
+        // arm64 create would boot its x86-64 rootfs without Rosetta.
+        if let Some(arch) = detail
+            .platform
+            .as_ref()
+            .and_then(|p| p.architecture.parse::<Arch>().ok())
+        {
+            a.extend(["--arch".into(), arch.as_str().into()]);
         }
         a.push(image.clone());
         run_container(&a.iter().map(String::as_str).collect::<Vec<_>>())?;
@@ -4464,6 +4525,7 @@ mod tests {
         DistroSpec {
             name: "d1".into(),
             image: "alpine:latest".into(),
+            arch: None,
             mounts: vec!["/a:/b:ro".parse().unwrap()],
             publish: vec!["8080:80".parse().unwrap()],
             user: HostUser {
