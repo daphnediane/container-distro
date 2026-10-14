@@ -279,6 +279,13 @@ pub struct CreateOptions {
     /// Don't generate macOS terminal profiles for the new distro
     #[arg(long)]
     pub no_terminal_profile: bool,
+
+    /// The caller opens the profile in Terminal.app right after
+    /// create (`cm --install --terminal`): that open *is* the import,
+    /// and its window must run the real launcher — not the
+    /// self-replacing no-op a silent import arms.
+    #[arg(skip)]
+    pub will_open_terminal: bool,
 }
 
 impl CreateOptions {
@@ -476,11 +483,35 @@ pub(crate) fn unlock(path: &Path) {
     }
 }
 
+/// `unlock`'s counterpart — best-effort `uchg` on a host-owned file a
+/// rw-shared guest could otherwise rewrite. Used outside the journal
+/// for the terminal-launcher artifacts (`terminal-cmds/*.sh`,
+/// `terminal-profiles/*.terminal`, the iTerm2 dynamic-profile file):
+/// a guest rewriting them would own the next profile launch.
+pub(crate) fn lock(path: &Path) {
+    if fs::symlink_metadata(path).is_ok() {
+        let _ = set_locked(path, true);
+    }
+}
+
+/// `lock` for a *symlink itself*: `chflags(2)` follows links (it maps
+/// to lchmod, which refuses them), so flagging `~/.container-distro`
+/// would lock its target — the state dir. Shells out to `chflags -h`,
+/// which takes the link inode.
+pub(crate) fn lock_symlink(path: &Path) {
+    let _ = Command::new("/usr/bin/chflags")
+        .args(["-h", "uchg"])
+        .arg(path)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
 /// Whether `path` carries the user-immutable flag — checked with
 /// `lstat` (the flag can't ride a symlink). A guest can't set it through
 /// a virtiofs share, so a locked file is host-written: the check doubles
 /// as journal provenance.
-fn is_locked(path: &Path) -> bool {
+pub(crate) fn is_locked(path: &Path) -> bool {
     let Ok(c) = CString::new(path.as_os_str().as_bytes()) else {
         return false;
     };
@@ -1065,7 +1096,7 @@ fn create_from_spec(spec: &DistroSpec, opts: &CreateOptions) -> Result<String> {
     }
     let profiles = spec.resolve().0.terminal_profile;
     terminal::sync(&spec.name, profiles);
-    if profiles {
+    if profiles && !opts.will_open_terminal {
         let _ = terminal::ensure_profile(&spec.name);
     }
     Ok(spec.name.clone())

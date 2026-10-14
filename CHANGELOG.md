@@ -57,11 +57,17 @@ docs/design/release.md.
   profiles run the script (`cm --cd ~ -d NAME`), so command updates
   never need a re-import, and `shellExitAction` closes the window on a
   clean exit while a failed launch stays visible. iTerm2 dynamic
-  profiles run the same script. A same-named foreign profile is never
-  overwritten — Terminal imports ours as `NAME 1` — and a profile you
-  delete in Terminal's prefs stays deleted until `set
-  --terminal-profile`, `distro terminal`, or `sync-profiles`
-  explicitly re-imports it.
+  profiles run the same script. Terminal.app's `CommandString` isn't
+  shell-parsed — quoting can't save a path containing `Application
+  Support` — so profiles exec the script as
+  `~/.container-distro/terminal-cmds/NAME.sh`, tilde-expanded through a
+  `uchg`-locked symlink to the state dir; the scripts, `.terminal`
+  files, iTerm2 profile, and the symlink itself are all locked so a
+  guest with a rw-shared home can't rewrite a host launcher. A
+  same-named foreign profile is never overwritten — Terminal imports
+  ours as `NAME 1` — and a profile you delete in Terminal's prefs
+  stays deleted until `set --terminal-profile`, `distro terminal`, or
+  `sync-profiles` explicitly re-imports it.
 - **`cm --cd ~` follows the effective user.** `~`/`~/…` now expand to
   the `-u` user's guest home — root → `/root`, a named user → its home
   resolved live in the guest via `getent passwd` (NSS-aware, with an

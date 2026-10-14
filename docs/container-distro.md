@@ -55,14 +55,29 @@ dir and all launching `cm -d NAME`:
 
 - `terminal-cmds/NAME.sh` — a launcher script (`exec cm --cd '~' -d
   NAME "$@"`). Imported profiles point at the *script*, so command
-  changes propagate without re-importing;
+  changes propagate without re-importing. Profiles reach it through
+  `~/.container-distro`, a symlink to the state dir, as the run
+  command `~/.container-distro/terminal-cmds/NAME.sh` — Terminal
+  expands `~` but whitespace-tokenizes `CommandString` rather than
+  shell-parsing it, so the tilde stays space-free even where a
+  resolved `Application Support` path would truncate however it was
+  quoted. (iTerm2's Command is shell-parsed and falls back to the
+  quoted real path if the alias can't be made.) The script, the
+  `.terminal` files, and the symlink are
+  `uchg`-locked like the journal assets — a guest with a rw-shared
+  home can't rewrite them (design/security.md);
 - `terminal-profiles/NAME.terminal` — the settings-set document.
   Opening it — `container distro terminal NAME`, `cm --terminal`, or
   a double-click — makes Terminal *import* the profile through its
   own model (surviving the prefs flushes that drop profiles written
-  behind a running Terminal's back) and opens a window. The window
-  closes itself when the shell exits cleanly (`shellExitAction`);
-  a failed launch stays open so the error is readable;
+  behind a running Terminal's back). The `distro terminal`/`cm
+  --terminal` commands also guarantee a window running `cm -d NAME`:
+  `open` launches one when Terminal is responsive, and when a dormant
+  Terminal queues or drops it the commands spawn the window directly
+  (adopting the imported profile for the title and close-on-exit).
+  The window closes itself when the shell exits cleanly
+  (`shellExitAction`); a failed launch stays open so the error is
+  readable;
 - when iTerm2 is installed, a dynamic profile under
   `~/Library/Application Support/iTerm2/DynamicProfiles/container-distro.json`,
   which iTerm2 loads live.
@@ -331,10 +346,12 @@ profiles whose distro no longer exists.
 ### `terminal NAME`
 
 Open the distro in a new Terminal.app window: refreshes its
-`.terminal` launcher, then `open`s it — Terminal imports the settings
-set (a no-op if already imported under that name) and runs
-`cm -d NAME`. This is also how you re-import a profile you deleted,
-and `cm --terminal` does the same for the `-d`/default distro.
+`.terminal` launcher and `open`s it — Terminal imports the settings
+set (a no-op if already imported under that name) — then opens a
+window running `cm -d NAME`, spawning it directly when a dormant
+Terminal queues the `open`'s launch. This is also how you re-import a
+profile you deleted, and `cm --terminal` does the same for the
+`-d`/default distro.
 Asking to open is an opt-in: it pins `terminal_profile` like
 `set --terminal-profile` would, so `sync-profiles` keeps the
 artifacts rather than sweeping them.

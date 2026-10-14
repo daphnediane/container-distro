@@ -87,13 +87,73 @@ fn cm_path() -> String {
         .unwrap_or_else(|| "cm".into())
 }
 
-/// The command a profile runs — the launcher script via `sh`, so the
-/// same `exec cm --cd '~' -d NAME` semantics apply everywhere and
-/// command updates are a script rewrite, never a profile re-import.
+/// `~/.container-distro` — a symlink to `state_dir()` giving a
+/// space-free path into it. A profile's `CommandString` is
+/// whitespace-tokenized rather than shell-parsed — quoting is passed
+/// through literally — so the `Application Support` space truncates
+/// the launcher path however it's written.
+fn alias_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|h| h.join(".container-distro"))
+}
+
+/// Create/reuse the `uchg`-locked alias symlink; `None` when a foreign
+/// file squats on the name (never clobbered) or the link can't be
+/// made. The flag keeps a rw-shared guest from repointing it — the
+/// link feeds `CommandString`, so a repoint is host code exec.
+fn ensure_alias() -> Option<PathBuf> {
+    let target = state_dir().ok()?;
+    let link = alias_dir()?;
+    match fs::symlink_metadata(&link) {
+        Ok(m) if m.is_symlink() => {
+            if fs::read_link(&link).ok().as_deref() != Some(target.as_path()) {
+                return None;
+            }
+            if !crate::ops::is_locked(&link) {
+                crate::ops::lock_symlink(&link);
+            }
+            Some(link)
+        }
+        Ok(_) => None,
+        Err(_) => {
+            std::os::unix::fs::symlink(&target, &link).ok()?;
+            crate::ops::lock_symlink(&link);
+            Some(link)
+        }
+    }
+}
+
+/// `~/`-relative path to the launcher script — Terminal expands `~` in
+/// a profile's run command before whitespace-tokenizing it, so the
+/// tilde stays space-free even where a resolved home path never could
+/// (a username or mount point with a space). `Some` only when the
+/// alias exists, so the path always resolves.
+fn alias_launch_path(name: &str) -> Option<String> {
+    ensure_alias().map(|_| format!("~/.container-distro/terminal-cmds/{name}.sh"))
+}
+
+/// The command a Terminal profile's `CommandString` runs — the
+/// launcher script itself (it's +x with a shebang; a `/bin/sh` prefix
+/// would only add a process layer), reached through the alias so the
+/// path is space-free. The fallback when the alias can't be made runs
+/// `cm` directly (`~` survives tokenizing; cm expands it guest-side).
 fn launch_command(name: &str) -> String {
+    match alias_launch_path(name) {
+        Some(p) => p,
+        None => format!("{} --cd ~ -d {name}", cm_path()),
+    }
+}
+
+/// iTerm2's `Command` — shell-parsed, so it can fall back to the
+/// quoted real path when the alias is unavailable.
+fn iterm2_command(name: &str) -> String {
+    if let Some(p) = alias_launch_path(name) {
+        return p;
+    }
     match script_file(name) {
-        Some(s) => format!("/bin/sh '{}'", s.display()),
-        None => format!("{} --cd '~' -d {name}", cm_path()),
+        Some(s) => format!("'{}'", s.display()),
+        None => format!("'{}' --cd '~' -d '{name}'", cm_path()),
     }
 }
 
@@ -185,7 +245,9 @@ fn script_contents(name: &str) -> String {
     )
 }
 
-/// Write `name`'s launcher script (+x). Returns false on I/O failure.
+/// Write `name`'s launcher script (+x), `uchg`-locked at rest like the
+/// journal assets — a rw-shared guest rewriting it would own the next
+/// profile launch.
 fn write_script_at(path: &Path, contents: &str) -> bool {
     use std::os::unix::fs::PermissionsExt;
     if let Some(parent) = path.parent()
@@ -193,8 +255,13 @@ fn write_script_at(path: &Path, contents: &str) -> bool {
     {
         return false;
     }
-    fs::write(path, contents).is_ok()
-        && fs::set_permissions(path, fs::Permissions::from_mode(0o755)).is_ok()
+    crate::ops::unlock(path);
+    let ok = fs::write(path, contents).is_ok()
+        && fs::set_permissions(path, fs::Permissions::from_mode(0o755)).is_ok();
+    if ok {
+        crate::ops::lock(path);
+    }
+    ok
 }
 
 fn write_script(name: &str) -> bool {
@@ -218,6 +285,10 @@ fn terminal_running() -> bool {
 /// The `.terminal` settings-set dict `open` imports and launches.
 /// `shellExitAction` 1 = close the window when the shell exits cleanly,
 /// so a finished `cm` run drops its window but an error stays visible.
+/// `noWarnProcesses` exempts the launcher chain — `cm` execs
+/// `container exec` — from the "terminate running process" prompt on
+/// ⌘W/quit; Terminal can't see inside the container, so the guest's
+/// process tree never factors into the warning anyway.
 fn terminal_profile_dict(name: &str, profile: &str) -> plist::Value {
     plist::Value::Dictionary(plist::Dictionary::from_iter([
         ("name", plist::Value::from(profile)),
@@ -226,6 +297,14 @@ fn terminal_profile_dict(name: &str, profile: &str) -> plist::Value {
         ("CommandString", plist::Value::from(launch_command(name))),
         ("RunCommandAsShell", plist::Value::from(true)),
         ("shellExitAction", plist::Value::from(1)),
+        (
+            "noWarnProcesses",
+            plist::Value::Array(vec![
+                plist::Dictionary::from_iter([("ProcessName", plist::Value::from("cm"))]).into(),
+                plist::Dictionary::from_iter([("ProcessName", plist::Value::from("container"))])
+                    .into(),
+            ]),
+        ),
         ("TitleDisplaysCustomTitle", plist::Value::from(true)),
         ("CustomTitle", plist::Value::from(profile)),
         (MARKER, plist::Value::from(name)),
@@ -238,20 +317,28 @@ fn plist_quote(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
+/// A plist value in `defaults`'s old-style syntax — `()` arrays and
+/// `{}` dicts nest, scalars quote or print bare.
+fn frag_val(v: &plist::Value) -> String {
+    match v {
+        plist::Value::String(s) => plist_quote(s),
+        plist::Value::Boolean(b) => b.to_string(),
+        plist::Value::Real(r) => r.to_string(),
+        plist::Value::Integer(i) => i.to_string(),
+        plist::Value::Array(a) => format!(
+            "({})",
+            a.iter().map(frag_val).collect::<Vec<_>>().join(", ")
+        ),
+        plist::Value::Dictionary(d) => format!("{{ {} }}", fragment(d)),
+        other => plist_quote(&format!("{other:?}")),
+    }
+}
+
 /// `key`-`dict` as a `defaults` plist fragment — old-style syntax is
 /// all `-dict-add` accepts.
 fn fragment(dict: &plist::Dictionary) -> String {
     dict.iter()
-        .map(|(k, v)| {
-            let v = match v {
-                plist::Value::String(s) => plist_quote(s),
-                plist::Value::Boolean(b) => b.to_string(),
-                plist::Value::Real(r) => r.to_string(),
-                plist::Value::Integer(i) => i.to_string(),
-                other => plist_quote(&format!("{other:?}")),
-            };
-            format!("{} = {v};", plist_quote(k))
-        })
+        .map(|(k, v)| format!("{} = {};", plist_quote(k), frag_val(v)))
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -296,6 +383,7 @@ fn write_artifacts(name: &str) -> bool {
     {
         return false;
     }
+    crate::ops::unlock(&f);
     if let Err(e) = plist::to_file_xml(&f, &terminal_profile_dict(name, &profile)) {
         eprintln!(
             "container-distro: warning: couldn't write {}: {e}",
@@ -303,6 +391,7 @@ fn write_artifacts(name: &str) -> bool {
         );
         return false;
     }
+    crate::ops::lock(&f);
     if !write_script(name) {
         eprintln!("container-distro: warning: couldn't write {name}'s launcher script");
         return false;
@@ -311,7 +400,10 @@ fn write_artifacts(name: &str) -> bool {
 }
 
 /// `open` `name`'s `.terminal` launcher — Terminal imports the profile
-/// (a no-op when the name's already imported) and launches a window.
+/// (a no-op when the name's already imported). Its *launch* half is
+/// unreliable on a dormant Terminal — the window can queue
+/// indefinitely or never spawn — so `open_terminal` doesn't rely on
+/// it for the window.
 fn open_launcher(name: &str) -> bool {
     let Some(f) = terminal_file(name) else {
         return false;
@@ -325,23 +417,197 @@ fn open_launcher(name: &str) -> bool {
         .is_ok_and(|s| s.success())
 }
 
+/// `name of every settings set` and `count of windows` from Terminal's
+/// live model — AS sees the model; the plist read lags a running
+/// Terminal's flushes. `([], 0)` when the query fails.
+fn model_state() -> (Vec<String>, usize) {
+    let Ok(out) = Command::new("osascript")
+        .args([
+            "-e",
+            "tell application \"Terminal\"
+               try
+                 set ns to name of every settings set
+               on error
+                 set ns to {}
+               end try
+               get ns & (count of windows)
+             end tell",
+        ])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+    else {
+        return (Vec::new(), 0);
+    };
+    if !out.status.success() {
+        return (Vec::new(), 0);
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut parts: Vec<&str> = text.trim().split(", ").collect();
+    let windows = parts.pop().and_then(|p| p.trim().parse().ok()).unwrap_or(0);
+    (
+        parts.iter().map(|s| s.trim().to_string()).collect(),
+        windows,
+    )
+}
+
+/// A window *now* running the launcher — `open`'s launch half can't be
+/// trusted on a dormant Terminal, so `do script` makes the window
+/// deterministically. It then adopts the imported settings set (the
+/// distro title and close-on-clean-exit): ours is the model entry
+/// absent from `before` — the marker isn't scriptable and the
+/// import's model name is a filename dedup — or, when the profile was
+/// already imported, `known` (the marker-bearing plist key). A miss
+/// just leaves the window default-styled.
+fn launch_window(name: &str, before: &[String], known: &str) -> bool {
+    let Some(script) = script_file(name) else {
+        return false;
+    };
+    let esc = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
+    let before_list = before
+        .iter()
+        .map(|n| format!("\"{}\"", esc(n)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let cmd = alias_launch_path(name).unwrap_or_else(|| format!("'{}'", script.display()));
+    Command::new("osascript")
+        .args([
+            "-e",
+            &format!(
+                "tell application \"Terminal\"
+                   set t to do script \"{}\"
+                   set adopted to false
+                   try
+                     if \"{1}\" is not \"\" then
+                       set current settings of t to settings set \"{1}\"
+                       set adopted to true
+                     end if
+                   end try
+                   repeat 24 times
+                     if adopted then exit repeat
+                     try
+                       repeat with s in settings sets
+                         if (name of s) is not in {{{2}}} then
+                           set current settings of t to s
+                           set adopted to true
+                           exit repeat
+                         end if
+                       end repeat
+                     end try
+                     if not adopted then delay 0.25
+                   end repeat
+                 end tell",
+                esc(&cmd),
+                esc(known),
+                before_list
+            ),
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
 /// `container distro terminal` / `cm --terminal`: refresh the
-/// artifacts and `open` the launcher — the import lands through
-/// Terminal's own model and the window runs `cm -d name`.
+/// artifacts, `open` the launcher to import the profile through
+/// Terminal's own model — then make sure a window actually appeared:
+/// `open`'s launch queues (or drops) on a dormant Terminal, so when
+/// no new window materialized, `do script` spawns one and adopts the
+/// imported settings set.
 pub fn open_terminal(name: &str) -> anyhow::Result<()> {
     if !write_artifacts(name) {
         anyhow::bail!("couldn't write {name}'s launcher files");
     }
-    if !open_launcher(name) {
+    // A parked `.real` means an earlier silent import armed the
+    // self-replacing no-op and its window hasn't flushed yet — the
+    // real script is already back in place (so a window running now
+    // launches the distro, which is what an open wants anyway); drop
+    // the park.
+    if let Some(mut real) = script_file(name) {
+        real.set_extension("sh.real");
+        crate::ops::unlock(&real);
+        let _ = fs::remove_file(real);
+    }
+    // The pre-import model names: AS's live list when Terminal runs,
+    // else the plist the model boots from — the name-diff then finds
+    // exactly the entry the import adds, however Terminal dedupes it.
+    let (before, windows) = if terminal_running() {
+        model_state()
+    } else {
+        (window_settings().into_iter().map(|(k, _)| k).collect(), 0)
+    };
+    let _ = open_launcher(name);
+    for _ in 0..8 {
+        if model_state().1 > windows {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    let known = terminal_owned(name).into_iter().next().unwrap_or_default();
+    if !launch_window(name, &before, &known) {
         anyhow::bail!("couldn't open {name}'s profile in Terminal.app");
     }
     Ok(())
 }
 
+/// `name`'s imported profile as the plist sees it — the marker-bearing
+/// `Window Settings` key and its dict. A stale shape (an older
+/// `CommandString`, missing keys like `noWarnProcesses`) is stale and
+/// gets repaired by re-import.
+fn imported(name: &str) -> Option<(String, plist::Dictionary)> {
+    plist::from_file::<_, plist::Value>(terminal_plist())
+        .ok()?
+        .into_dictionary()?
+        .get(WINDOW_SETTINGS)?
+        .as_dictionary()?
+        .iter()
+        .find(|(_, v)| {
+            v.as_dictionary()
+                .and_then(|p| p.get(MARKER))
+                .and_then(plist::Value::as_string)
+                == Some(name)
+        })
+        .and_then(|(k, v)| v.as_dictionary().map(|d| (k.clone(), d.clone())))
+}
+
+/// Loose plist-value equality — the `defaults` fragment path stores
+/// scalars as strings (`"1"`, `"true"`), so an imported value may be
+/// the string form of what was generated.
+fn plist_eq(a: &plist::Value, b: &plist::Value) -> bool {
+    fn scalar(v: &plist::Value) -> Option<String> {
+        Some(match v {
+            plist::Value::String(s) => s.clone(),
+            plist::Value::Integer(i) => i.to_string(),
+            plist::Value::Real(r) => r.to_string(),
+            plist::Value::Boolean(b) => b.to_string(),
+            _ => return None,
+        })
+    }
+    match (scalar(a), scalar(b)) {
+        (Some(x), Some(y)) => x == y,
+        _ => a == b,
+    }
+}
+
+/// Whether `have` carries every key `want` generates — Terminal only
+/// *adds* keys on import, so a subset match means fresh. The display
+/// keys (`name`, `CustomTitle`) are exempt: a deduped import is
+/// legitimately `NAME 1` while the command and behavior keys still
+/// say ours.
+fn profile_fresh(have: &plist::Dictionary, want: &plist::Dictionary) -> bool {
+    want.iter().all(|(k, v)| {
+        matches!(k.as_str(), "name" | "CustomTitle") || have.get(k).is_some_and(|h| plist_eq(h, v))
+    })
+}
+
 /// Install `name`'s profile into Terminal *without* a window — the
 /// create/`--terminal-profile`/`sync-profiles` path.
 ///
-/// - A marker-bearing profile already imported → nothing to do.
+/// - A marker-bearing profile already imported carrying every key we
+///   generate → nothing to do. An imported-but-stale shape (an older
+///   `CommandString`, a missing `noWarnProcesses`) is removed first so
+///   the import lands fresh — the profile can't be edited in place
+///   behind a running Terminal's back.
 /// - Terminal not running → write `Window Settings` via `defaults`:
 ///   cfprefsd serializes it, and with no live model nothing can flush
 ///   it away — the profile is simply there at Terminal's next launch.
@@ -350,13 +616,19 @@ pub fn open_terminal(name: &str) -> anyhow::Result<()> {
 ///   launcher's script is swapped for a self-replacing no-op —
 ///   `mv -f "$0.real" "$0"` — the real command parked alongside; the
 ///   `.terminal` file opens, Terminal imports *through its model* and
-///   the launched window runs the no-op: it restores the real script
-///   and exits, so `shellExitAction` closes the window at once. Any
-///   later run of the restored script behaves normally — the no-op
-///   can only fire once, during the import.
+///   the launched window runs the no-op: it unflags, swaps, reflags
+///   (artifacts rest `uchg`-locked) and exits, so `shellExitAction`
+///   closes the window at once. Any later run of the restored script
+///   behaves normally — the no-op can only fire once, during the
+///   import.
 pub fn ensure_profile(name: &str) -> bool {
-    if !terminal_owned(name).is_empty() {
-        return true;
+    if let Some((key, dict)) = imported(name) {
+        if let plist::Value::Dictionary(want) = terminal_profile_dict(name, &key)
+            && profile_fresh(&dict, &want)
+        {
+            return true;
+        }
+        terminal_remove(name);
     }
     if !terminal_running() {
         let Some(profile) = pick_profile_name(&window_settings(), name, name) else {
@@ -378,13 +650,21 @@ pub fn ensure_profile(name: &str) -> bool {
     if !write_artifacts(name) || !write_script_at(&real, &script_contents(name)) {
         return false;
     }
-    if !write_script_at(&script, "#!/bin/sh\nmv -f \"$0.real\" \"$0\"\nexit 0\n") {
+    // The artifacts rest `uchg`-locked, so the swap unlocks first and
+    // re-locks after — host-side, where chflags is allowed (a guest
+    // has no flag operations through virtiofs, hence the boundary).
+    if !write_script_at(
+        &script,
+        "#!/bin/sh\n/usr/bin/chflags nouchg \"$0\" \"$0.real\" 2>/dev/null\nmv -f \"$0.real\" \"$0\"\n/usr/bin/chflags uchg \"$0\" 2>/dev/null\nexit 0\n",
+    ) {
+        crate::ops::unlock(&real);
         let _ = fs::remove_file(&real);
         return false;
     }
     if !open_launcher(name) {
         // The import never happened — put the real command back.
         let _ = write_script_at(&script, &script_contents(name));
+        crate::ops::unlock(&real);
         let _ = fs::remove_file(&real);
         return false;
     }
@@ -485,6 +765,7 @@ fn iterm2_profiles() -> Option<Vec<Value>> {
 fn iterm2_write(profiles: Vec<Value>) -> bool {
     let Some(f) = iterm2_file() else { return false };
     if profiles.is_empty() {
+        crate::ops::unlock(&f);
         return fs::remove_file(&f).is_ok() || !f.exists();
     }
     if let Some(parent) = f.parent()
@@ -492,11 +773,18 @@ fn iterm2_write(profiles: Vec<Value>) -> bool {
     {
         return false;
     }
-    fs::write(
+    // `uchg`-locked like the other launch artifacts — the file sits
+    // under a shared-able home and its Command runs on the host.
+    crate::ops::unlock(&f);
+    let ok = fs::write(
         &f,
         serde_json::to_string_pretty(&json!({ "Profiles": profiles })).unwrap(),
     )
-    .is_ok()
+    .is_ok();
+    if ok {
+        crate::ops::lock(&f);
+    }
+    ok
 }
 
 fn iterm2_upsert(name: &str, display: &str) -> bool {
@@ -509,7 +797,7 @@ fn iterm2_upsert(name: &str, display: &str) -> bool {
         "Name": display,
         "Guid": guid,
         "Custom Command": "Yes",
-        "Command": launch_command(name),
+        "Command": iterm2_command(name),
         "Custom Title Modes": ["Profile"],
         "Tags": ["container-distro"],
     }));
@@ -562,9 +850,11 @@ pub fn remove(name: &str) {
         .into_iter()
         .flatten()
     {
+        crate::ops::unlock(&p);
         let _ = fs::remove_file(&p);
         let mut real = p.clone();
         real.set_extension("sh.real");
+        crate::ops::unlock(&real);
         let _ = fs::remove_file(real);
     }
 }
@@ -615,6 +905,7 @@ pub fn reconcile(keep: &BTreeSet<String>) {
             if let Some(stem) = stem
                 && !keep.contains(&stem)
             {
+                crate::ops::unlock(&p);
                 let _ = fs::remove_file(&p);
             }
         }

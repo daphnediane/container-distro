@@ -276,6 +276,15 @@ answer was to take the files out of reach rather than move them:
   shared copies (per-user `sbin.distro*/` or the plugin-dir installs),
   which get the old upgrade-and-lock or warn-on-drift treatment until a
   `set`/recreate moves them onto per-distro assets.
+- The terminal-profile launchers get the same treatment — they run on
+  the *host* under the user's session, so a guest that could rewrite
+  them through a shared home would own the next profile launch.
+  `uchg` covers `terminal-profiles/*.terminal`,
+  `terminal-cmds/*.sh[.real]`, the iTerm2 dynamic-profile file, and
+  the `~/.container-distro` alias symlink (via `chflags -h` —
+  `chflags(2)` follows links, so flagging the link naively locks the
+  state dir instead). The silent-import no-op swap unlocks and
+  re-locks inside the script — host-side, where flags are allowed.
 
 The pre-journal world gets exactly one trusted upgrade: a
 `journalized` marker (itself `uchg`-locked, so unforgeable) gates a

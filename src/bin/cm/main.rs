@@ -496,9 +496,12 @@ fn install(opts: &InstallOpts) -> Result<ExitCode> {
         ignore_wsl_conf: opts.ignore_wsl_conf.clone(),
         force: opts.force,
         // `--terminal` opens the distro's profile — the same explicit
-        // opt-in `--terminal-profile` pins.
+        // opt-in `--terminal-profile` pins. Its open is the import, so
+        // create skips the silent no-op import (`will_open_terminal`)
+        // and the window launches the distro itself.
         terminal_profile: opts.terminal_profile || opts.terminal,
         no_terminal_profile: opts.no_terminal_profile,
+        will_open_terminal: opts.terminal,
         ..CreateOptions::default()
     };
     if let InstallSource::File(file) = &opts.source {
@@ -672,8 +675,10 @@ fn import(
                 arch,
                 force,
                 // `--terminal` opens the profile — the same explicit
-                // opt-in `--terminal-profile` pins.
+                // opt-in `--terminal-profile` pins; its open is the
+                // import, so skip the silent no-op import.
                 terminal_profile: terminal,
+                will_open_terminal: terminal,
                 ..CreateOptions::default()
             },
             distro::ImportSource::Local,
