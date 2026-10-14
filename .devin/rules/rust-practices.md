@@ -36,6 +36,14 @@ globs: **/*.rs,**/Cargo.toml
 - Re-export public items from `mod.rs` for clean external API
 - Group `use` statements: std, external crates, crate-internal
 
+## Running binaries
+
+- Run `cargo run --bin cm -- <args>` / `cargo run --bin
+  container-distro -- <args>` when exercising a binary, not
+  `./target/debug/<bin>`. `cargo run` rebuilds as needed; invoking the
+  binary directly silently uses whatever was last compiled, which is
+  stale when only `check`/`clippy`/`test --lib` ran since the edits.
+
 ## Testing
 
 - Every data module must have `#[cfg(test)] mod tests` block

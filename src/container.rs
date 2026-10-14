@@ -627,7 +627,37 @@ pub fn machine_exec_command(
             }
         }
     }
+    // `~`/`~/x` name the effective user's guest home — same rules as
+    // the distro path: the provisioned user's and root's are known,
+    // anything else is looked up in the guest's /etc/passwd (the
+    // backing container is running when this path is taken).
     let workdir = match cd {
+        Some(d) if d == "~" || d.starts_with("~/") => {
+            let provisioned_home = || {
+                detail
+                    .user_setup
+                    .as_ref()
+                    .map(|u| format!("/home/{}", u.username))
+            };
+            let h = match user.map(|u| u.split(':').next().unwrap_or(u)) {
+                Some("root") => Some("/root".into()),
+                Some(u) => Some(guest_passwd_home(cid, u).unwrap_or_else(
+                    || match u.parse::<u32>() {
+                        Ok(0) => "/root".into(),
+                        Ok(uid) if detail.user_setup.as_ref().is_some_and(|s| s.uid == uid) => {
+                            provisioned_home().unwrap_or_else(|| "/".into())
+                        }
+                        Ok(_) => "/".into(),
+                        Err(_) => format!("/home/{u}"),
+                    },
+                )),
+                None => provisioned_home(),
+            };
+            h.map(|h| match d.strip_prefix("~/") {
+                Some(rest) => format!("{}/{rest}", h.trim_end_matches('/')),
+                None => h,
+            })
+        }
         Some(d) => Some(d.to_string()),
         None => machine_workdir(detail, cwd, host_home),
     };
@@ -642,6 +672,41 @@ pub fn machine_exec_command(
     }
     cmd.arg(cid).args(command);
     Some(cmd)
+}
+
+/// `~USER`'s home inside a running container, from the sixth
+/// `/etc/passwd` field — matching a name or a numeric uid. `getent`
+/// is tried first (a distro may source users from NSS — LDAP, SSSD —
+/// rather than the file); the `cat` fallback covers getent-less
+/// images and users it somehow misses. `$1` keeps the name out of
+/// the shell line. Queried live — a cached copy could go stale.
+pub fn guest_passwd_home(id: &str, user: &str) -> Option<String> {
+    let out = container_cmd()
+        .args([
+            "exec",
+            id,
+            "sh",
+            "-c",
+            "getent passwd \"$1\" 2>/dev/null || cat /etc/passwd",
+            "sh",
+            user,
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8(out.stdout).ok()?;
+    let uid = user.parse::<u32>().ok();
+    text.lines().find_map(|l| {
+        let f: Vec<&str> = l.split(':').collect();
+        if f.len() >= 6 && (f[0] == user || uid.is_some() && uid == f[2].parse().ok()) {
+            Some(f[5].to_string())
+        } else {
+            None
+        }
+    })
 }
 
 /// Quote `arg` for a POSIX shell: wrap in single quotes, escaping embedded

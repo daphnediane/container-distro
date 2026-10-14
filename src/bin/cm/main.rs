@@ -91,6 +91,7 @@ fn run(args: Args) -> Result<ExitCode> {
             backend,
             arch,
             force,
+            terminal,
         } => import(
             &name,
             install_location.as_deref(),
@@ -98,6 +99,7 @@ fn run(args: Args) -> Result<ExitCode> {
             backend,
             arch,
             force,
+            terminal,
         ),
         Action::Rename {
             old,
@@ -143,6 +145,14 @@ fn named_target(name: &str, sel: Backend) -> Result<Target> {
 /// Replace this process with the machine's or distro's command, for TTY
 /// passthrough.
 fn run_in_target(args: &Args) -> Result<ExitCode> {
+    if args.terminal {
+        // Open the distro in Terminal.app via its `.terminal`
+        // launcher — the profile's `cm -d NAME` runs in the new window.
+        return match target(args.distribution.as_deref(), args.backend())? {
+            Target::Distro(d) => distro::open_terminal(&d).map(|()| ExitCode::SUCCESS),
+            Target::Machine(_) => bail!("--terminal opens distros; machines have no profile"),
+        };
+    }
     if let Some(u) = args.user.as_deref() {
         container::validate_user(u)?;
     }
@@ -485,6 +495,10 @@ fn install(opts: &InstallOpts) -> Result<ExitCode> {
         no_wsl_conf: opts.no_wsl_conf,
         ignore_wsl_conf: opts.ignore_wsl_conf.clone(),
         force: opts.force,
+        // `--terminal` opens the distro's profile — the same explicit
+        // opt-in `--terminal-profile` pins.
+        terminal_profile: opts.terminal_profile || opts.terminal,
+        no_terminal_profile: opts.no_terminal_profile,
         ..CreateOptions::default()
     };
     if let InstallSource::File(file) = &opts.source {
@@ -513,11 +527,7 @@ fn install(opts: &InstallOpts) -> Result<ExitCode> {
             if opts.no_launch {
                 return Ok(ExitCode::SUCCESS);
             }
-            let mut cmd = distro::run_command(RunOpts {
-                name: Some(name),
-                ..RunOpts::default()
-            })?;
-            return Err(anyhow::Error::from(cmd.exec()).context("failed to exec `container exec`"));
+            return launch(&name, opts.terminal);
         }
     };
     if !opts.wants_machine() {
@@ -538,11 +548,7 @@ fn install(opts: &InstallOpts) -> Result<ExitCode> {
         if opts.no_launch {
             return Ok(ExitCode::SUCCESS);
         }
-        let mut cmd = distro::run_command(RunOpts {
-            name: Some(name),
-            ..RunOpts::default()
-        })?;
-        return Err(anyhow::Error::from(cmd.exec()).context("failed to exec `container exec`"));
+        return launch(&name, opts.terminal);
     }
 
     // --name is used verbatim; otherwise a catalog install takes the
@@ -589,6 +595,9 @@ fn install_from_file(
     }
     // --name is used verbatim; a derived name (the .wsl manifest's
     // oobe.defaultName, else the file stem) is sanitized to a valid one.
+    // `create` already pins terminal_profile when `--terminal` asked
+    // to open the profile — the explicit opt-in `--terminal-profile`
+    // would write.
     let name = catalog_ops::import_file(
         file,
         opts.name.clone(),
@@ -600,8 +609,18 @@ fn install_from_file(
     if opts.no_launch {
         return Ok(ExitCode::SUCCESS);
     }
+    launch(&name, opts.terminal)
+}
+
+/// Open a distro after create/import — `cm -d NAME`'s login shell
+/// exec'd into this console, or (`--terminal`) a Terminal.app window
+/// via the distro's `.terminal` profile.
+fn launch(name: &str, terminal_window: bool) -> Result<ExitCode> {
+    if terminal_window {
+        return distro::open_terminal(name).map(|()| ExitCode::SUCCESS);
+    }
     let mut cmd = distro::run_command(RunOpts {
-        name: Some(name),
+        name: Some(name.to_string()),
         ..RunOpts::default()
     })?;
     Err(anyhow::Error::from(cmd.exec()).context("failed to exec `container exec`"))
@@ -629,6 +648,7 @@ fn import(
     sel: Backend,
     arch: Option<Arch>,
     force: bool,
+    terminal: bool,
 ) -> Result<ExitCode> {
     container::validate_name(name)?;
     if let Some(loc) = install_location.filter(|l| !l.is_empty() && *l != "-") {
@@ -651,12 +671,18 @@ fn import(
             &CreateOptions {
                 arch,
                 force,
+                // `--terminal` opens the profile — the same explicit
+                // opt-in `--terminal-profile` pins.
+                terminal_profile: terminal,
                 ..CreateOptions::default()
             },
             distro::ImportSource::Local,
             &Intent::default(),
             None,
         )?;
+        if terminal {
+            distro::open_terminal(name)?;
+        }
     }
     Ok(ExitCode::SUCCESS)
 }

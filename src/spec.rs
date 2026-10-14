@@ -219,6 +219,13 @@ pub struct Intent {
     /// preset moves; `Only` is frozen at write time.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wsl_conf: Option<WslConfMode>,
+    /// Generate host terminal profiles (the Terminal.app settings set
+    /// and iTerm2 dynamic profile). `source` records a package's
+    /// `windowsterminal.enabled` ask; `explicit` records
+    /// `--terminal-profile`/`--no-terminal-profile`. Absent inherits —
+    /// the built-in default is `true` (WSL's own default).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terminal_profile: Option<bool>,
 }
 
 impl Intent {
@@ -255,6 +262,8 @@ pub enum ResetTarget {
     Network,
     /// Un-pin the honored /etc/wsl.conf feature set
     WslConf,
+    /// Un-pin terminal-profile generation
+    TerminalProfile,
     /// Un-pin the CPU count (back to the host-derived default)
     Cpus,
     /// Un-pin the memory size (back to the host-derived default)
@@ -1302,6 +1311,9 @@ pub struct ResolvedSpec {
     /// Which `/etc/wsl.conf` features the distro honors — empty means
     /// init never opens the file and no snapshot lands in the journal.
     pub wsl_conf: WslConf,
+    /// Generate the host terminal profiles (`explicit` > `source`'s
+    /// `windowsterminal.enabled` > `true`).
+    pub terminal_profile: bool,
 }
 
 impl ResolvedSpec {
@@ -1985,6 +1997,14 @@ impl DistroSpec {
             .clone()
             .or_else(|| self.source.memory.clone());
 
+        // Host-side preference writes aren't a guest privilege, so the
+        // preset doesn't gate them: flag > package ask > on.
+        let terminal_profile = self
+            .explicit
+            .terminal_profile
+            .or(self.source.terminal_profile)
+            .unwrap_or(true);
+
         (
             ResolvedSpec {
                 name: self.name.clone(),
@@ -2003,6 +2023,7 @@ impl DistroSpec {
                 ssh,
                 admin,
                 wsl_conf,
+                terminal_profile,
             },
             warnings,
         )
@@ -2299,6 +2320,10 @@ pub struct SpecChanges {
     pub ssh: Option<bool>,
     /// Turn privilege (sudo/doas) provisioning on or off.
     pub admin: Option<bool>,
+    /// Turn terminal-profile generation on or off — an explicit
+    /// `--terminal-profile` also re-arms a profile the user deleted
+    /// by hand.
+    pub terminal_profile: Option<bool>,
     /// The `--use-wsl-conf` operand — a feature list that may carry
     /// `all`/`none` (bare `--use-wsl-conf` is `all`; `--no-wsl-conf`
     /// arrives here as `none`).
@@ -2365,6 +2390,7 @@ impl SpecChanges {
                 ResetTarget::Sudo => s.explicit.admin = None,
                 ResetTarget::Network => s.explicit.network = None,
                 ResetTarget::WslConf => s.explicit.wsl_conf = None,
+                ResetTarget::TerminalProfile => s.explicit.terminal_profile = None,
                 ResetTarget::Cpus => s.explicit.cpus = None,
                 ResetTarget::Memory => s.explicit.memory = None,
                 ResetTarget::Mounts => s.mounts.clear(),
@@ -2397,6 +2423,9 @@ impl SpecChanges {
             // An explicit `--sudo`/`--no-sudo` is a fresh decision, so
             // the grant env follows it.
             s.admin_grant = v;
+        }
+        if let Some(v) = self.terminal_profile {
+            s.explicit.terminal_profile = Some(v);
         }
         // `--use`/`--ignore` fold into the stored mode expression —
         // `all`/`none` switch it, named features accumulate (use

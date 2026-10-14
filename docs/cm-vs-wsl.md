@@ -135,10 +135,26 @@ shell.
   systemd/`boot.openrc` init selection, gated `[boot] command`) behind
   `--use-wsl-conf`; machines don't -- see
   [design/notes/configuration-files.md] for the per-key matrix.
+- Installing a distro generates **terminal profiles** — the
+  macOS-native equivalent of a `.wsl` package's `windowsterminal`
+  metadata (which Windows Terminal reads): a `.terminal` launcher file
+  plus an iTerm2 dynamic profile when installed, launching
+  `cm -d NAME`. On by default; a package's
+  `windowsterminal.enabled = false` opts out, and
+  `cm --install --terminal-profile`/`--no-terminal-profile` (or
+  `container distro set`) pins the answer. `cm --terminal` (or
+  `container distro terminal NAME`) opens the distro in a Terminal.app
+  window via that launcher — Terminal windows close themselves when
+  the guest shell exits cleanly. Profiles import at generation time
+  (silently when Terminal isn't running, via a momentary self-closing
+  window when it is); deleting one in Terminal's settings is honored
+  by routine refreshes, while `sync-profiles` re-imports by design.
+  Machines never get profiles. Details: [container-distro.md].
 
 [#27]: https://github.com/daphnediane/container-distro/issues/27
 [apple/container#1954]: https://github.com/apple/container/issues/1954
 [cm.md]: cm.md
+[container-distro.md]: container-distro.md
 [design/notes/]: design/notes/
 [design/notes/configuration-files.md]: design/notes/configuration-files.md
 [design/notes/gui-apps.md]: design/notes/gui-apps.md

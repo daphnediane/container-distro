@@ -347,6 +347,8 @@ fn run(cli: Cli) -> Result<()> {
             rm_volumes,
             publish,
             unpublish,
+            terminal_profile,
+            no_terminal_profile,
         } => ops::set(
             &name,
             &SpecChanges {
@@ -383,8 +385,17 @@ fn run(cli: Cli) -> Result<()> {
                 remove_mounts: rm_volumes,
                 add_publish: publish,
                 remove_publish: unpublish,
+                terminal_profile: if terminal_profile {
+                    Some(true)
+                } else if no_terminal_profile {
+                    Some(false)
+                } else {
+                    None
+                },
             },
         )?,
+        Command::SyncProfiles => ops::sync_profiles()?,
+        Command::Terminal { name } => ops::open_terminal(&name)?,
         Command::SetDefault { name, .. } => ops::set_default(name.as_deref())?,
         Command::Export { name, output } => ops::export(&name, output.as_deref())?,
         Command::Import { name, file, opts } => {

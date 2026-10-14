@@ -55,12 +55,21 @@ even when a same-named distro exists.
 | -------------------- | ------------------------------------------------------------- |
 | `-d, --distribution` | Machine or distro to use (default if omitted)                 |
 | `-u, --user`         | Run as the specified user (name, not uid)                     |
-| `--cd`               | Working directory inside the guest                            |
+| `--cd`               | Working directory inside the guest (`~`/`~/x` = guest home)   |
 | `--shell-type`       | `standard` (non-login), `login` (default), `none`             |
 | `-e, --exec`         | Execute the rest of the line without a shell (exact argv)     |
 | `-- <cmd>`           | Run the remaining command line via the guest shell            |
 | bare positional args | Same as `--`: run through the guest shell                     |
 | `--env KEY=VALUE`    | Set an env var in the guest (`KEY` alone inherits the host's) |
+| `--terminal`         | Open the distro in a Terminal.app window instead              |
+
+`--terminal` opens the distro's `.terminal` launcher — Terminal
+imports the profile (first time only) and runs `cm -d NAME` in a new
+window, so it's distro-only and the run-shaping flags don't apply
+(`--user`, `--cd`, `--shell-type`, `--env`, `-e`, a command line).
+On `--install`/`--import` it replaces the console launch entirely.
+Asking to open is an opt-in — it pins `--terminal-profile` on the
+distro's journal.
 
 `--shell-type none` requires a command (it's the exec mode implied by
 `-e`); `--shell-type standard`/`login` choose the interactive shell.
@@ -165,10 +174,11 @@ pkg) is the same update as a script.
 ## Installing (`--install`)
 
 ```text
-cm --install [DISTRO|IMAGE] [--name NAME] [--no-launch]
+cm --install [DISTRO|IMAGE] [--name NAME] [--no-launch] [--terminal]
                   [--arch arm64|amd64]
                   [--cpus N] [--memory SIZE] [--home-mount rw|ro|none]
                   [--preset default|restricted|trusted] [--ssh|--no-ssh]
+                  [--terminal-profile|--no-terminal-profile]
                   [--machine] [--restricted|--trusted] [--force]
                   [--share SRC:DST[:opt,...]]... [--publish SPEC]...
 cm --install --from-image IMAGE ...
@@ -290,6 +300,24 @@ every boot (upstream has no opt-out), so `--machine` itself is the
 opt-in: an install whose resolved agent setting is off just warns, and
 only an explicit `--no-ssh` pin is refused — `--ssh`, `--trusted`, or
 `--home-mount rw` all count as opting in.
+
+`--install` (and `container distro create`/`import`) generates
+**terminal profiles** for the distro — WSL's `windowsterminal` metadata
+made macOS-native: a `.terminal` launcher file plus, when iTerm2 is
+installed, a dynamic profile, both launching `cm -d NAME`. Generation is
+on by default and yields to a package opt-out (a `.wsl` whose
+`wsl-distribution.conf` sets `windowsterminal.enabled = false`);
+`--terminal-profile`/`--no-terminal-profile` pin the answer explicitly
+on the distro's journal (`--terminal-profile` is distro-only — machines
+never get profiles; `--no-terminal-profile` is a harmless no-op there).
+The Terminal profile is imported at generation time — silently into
+prefs when Terminal isn't running, or via a momentary self-closing
+window when it is — and `cm --terminal` (with `-d`, the default distro,
+or on `--install`/`--import` in place of the console launch) opens a
+window from it, as does `container distro terminal NAME`. Deleting the
+imported profile in Terminal's settings is honored by routine
+refreshes; `sync-profiles` and `set --terminal-profile` re-import it
+(that's their convergent job). See container-distro.md.
 
 `--trusted` is the mirror preset of `--restricted`: rw home, rw
 `/Volumes` automount, and the SSH agent — for images you'd give your

@@ -266,7 +266,25 @@ pub enum Command {
         /// Stop publishing HOST_PORT
         #[arg(long = "unpublish", value_name = "HOST_PORT")]
         unpublish: Vec<u16>,
+        /// Generate the terminal-profile launchers (the `.terminal`
+        /// file and iTerm2 dynamic profile) — open the distro in
+        /// Terminal with `container distro terminal NAME`
+        #[arg(long, conflicts_with = "no_terminal_profile")]
+        terminal_profile: bool,
+        /// Don't generate terminal profiles for this distro
+        #[arg(long)]
+        no_terminal_profile: bool,
     },
+
+    /// Regenerate the `.terminal` launchers and iTerm2 dynamic
+    /// profiles for every distro — repairs files missing after an
+    /// upgrade or cleanup, honoring recorded opt-outs, and prunes
+    /// artifacts for distros that no longer exist
+    SyncProfiles,
+
+    /// Open a distro in Terminal.app — imports/updates its profile
+    /// and launches a window (`cm --terminal` does the same)
+    Terminal { name: String },
 
     /// Set (or with --clear, unset) the default distro
     SetDefault {

@@ -84,6 +84,16 @@ pub struct InstallOpts {
     pub force: bool,
     pub shares: Vec<MountSpec>,
     pub publish: Vec<PublishSpec>,
+    /// Pin terminal-profile generation on (`--terminal-profile`) —
+    /// distro-only.
+    pub terminal_profile: bool,
+    /// Pin it off (`--no-terminal-profile`); trivially satisfied by a
+    /// machine, which never gets profiles.
+    pub no_terminal_profile: bool,
+    /// `--terminal`: open the new distro in Terminal.app instead of
+    /// exec'ing a shell into the current console — also acts as an
+    /// explicit `--terminal-profile` opt-in.
+    pub terminal: bool,
 }
 
 impl InstallOpts {
@@ -394,6 +404,31 @@ pub struct Args {
     )]
     pub ignore_wsl_conf: Option<ConfList>,
 
+    /// Generate macOS terminal profiles (Terminal.app + iTerm2) for the
+    /// distro --install creates — the default, unless the package opts
+    /// out. A machine can't honor the opt-in
+    #[arg(
+        long = "terminal-profile",
+        requires = "install",
+        conflicts_with_all = ["machine", "no_terminal_profile"]
+    )]
+    pub terminal_profile: bool,
+
+    /// Don't generate terminal profiles for what --install creates
+    /// (a no-op with --machine: machines never get profiles)
+    #[arg(long = "no-terminal-profile", requires = "install")]
+    pub no_terminal_profile: bool,
+
+    /// Open the distro in a Terminal.app window via its generated
+    /// `.terminal` profile — `cm -d NAME --terminal`, and with
+    /// --install/--import it replaces the console launch. Acts as an
+    /// explicit `--terminal-profile` opt-in (journaled)
+    #[arg(
+        long,
+        conflicts_with_all = ["machine", "exec", "no_launch", "command", "no_terminal_profile"]
+    )]
+    pub terminal: bool,
+
     /// Share a host directory into a distro created by --install:
     /// SRC:DST[:opt,...] — ro, rw, and guest mount flags like
     /// nosuid,nodev,noexec (repeatable; implies --distro)
@@ -540,6 +575,9 @@ pub enum Action {
         backend: Backend,
         arch: Option<Arch>,
         force: bool,
+        /// `--terminal`: open the new distro in Terminal.app after
+        /// registering instead of leaving it stopped.
+        terminal: bool,
     },
     /// Rename a distro or machine to a fresh name — the machine form
     /// recreates it under the new name, carrying its filesystem.
@@ -682,6 +720,9 @@ impl Args {
                 force: self.force,
                 shares: self.shares.clone(),
                 publish: self.publish.clone(),
+                terminal_profile: self.terminal_profile,
+                no_terminal_profile: self.no_terminal_profile,
+                terminal: self.terminal,
             })
         } else if let Some(e) = &self.export {
             Action::Export {
@@ -698,6 +739,7 @@ impl Args {
                 backend: self.backend(),
                 arch: self.arch,
                 force: self.force,
+                terminal: self.terminal,
             }
         } else if let Some(r) = &self.rename {
             Action::Rename {
@@ -733,6 +775,16 @@ impl Args {
         } else {
             return self.validate_run();
         };
+        // `--terminal` opens a distro's `.terminal` profile — it only
+        // has meaning where a distro is opened or created.
+        if self.terminal
+            && !matches!(
+                action,
+                Action::Run | Action::Install(_) | Action::Import { .. }
+            )
+        {
+            bail!("--terminal only applies to opening a distro — plain, --install, or --import");
+        }
         self.check_no_run_args()?;
         self.check_selector(&action)?;
         Ok(action)
@@ -806,6 +858,19 @@ impl Args {
     }
 
     fn validate_run(&self) -> Result<Action> {
+        // The launcher runs `cm -d NAME` — session-shaping flags the
+        // profile can't carry are rejected rather than ignored
+        // (`--exec`/`--no-launch`/a command line conflict at parse).
+        if self.terminal
+            && (self.user.is_some()
+                || self.cd.is_some()
+                || self.shell_type.is_some()
+                || !self.env.is_empty())
+        {
+            bail!(
+                "--terminal launches the distro's profile; --user, --cd, --shell-type, and --env don't apply"
+            );
+        }
         if self.command.is_empty() {
             if self.exec {
                 bail!("--exec requires a command line");
@@ -963,6 +1028,9 @@ mod tests {
                 no_ssh: false,
                 shares: vec![],
                 publish: vec![],
+                terminal_profile: false,
+                no_terminal_profile: false,
+                terminal: false,
             })
         );
     }
@@ -1280,6 +1348,7 @@ mod tests {
                 backend: Backend::Auto,
                 force: false,
                 arch: None,
+                terminal: false,
             }
         );
         // Two values omit the ignored location.
@@ -1293,6 +1362,7 @@ mod tests {
                 backend: Backend::Auto,
                 force: false,
                 arch: None,
+                terminal: false,
             }
         );
         // `--distro` selects the distro import (the default anyway); `-`
@@ -1307,6 +1377,7 @@ mod tests {
                 backend: Backend::Distro,
                 force: false,
                 arch: None,
+                terminal: false,
             }
         );
         // `--machine` selects the machine import.
@@ -1320,6 +1391,7 @@ mod tests {
                 backend: Backend::Machine,
                 force: false,
                 arch: None,
+                terminal: false,
             }
         );
         assert!(parse(&["cm", "--import", "u1"]).is_err());

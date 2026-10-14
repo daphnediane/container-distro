@@ -28,6 +28,52 @@ docs/design/release.md.
   distros to that arch; `cm -l -o --arch ARCH` and
   `container distro catalog list --arch ARCH` render the catalog for
   that arch (status columns match against the selected arch's source).
+- **`cm --terminal` and `container distro terminal NAME`**: open a
+  distro in Terminal.app — its `.terminal` profile imports into
+  Terminal's settings and a window launches into `cm -d NAME`. On
+  `cm --install`/`--import`, `--terminal` replaces the console launch,
+  and either command journals an explicit `--terminal-profile` opt-in
+  so `sync-profiles` keeps the profile rather than pruning it.
+- **`container distro sync-profiles`**: regenerates the
+  terminal-profile artifacts for every journaled distro — repairs
+  files missing after an upgrade or cleanup, honors recorded opt-outs,
+  and prunes artifacts (and marker-bearing imported profiles) for
+  distros that no longer exist.
+- **Terminal-profile intent flags**: `--terminal-profile` /
+  `--no-terminal-profile` on `create`/`import`/`cm --install`/`set`
+  pin generation (a pin beats the package's `windowsterminal.enabled`
+  source intent); `set --reset terminal-profile` un-pins back to
+  derived, re-arming generation when resolution returns to enabled.
+
+### Changed
+
+- **Terminal.app profiles are launcher files.** Instead of writing
+  Terminal's plist, each distro gets `terminal-profiles/NAME.terminal`
+  plus a `terminal-cmds/NAME.sh` script under `~/Library/Application
+  Support/container-distro/`. Opening the file imports the settings
+  set through Terminal itself — into its live model, so a running
+  Terminal's next prefs flush can no longer silently drop a profile —
+  and the file doubles as a double-clickable launcher. Imported
+  profiles run the script (`cm --cd ~ -d NAME`), so command updates
+  never need a re-import, and `shellExitAction` closes the window on a
+  clean exit while a failed launch stays visible. iTerm2 dynamic
+  profiles run the same script. A same-named foreign profile is never
+  overwritten — Terminal imports ours as `NAME 1` — and a profile you
+  delete in Terminal's prefs stays deleted until `set
+  --terminal-profile`, `distro terminal`, or `sync-profiles`
+  explicitly re-imports it.
+- **`cm --cd ~` follows the effective user.** `~`/`~/…` now expand to
+  the `-u` user's guest home — root → `/root`, a named user → its home
+  resolved live in the guest via `getent passwd` (NSS-aware, with an
+  `/etc/passwd` fallback in the same exec), an unmatched numeric uid →
+  `/`; no `-u` keeps the provisioned user. Machine `container exec`
+  resolves the same way.
+
+### Fixed
+
+- `cm --unregister`/`distro delete` no longer print a stray "Can't get
+  settings set" AppleScript error for distros with no Terminal
+  profile — removal only touches settings sets carrying our marker.
 
 ## 0.7.0 -- 2026-10-13
 

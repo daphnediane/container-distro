@@ -269,8 +269,14 @@ pub struct CreateOptions {
     #[arg(long)]
     pub force: bool,
 
-    /// Don't generate macOS terminal profiles (Terminal.app settings
-    /// set + iTerm2 dynamic profile) for the new distro
+    /// Generate macOS terminal profiles (the `.terminal` launcher +
+    /// iTerm2 dynamic profile) for the new distro — the default, unless
+    /// the package opts out (`windowsterminal.enabled = false`). On
+    /// `set`, refreshes the launcher; open it to re-import
+    #[arg(long, conflicts_with = "no_terminal_profile")]
+    pub terminal_profile: bool,
+
+    /// Don't generate macOS terminal profiles for the new distro
     #[arg(long)]
     pub no_terminal_profile: bool,
 }
@@ -783,6 +789,7 @@ fn create_intent(opts: &CreateOptions) -> Intent {
         cpus: opts.cpus,
         memory: opts.memory.clone(),
         wsl_conf: mode_from_flags(use_conf.as_ref(), opts.ignore_wsl_conf.as_ref(), None),
+        terminal_profile: flag_pair(opts.terminal_profile, opts.no_terminal_profile),
     }
 }
 
@@ -858,6 +865,7 @@ impl CreateOptions {
                 .clone()
                 .or_else(|| self.no_wsl_conf.then(ConfList::none)),
             wsl_conf_ignore: self.ignore_wsl_conf.clone(),
+            terminal_profile: flag_pair(self.terminal_profile, self.no_terminal_profile),
             ..SpecChanges::default()
         }
     }
@@ -999,17 +1007,6 @@ fn no_default(
 }
 
 fn create_from_spec(spec: &DistroSpec, opts: &CreateOptions) -> Result<String> {
-    create_from_spec_with_conf(spec, opts, None)
-}
-
-/// [`create_from_spec`] plus `conf` — the packaged
-/// `wsl-distribution.conf` text an archive import already scanned —
-/// for terminal-profile metadata.
-fn create_from_spec_with_conf(
-    spec: &DistroSpec,
-    opts: &CreateOptions,
-    conf: Option<&str>,
-) -> Result<String> {
     check_sources(spec)?;
     container::warn_unverified_version();
     ensure_state()?;
@@ -1066,8 +1063,10 @@ fn create_from_spec_with_conf(
     if set_default {
         write_default(Some(&spec.name))?;
     }
-    if !opts.no_terminal_profile {
-        terminal::sync(&spec.name, conf);
+    let profiles = spec.resolve().0.terminal_profile;
+    terminal::sync(&spec.name, profiles);
+    if profiles {
+        let _ = terminal::ensure_profile(&spec.name);
     }
     Ok(spec.name.clone())
 }
@@ -1576,9 +1575,39 @@ pub fn run_command(o: RunOpts) -> Result<Command> {
             cmd.arg("--env").arg(format!("{k}={v}"));
         }
     }
-    let workdir = o
-        .workdir
-        .unwrap_or_else(|| default_workdir(&spec.resolve().0, &home));
+    let r = spec.resolve().0;
+    // `~`/`~/x` name the *effective* user's guest home: the default
+    // user's and root's (`/root`) are known without asking, anything
+    // else is looked up in the guest's /etc/passwd — `www`'s home is
+    // `/etc/www`, not `/home/www` — with conventional fallbacks if the
+    // lookup can't run.
+    let workdir = match o.workdir.as_deref() {
+        Some(w) if w == "~" || w.starts_with("~/") => {
+            let u = o.user.as_deref().map(|u| u.split(':').next().unwrap_or(u));
+            let h = if o.root {
+                "/root".to_string()
+            } else {
+                match u {
+                    Some("root") => "/root".into(),
+                    Some(u) => container::guest_passwd_home(info.id(), u).unwrap_or_else(|| {
+                        match u.parse::<u32>() {
+                            Ok(0) => "/root".into(),
+                            Ok(uid) if uid == me.uid => r.user.guest_home(),
+                            Ok(_) => "/".into(),
+                            Err(_) => format!("/home/{u}"),
+                        }
+                    }),
+                    None => r.user.guest_home(),
+                }
+            };
+            match w.strip_prefix("~/") {
+                Some(rest) => format!("{}/{rest}", h.trim_end_matches('/')),
+                None => h,
+            }
+        }
+        Some(w) => w.to_string(),
+        None => default_workdir(&r, &home),
+    };
     cmd.args(["--workdir", &workdir]);
     if let Ok(term) = env::var("TERM") {
         cmd.arg("--env").arg(format!("TERM={term}"));
@@ -2665,6 +2694,18 @@ pub fn set(name: &str, changes: &SpecChanges) -> Result<()> {
         let _ = write_conf_snapshots(name, None, None);
     }
     lock.write_spec(&new)?;
+    // Profile intent is journaled too — resync when the resolved value
+    // moved (a flag, a `--reset`, a tier change unpinning it) or a flag
+    // was passed at all.
+    let enabled = new.resolve().0.terminal_profile;
+    if enabled != old.resolve().0.terminal_profile || changes.terminal_profile.is_some() {
+        terminal::sync(name, enabled);
+        // An explicit opt-in (or a resolution flip to enabled) imports
+        // the profile — silently where that's safe.
+        if enabled {
+            let _ = terminal::ensure_profile(name);
+        }
+    }
     if was_running {
         let id = materialize(name, &new, &lock)?;
         boot(name, &id, &lock)?;
@@ -2682,6 +2723,53 @@ pub fn set_default(name: Option<&str>) -> Result<()> {
     }
     write_default(name)?;
     Ok(())
+}
+
+/// `container distro sync-profiles`: converge every journaled distro's
+/// terminal-profile artifacts to its recorded intent — the upgrade/
+/// repair path for launchers never generated (created before the
+/// feature existed) or lost — and sweep `.terminal` files and
+/// imported Terminal profiles whose distro is gone.
+pub fn sync_profiles() -> Result<()> {
+    ensure_state()?;
+    let mut names = std::collections::BTreeSet::new();
+    for name in journal_names()? {
+        names.insert(name.clone());
+        match read_journal(&name) {
+            Ok(spec) => {
+                let enabled = spec.resolve().0.terminal_profile;
+                terminal::sync(&name, enabled);
+                if enabled {
+                    let _ = terminal::ensure_profile(&name);
+                }
+            }
+            Err(e) => {
+                eprintln!("container-distro: couldn't read `{name}`'s journal: {e:#}");
+            }
+        }
+    }
+    terminal::reconcile(&names);
+    Ok(())
+}
+
+/// `container distro terminal` / `cm --terminal`: open the distro in
+/// a Terminal.app window via its `.terminal` launcher — `open`
+/// imports the profile and launches it. Asking to open is an explicit
+/// opt-in, so `terminal_profile` is pinned like `set
+/// --terminal-profile` would: a later `sync-profiles` converges the
+/// artifacts rather than sweeping a profile the user just opened.
+pub fn open_terminal(name: &str) -> Result<()> {
+    ensure_state()?;
+    ensure_journal(name)?;
+    let mut lock = DistroLock::acquire(name)?;
+    let mut spec = lock.spec()?;
+    if spec.explicit.terminal_profile != Some(true) {
+        spec.explicit.terminal_profile = Some(true);
+        lock.write_spec(&spec)?;
+        terminal::sync(name, spec.resolve().0.terminal_profile);
+    }
+    drop(lock);
+    terminal::open_terminal(name)
 }
 
 /// `container export` deletes an existing output directory
@@ -3021,6 +3109,15 @@ pub fn import(
     if matches!(source, ImportSource::Download { .. }) {
         requested.wsl_conf = Some(WslConfMode::all());
     }
+    // `[windowsterminal] enabled` is the package's host-profile ask —
+    // source intent, so an explicit --terminal-profile still wins.
+    if let Some(v) = pkg
+        .as_ref()
+        .and_then(|p| p.distribution_conf.as_deref())
+        .and_then(terminal::conf_terminal_profile)
+    {
+        requested.terminal_profile = Some(v);
+    }
     let mut spec = build_spec(name.to_string(), reference, opts, &requested)?;
     // `[automount] enabled=false` lowers the sharing defaults — only
     // where the distro honors its packaged config at all, and only
@@ -3041,11 +3138,7 @@ pub fn import(
             name: name.to_string(),
         },
     }));
-    match create_from_spec_with_conf(
-        &spec,
-        opts,
-        pkg.as_ref().and_then(|p| p.distribution_conf.as_deref()),
-    ) {
+    match create_from_spec(&spec, opts) {
         Ok(name) => {
             // Snapshot the archive's config into the journal — the
             // `--no-boot` import lands with them in place; a booted
@@ -3546,8 +3639,10 @@ fn migrate_to_distro(
     {
         write_default(Some(name))?;
     }
-    if !opts.no_terminal_profile {
-        terminal::sync(name, None);
+    let profiles = spec.resolve().0.terminal_profile;
+    terminal::sync(name, profiles);
+    if profiles {
+        let _ = terminal::ensure_profile(name);
     }
     Ok(name.to_string())
 }
@@ -3604,6 +3699,9 @@ fn reject_machine_opts(opts: &CreateOptions) -> Result<()> {
     }
     if opts.sudo || opts.no_sudo {
         bad.push("--sudo/--no-sudo");
+    }
+    if opts.terminal_profile || opts.no_terminal_profile {
+        bad.push("--terminal-profile/--no-terminal-profile");
     }
     // `--ignore-wsl-conf` is fine — a machine never honors the file
     // anyway, so ignoring it asks for nothing the machine doesn't do.
@@ -3965,13 +4063,7 @@ pub fn rename(old: &str, new: &str, force: bool) -> Result<()> {
     if default_name().as_deref() == Some(old) {
         write_default(Some(new))?;
     }
-    terminal::rename(
-        old,
-        new,
-        fs::read_to_string(journal_conf_path(new, "wsl-distribution.conf")?)
-            .ok()
-            .as_deref(),
-    );
+    terminal::rename(old, new, spec.resolve().0.terminal_profile);
     drop(lock);
     // An imported distro's snapshot image keeps `old` in its reference
     // and labels — cleanup keys off the new name, so `rm` won't find
