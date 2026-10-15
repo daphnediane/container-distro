@@ -8,6 +8,7 @@
 //! `container_distro` library.
 
 mod cli;
+mod fs;
 
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
@@ -403,6 +404,7 @@ fn run(cli: Cli) -> Result<()> {
                 },
             },
         )?,
+        Command::Fs { command } => fs::run(command)?,
         Command::SyncProfiles => ops::sync_profiles()?,
         Command::Terminal { name } => ops::open_terminal(&name)?,
         Command::SetDefault { name, .. } => ops::set_default(name.as_deref())?,

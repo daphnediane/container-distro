@@ -126,7 +126,7 @@ from the image.
 | `--ssh` / `--no-ssh`                           | Forward the host SSH agent socket (default: on only when the effective home-mount is `rw`)                                                                                                                                                                                                                              |
 | `--sudo` / `--no-sudo`                         | Provision passwordless sudo/doas (default: on)                                                                                                                                                                                                                                                                          |
 | `--preset`                                     | The defaults tier: `default`, `restricted`, or `trusted` — journaled so `set --preset` can re-derive it later                                                                                                                                                                                                           |
-| `--files` / `--no-files`                       | Record host file-access intent for the planned `container distro fs` (default: on, off under `--restricted`)                                                                                                                                                                                                            |
+| `--files` / `--no-files`                       | Publish the host file-access relay for `container distro fs` (default: on, off under `--restricted`)                                                                                                                                                                                                                    |
 | `--restricted`                                 | `--preset restricted`: `--home-mount none --network none --no-ssh --no-sudo --no-files` (alias `--untrusted`)                                                                                                                                                                                                           |
 | `--trusted`                                    | `--preset trusted`: `--home-mount rw --automount rw --ssh`                                                                                                                                                                                                                                                              |
 | `--use-wsl-conf`                               | bare flag = `all`, or `FEATURE,...`/`all`/`none` — honor the guest's `/etc/wsl.conf`: `hostname`, `fstab`, `init` (systemd/openrc), `command` ([boot] command, as root), `automount` (lower mounts for `enabled=false`). A bare list pins exactly those; `all` tracks new features as they're added                     |
@@ -306,7 +306,7 @@ serializing `set` against start/delete.
 | `--restricted`/`--trusted`                     | `--preset restricted`/`--preset trusted` (alias `--untrusted`)                                                                                                                                                                  |
 | `--reset`                                      | Un-pin an option back to derived (`--reset home-mount`, `--reset terminal-profile`), clear a list (`--reset mounts`, `--reset publish`), or reset every pin to a tier (`--reset restricted` — also sets the preset); repeatable |
 | `--terminal-profile` / `--no-terminal-profile` | Generate/remove the `.terminal` launcher + iTerm2 dynamic profile — re-pinning on also refreshes a launcher whose imported profile you deleted (re-import it with `container distro terminal NAME`)                             |
-| `--files` / `--no-files`                       | Record/drop host file-access intent for the planned `container distro fs` — on by default except under `--restricted`                                                                                                           |
+| `--files` / `--no-files`                       | Publish/drop the host file-access relay (`fs` below) — on by default except under `--restricted`                                                                                                                                |
 | `--use-wsl-conf`                               | bare flag = `all`, or `FEATURE,...`/`all`/`none` — fold features into the honored set (`use` allows; `all`/`none` reset the mode; see design/notes/configuration-files.md)                                                      |
 | `--no-wsl-conf`                                | Honor nothing — drops the snapshots                                                                                                                                                                                             |
 | `--ignore-wsl-conf`                            | Deny features from what the stored mode honors — `all` is honoring's off switch                                                                                                                                                 |
@@ -332,6 +332,39 @@ There is no distinct interrupted state: killing a `set` mid-flight
 leaves the same journal-plus-disk rest state a clean stop does. The
 next operation converges it — any leftover container is dismantled and
 a fresh one materializes from the journal.
+
+### `fs ls|stat|get|put|check NAME …`
+
+Host-side file access into a distro — the building block for a
+`\\wsl$`-style Finder volume (design/host-file-access.md). Boots the
+distro if needed, starts its guest file server (`/sbin.distro/distrofs`)
+on demand, and talks to it over the distro's `--publish-socket` relay —
+no guest network needed, so `--network none` distros work too.
+
+| Command                      | Does                                                                                    |
+| ---------------------------- | --------------------------------------------------------------------------------------- |
+| `fs ls NAME [PATH] [-l]`     | List a directory (default `/`); `-l` adds mode, links, owner, size, mtime, link targets |
+| `fs stat NAME PATH [-L]`     | One entry's attributes; `-L` follows a final symlink                                    |
+| `fs get NAME PATH [DEST\|-]` | Copy a guest file out (stdout by default; into DEST if it's a directory)                |
+| `fs put NAME SRC\|- PATH`    | Copy a host file in (`-` = stdin); new files belong to your distro account              |
+| `fs check [NAME]`            | Verify the relay, the runtime's code signature, and the session handshake               |
+
+Guest paths are absolute from the distro root. Symlinks resolve
+*inside* the distro: a guest link to `/Users/you/.ssh` or a run of
+`../..` can't reach the host, and `ls -l` shows targets rewritten to
+stay in the distro. The server runs as guest root (like
+`run --root`), so `get` can read any guest file. Virtiofs shares
+(your home, `-v`, automounts) and `/proc`/`/sys`/`/dev` appear as empty
+directories — they're host paths or kernel views, not distro files.
+
+The relay is part of the container, added when a distro starts, so a
+distro running from before files were enabled needs a `stop` first.
+The server binary, by contrast, is refreshed into a running distro's
+assets at the start of every `fs` session. `files` is on by default
+except under `--restricted` (`--files` / `--no-files` on
+`create`/`import`/`set`). The guest binary is a separate build — see
+DEV.md "Building distrofs"; installs without it say so before
+touching the distro.
 
 ### `sync-profiles`
 

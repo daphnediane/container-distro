@@ -43,6 +43,7 @@ pub mod catalog;
 pub mod catalog_ops;
 pub mod completions;
 pub mod container;
+pub mod distrofs;
 pub mod forward;
 mod install;
 pub mod layout;

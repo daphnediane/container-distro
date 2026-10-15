@@ -11,7 +11,10 @@ maintainer view.
 - macOS 26 on Apple silicon, with Apple's [`container`] installed and
   working (`container system start`, `container machine list`) —
   development targets `container` 1.5.x
-- a current stable Rust toolchain (edition 2024; `rustup` recommended)
+- a current stable Rust toolchain (edition 2024; `rustup` recommended);
+  for the guest `distrofs` build (below) also the
+  `aarch64-unknown-linux-musl` target and a sibling checkout of
+  [daphnediane/distrofs](https://github.com/daphnediane/distrofs)
 - `cargo deny`, `cargo audit`, and `cargo bundle-licenses` for the
   release gate; `jq`, `pkgbuild`, `productbuild` (Xcode tools) for
   packaging
@@ -45,6 +48,45 @@ THIRD-PARTY-NOTICES.yaml freshness check (regenerate with
 freshness check on the vendored Microsoft catalog (refresh
 `vendor/microsoft/` with `scripts/update-microsoft-catalog.sh`).
 
+### Building distrofs
+
+`distrofs` is a separate project —
+[daphnediane/distrofs](https://github.com/daphnediane/distrofs): one
+crate shipping the guest file server *and* the host client (the wire
+protocol, socket hygiene, peer check, and handshake all live there).
+This repo keeps only deployment: locating the binaries, verifying the
+client's signature/ownership, the `--publish-socket` path, and
+`container exec` launch.
+
+For development, clone distrofs beside this checkout
+(`../distrofs`, or set `DISTROFS_DIR`). The guest server is a static
+`aarch64-unknown-linux-musl` binary that distros mount at
+`/sbin.distro/distrofs`; one arm64 binary serves amd64 distros too —
+the VM kernel is always arm64.
+
+```bash
+scripts/build-distrofs.sh                    # builds ../distrofs for aarch64-musl
+scripts/build-distrofs.sh --install ~/.cargo # + ~/.cargo/libexec/container-distro/distrofs-server-aarch64
+```
+
+The host binaries copy the server into each distro's init assets at
+materialize and again before each `fs` session (a live share, so
+running distros pick it up without a restart). Server lookup order:
+`--dev` sibling-worktree builds, `<prefix>/libexec/container-distro/`
+(`distrofs-server-aarch64`, or plain `distrofs` from earlier
+installs), then the distrofs-managed `<prefix>/libexec/distrofs/` —
+where `distrofs fetch-servers` puts verified release downloads.
+The client binary is found as a sibling of the running binary
+(`install-plugin` copies it into `bin/`), the libexec dir, or PATH;
+before it's exec'd it's verified — a Developer ID signature must
+satisfy `identifier "io.github.daphnediane.distrofs"`, unsigned
+cargo/dev builds must be owned by us or root on a path writable only
+by trusted accounts.
+
+The dev loop is `scripts/build-distrofs.sh` in the sibling checkout
+plus `cargo build` for the client, then `cargo run --bin
+container-distro -- --dev fs check NAME`.
+
 Man pages and shell completions are generated at runtime from the
 clap definitions — never edit generated output; change the
 definitions. If a change alters the CLI surface, update the matching
@@ -71,6 +113,7 @@ One published crate shipping two binaries over a shared library:
 | Script                                | Purpose                                                                 |
 | ------------------------------------- | ----------------------------------------------------------------------- |
 | `scripts/install-local.sh`            | Maintainer reinstall: `cargo install --path .` + plugin + man pages     |
+| `scripts/build-distrofs.sh`           | Build (and `--install PREFIX`) the guest `distrofs` file server         |
 | `scripts/dev-clean.sh`                | Remove all installed artifacts (pkg, cargo, manual) — `-n` previews     |
 | `scripts/build-pkg.sh`                | Build the .pkg + binstall tarball + CycloneDX SBOM under `scratch/pkg/` |
 | `scripts/build-pkg-signed.sh`         | Signed+notarized build; sources `packaging/signing.local.conf`          |
@@ -162,6 +205,8 @@ enable them — see `.devin/rules/security.md`. Currently gated:
   (`container`, `/usr/local/bin/container`) are honored without
   `--dev` — they can't redirect anything. Ignored values warn once.
 - `CONTAINER_DISTRO_RELEASES_URL` — the release-API fixture above.
+- `DISTROFS` — which distrofs client binary `fs` execs with the
+  session token (bare `distrofs` = PATH lookup, always honored).
 
 ## Releases
 
