@@ -168,24 +168,6 @@ distro rename targets) and `ops::bail_distro_shadow` (`import_machine`,
 `--force` opts in (`CreateOptions.force`; it warns anyway). `migrate
 --keep` requires `-n NAME` for the same reason.
 
-## Host file access (`container distro fs`, #27)
-
-`fs ls|stat|get|put|check` reach into a distro through `distrofs`
-(`crates/distrofs`, static aarch64-linux-musl, mounted at
-`/sbin.distro/distrofs`), started on demand by `container exec -d -u
-0:0 --env DISTROFS_TOKEN` and idle-exiting after 30 s. Transport is a
-`--publish-socket <darwin-temp>/container-distro/s/<hash>.sock:
-/var/lib/container-distro/distrofs.sock` relay added by
-`create_container` when the spec's `files` resolves on (off under
-`--restricted`). `src/distrofs/`: `proto` (shared by `#[path]` with
-the guest crate), `connect` (private-dir + leaf checks, peer audit
-token vs Apple's runtime requirement), `client` (mutual HMAC
-handshake, hostile-input rules, path resolution), `symlink`
-(chroot-style target confinement), `session` (binary lookup, launch,
-retrying connect). Build the guest with `scripts/build-distrofs.sh`;
-in-tree builds are used only under `--dev`. Design:
-docs/design/host-file-access.md; security: design/security.md T13.
-
 ## Host filesystem (machines)
 
 `container machine` mounts macOS `$HOME` via virtiofs at the **same
