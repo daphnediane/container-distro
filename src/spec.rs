@@ -133,6 +133,17 @@ impl Preset {
         }
     }
 
+    /// What the preset implies for `files` — `Restricted` pins it off:
+    /// the relay is inert until the host connects, but mounting an
+    /// untrusted rootfs puts its contents in front of Finder, Quick
+    /// Look, and Spotlight.
+    pub fn files(self) -> Option<bool> {
+        match self {
+            Preset::Restricted => Some(false),
+            _ => None,
+        }
+    }
+
     /// What the preset implies for `admin`.
     pub fn admin(self) -> Option<bool> {
         match self {
@@ -226,6 +237,11 @@ pub struct Intent {
     /// the built-in default is `true` (WSL's own default).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub terminal_profile: Option<bool>,
+    /// Host file access (docs/design/host-file-access.md): publish the
+    /// `distrofs` socket relay. `explicit` records `--files`/
+    /// `--no-files`; absent inherits — off under `restricted`, else on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub files: Option<bool>,
 }
 
 impl Intent {
@@ -264,6 +280,8 @@ pub enum ResetTarget {
     WslConf,
     /// Un-pin terminal-profile generation
     TerminalProfile,
+    /// Un-pin host file access
+    Files,
     /// Un-pin the CPU count (back to the host-derived default)
     Cpus,
     /// Un-pin the memory size (back to the host-derived default)
@@ -1314,6 +1332,8 @@ pub struct ResolvedSpec {
     /// Generate the host terminal profiles (`explicit` > `source`'s
     /// `windowsterminal.enabled` > `true`).
     pub terminal_profile: bool,
+    /// Publish the `distrofs` socket relay for host file access.
+    pub files: bool,
 }
 
 impl ResolvedSpec {
@@ -2005,6 +2025,16 @@ impl DistroSpec {
             .or(self.source.terminal_profile)
             .unwrap_or(true);
 
+        // The relay is inert until the host connects, so it's on by
+        // default — except under `restricted`, whose "every hole needs
+        // its own flag" rule covers putting guest content in front of
+        // Finder. `false` is the stricter bool, so a source "off" caps.
+        let files = self
+            .explicit
+            .files
+            .or_else(|| cap(preset.files(), self.source.files, std::cmp::min))
+            .unwrap_or(true);
+
         (
             ResolvedSpec {
                 name: self.name.clone(),
@@ -2024,6 +2054,7 @@ impl DistroSpec {
                 admin,
                 wsl_conf,
                 terminal_profile,
+                files,
             },
             warnings,
         )
@@ -2192,6 +2223,13 @@ impl DistroSpec {
             self.explicit.admin.is_some(),
         );
         change(
+            "files",
+            on(old_r.files).into(),
+            on(new.files).into(),
+            on(unpinned.files).into(),
+            self.explicit.files.is_some(),
+        );
+        change(
             "wsl-conf",
             old_r.wsl_conf.to_string(),
             new.wsl_conf.to_string(),
@@ -2324,6 +2362,8 @@ pub struct SpecChanges {
     /// `--terminal-profile` also re-arms a profile the user deleted
     /// by hand.
     pub terminal_profile: Option<bool>,
+    /// Turn host file access (the `distrofs` relay) on or off.
+    pub files: Option<bool>,
     /// The `--use-wsl-conf` operand — a feature list that may carry
     /// `all`/`none` (bare `--use-wsl-conf` is `all`; `--no-wsl-conf`
     /// arrives here as `none`).
@@ -2391,6 +2431,7 @@ impl SpecChanges {
                 ResetTarget::Network => s.explicit.network = None,
                 ResetTarget::WslConf => s.explicit.wsl_conf = None,
                 ResetTarget::TerminalProfile => s.explicit.terminal_profile = None,
+                ResetTarget::Files => s.explicit.files = None,
                 ResetTarget::Cpus => s.explicit.cpus = None,
                 ResetTarget::Memory => s.explicit.memory = None,
                 ResetTarget::Mounts => s.mounts.clear(),
@@ -2426,6 +2467,9 @@ impl SpecChanges {
         }
         if let Some(v) = self.terminal_profile {
             s.explicit.terminal_profile = Some(v);
+        }
+        if let Some(v) = self.files {
+            s.explicit.files = Some(v);
         }
         // `--use`/`--ignore` fold into the stored mode expression —
         // `all`/`none` switch it, named features accumulate (use

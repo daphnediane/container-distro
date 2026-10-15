@@ -8,6 +8,7 @@
 //! `container_distro` library.
 
 mod cli;
+mod fs;
 
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
@@ -349,6 +350,8 @@ fn run(cli: Cli) -> Result<()> {
             unpublish,
             terminal_profile,
             no_terminal_profile,
+            files,
+            no_files,
         } => ops::set(
             &name,
             &SpecChanges {
@@ -392,8 +395,16 @@ fn run(cli: Cli) -> Result<()> {
                 } else {
                     None
                 },
+                files: if files {
+                    Some(true)
+                } else if no_files {
+                    Some(false)
+                } else {
+                    None
+                },
             },
         )?,
+        Command::Fs { command } => fs::run(command)?,
         Command::SyncProfiles => ops::sync_profiles()?,
         Command::Terminal { name } => ops::open_terminal(&name)?,
         Command::SetDefault { name, .. } => ops::set_default(name.as_deref())?,

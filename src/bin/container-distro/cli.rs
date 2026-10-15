@@ -98,6 +98,44 @@ pub enum CatalogCommand {
     Purge,
 }
 
+/// `container distro fs`: host-side access through the distro's
+/// `distrofs` server. Guest paths are absolute from the distro root;
+/// symlinks resolve inside the distro, never on the host.
+#[derive(Debug, Subcommand)]
+pub enum FsCommand {
+    /// List a directory (`-l` for owner, mode, size, and link targets)
+    Ls {
+        name: String,
+        /// Guest path (default: /)
+        #[arg(default_value = "/")]
+        path: String,
+        #[arg(short, long)]
+        long: bool,
+    },
+    /// Show one entry's attributes (`-L` follows a final symlink)
+    Stat {
+        name: String,
+        path: String,
+        #[arg(short = 'L', long)]
+        dereference: bool,
+    },
+    /// Copy a guest file to DEST (`-` or omitted: stdout)
+    Get {
+        name: String,
+        path: String,
+        dest: Option<PathBuf>,
+    },
+    /// Copy a host file into the guest at PATH (`-` as SRC: stdin);
+    /// new files belong to your distro account
+    Put {
+        name: String,
+        src: PathBuf,
+        path: String,
+    },
+    /// Check the relay, peer identity, and handshake
+    Check { name: Option<String> },
+}
+
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Create a distro from an image and boot it
@@ -274,6 +312,19 @@ pub enum Command {
         /// Don't generate terminal profiles for this distro
         #[arg(long)]
         no_terminal_profile: bool,
+        /// Publish the host file-access relay (`container distro fs`)
+        #[arg(long, conflicts_with = "no_files")]
+        files: bool,
+        /// Stop publishing the host file-access relay
+        #[arg(long)]
+        no_files: bool,
+    },
+
+    /// Browse and copy files inside a distro from the host (boots it if
+    /// needed) — the `\\wsl$` building block
+    Fs {
+        #[command(subcommand)]
+        command: FsCommand,
     },
 
     /// Regenerate the `.terminal` launchers and iTerm2 dynamic

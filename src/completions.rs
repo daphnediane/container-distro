@@ -13,12 +13,12 @@
 //! `container-distro install-completions`, under the `share` root
 //! next to the binary's `bin` directory.
 
-use std::env;
-use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+
+use crate::layout;
 
 /// A shell a completion script is generated for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,11 +62,8 @@ impl Shell {
 /// `$CARGO_HOME/share` after `cargo install`, where the shell vendor
 /// directories live on a normal `fpath`/`XDG_DATA_DIRS` setup.
 fn share_dir_for(exe: &Path) -> Result<PathBuf> {
-    let exe = exe.canonicalize().unwrap_or_else(|_| exe.to_path_buf());
-    exe.parent()
-        .filter(|p| p.file_name() == Some(OsStr::new("bin")))
-        .and_then(Path::parent)
-        .map(|prefix| prefix.join("share"))
+    layout::prefix_of(exe)
+        .map(|prefix| layout::share_dir(&prefix))
         .with_context(|| {
             format!(
                 "{} isn't under a `bin` directory — pass an explicit dir",
@@ -80,7 +77,7 @@ fn share_dir_for(exe: &Path) -> Result<PathBuf> {
 /// Dev builds (e.g. `target/debug/cm`) don't have one and must pass a
 /// dir explicitly.
 pub fn default_share_dir() -> Result<PathBuf> {
-    share_dir_for(&env::current_exe().context("cannot locate the running binary")?)
+    share_dir_for(&layout::current_exe()?)
 }
 
 /// Write `files` (`(shell, script)` for `bin`) under `share`, creating

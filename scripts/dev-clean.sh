@@ -6,7 +6,8 @@
 #   - plugin registration, generated man pages + completions, the `wsl` alias
 #     (via the binaries' own uninstall-* commands — they only remove files
 #     that look like our generated output, so probing share roots is safe)
-#   - $CARGO_HOME/bin/{cm,container-distro} via `cargo uninstall`
+#   - $CARGO_HOME/bin/{cm,container-distro} via `cargo uninstall`, and
+#     $CARGO_HOME/libexec/container-distro/distrofs-server-* (build-distrofs.sh)
 # Binaries for the uninstall-* calls resolve from PATH, $CARGO_HOME/bin,
 # then target/release|debug — a dev build fingerprints just as well.
 #
@@ -148,6 +149,19 @@ if command -v cargo >/dev/null 2>&1 &&
         echo "  (cargo uninstall failed — remove $CH/bin/{cm,container-distro} by hand)"
 else
     echo "  (no binaries under $CH/bin)"
+fi
+# scripts/build-distrofs.sh --install's guest file server (current
+# name plus the earlier one).
+removed=
+for f in distrofs-server-aarch64 distrofs; do
+    if [ -e "$CH/libexec/container-distro/$f" ]; then
+        x rm -f "$CH/libexec/container-distro/$f"
+        removed=1
+    fi
+done
+if [ -n "$removed" ]; then
+    x rmdir "$CH/libexec/container-distro" 2>/dev/null
+    x rmdir "$CH/libexec" 2>/dev/null
 fi
 
 if [ -z "$DRY" ]; then

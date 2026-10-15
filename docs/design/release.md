@@ -50,7 +50,7 @@ The mechanical bits are driven by [cargo-release] (`cargo install
 1. Run the green gate: `scripts/release-gate.sh` covers fmt, clippy,
    `cargo test --workspace` (the proptest parser-fuzz targets run
    inside it; `PROPTEST_CASES=100000` deepens the pass), the
-   supply-chain gate (`cargo audit` + `cargo deny check` -- advisory DB
+   supply-chain gate (`cargo audit` + `cargo deny --workspace check` -- advisory DB
    needs network; license policy lives in `deny.toml`), and a
    `THIRD-PARTY-NOTICES.yaml` freshness check (regenerate with
    `cargo bundle-licenses -f yaml -o THIRD-PARTY-NOTICES.yaml` if
@@ -247,7 +247,7 @@ and TODO stays a list of work that remains.
   building from `main` never masquerades as a released version.
 - Man pages are generated from the clap definitions at build time, so a
   release has no generated artifacts to regenerate or commit.
-- `cargo audit` + `cargo deny check` run in CI on every push/PR and
+- `cargo audit` + `cargo deny --workspace check` run in CI on every push/PR and
   weekly ([#12]); `scripts/release-gate.sh` bundles them with the rest
   of the step-1 gate ([#16]). The `FromStr` parser fuzz targets are
   proptest properties that run inside `cargo test` ([#17]).

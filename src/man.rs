@@ -12,12 +12,12 @@
 //! `cm --install-man` / `container-distro install-man`, or as part of
 //! `container-distro install-plugin`.
 
-use std::env;
-use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+
+use crate::layout;
 
 /// `<exe>/../share/man/man1` for a binary that lives in a `bin`
 /// directory — both macOS `man` and Linux man-db add
@@ -25,11 +25,8 @@ use anyhow::{Context, Result};
 /// `PATH`, so pages for `$CARGO_HOME/bin/cm` (or `cargo install --root
 /// <P>`) are found with no manpath configuration.
 fn man_dir_for(exe: &Path) -> Result<PathBuf> {
-    let exe = exe.canonicalize().unwrap_or_else(|_| exe.to_path_buf());
-    exe.parent()
-        .filter(|p| p.file_name() == Some(OsStr::new("bin")))
-        .and_then(Path::parent)
-        .map(|prefix| prefix.join("share/man/man1"))
+    layout::prefix_of(exe)
+        .map(|prefix| layout::share_dir(&prefix).join("man/man1"))
         .with_context(|| {
             format!(
                 "{} isn't under a `bin` directory — pass an explicit dir",
@@ -43,7 +40,7 @@ fn man_dir_for(exe: &Path) -> Result<PathBuf> {
 /// Dev builds (e.g. `target/debug/cm`) don't have one and must pass a
 /// dir explicitly.
 pub fn default_man_dir() -> Result<PathBuf> {
-    man_dir_for(&env::current_exe().context("cannot locate the running binary")?)
+    man_dir_for(&layout::current_exe()?)
 }
 
 /// Write `pages` (`cm.1`-style file name → roff source) into `dir`,

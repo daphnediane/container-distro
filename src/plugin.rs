@@ -121,6 +121,26 @@ fn plugin_current(dir: &Path, exe: &Path) -> bool {
     cfg == config_toml()
         && same_bytes(&installed, exe)
         && fs::metadata(&installed).is_ok_and(|m| m.permissions().mode() & 0o111 != 0)
+        && crate::distrofs::guest_binary().is_none_or(|g| same_bytes(&plugin_guest_binary(dir), &g))
+        && plugin_client_current(dir)
+}
+
+/// Where the plugin copy keeps the guest `distrofs` build: the plugin
+/// binary lives in `<dir>/bin`, so `<dir>` is its install prefix and
+/// `guest_binary` looks in that prefix's [`layout::libexec_dir`].
+fn plugin_guest_binary(dir: &Path) -> PathBuf {
+    crate::layout::libexec_dir(dir).join(crate::distrofs::SERVER_ARTIFACT)
+}
+
+/// Whether `dir`'s `bin/distrofs` matches the client this install
+/// would use — absence on either side counts as current, so a client-
+/// less install isn't forced to elevate.
+fn plugin_client_current(dir: &Path) -> bool {
+    let installed = dir.join("bin").join("distrofs");
+    match crate::distrofs::client_binary_path() {
+        Some(c) => same_bytes(&installed, &c),
+        None => !installed.exists(),
+    }
 }
 
 /// Install the plugin, elevating only for the root-owned file ops.
@@ -191,6 +211,33 @@ fn install_into(dir: &Path, exe: &Path) -> Result<()> {
         .map_err(|e| permission_hint(e, &bin))?;
     println!("Installed `container {PLUGIN_NAME}` ({})", bin.display());
     println!("  copied from {}", exe.display());
+    // The plugin copy materializes distros too, so it needs the guest
+    // file server beside it — copied for the same reason as the binary.
+    if let Some(guest) = crate::distrofs::guest_binary() {
+        let dest = plugin_guest_binary(dir);
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent).map_err(|e| permission_hint(e, parent))?;
+        }
+        if dest.symlink_metadata().is_ok() {
+            fs::remove_file(&dest).map_err(|e| permission_hint(e, &dest))?;
+        }
+        fs::copy(&guest, &dest).map_err(|e| permission_hint(e, &dest))?;
+        fs::set_permissions(&dest, fs::Permissions::from_mode(0o755))
+            .map_err(|e| permission_hint(e, &dest))?;
+        println!("  with {} (from {})", dest.display(), guest.display());
+    }
+    // …and the host client beside `bin/distro`, where the plugin's
+    // `distrofs::client_binary` lookup finds it first.
+    if let Some(client) = crate::distrofs::client_binary_path() {
+        let dest = bin_dir.join("distrofs");
+        if dest.symlink_metadata().is_ok() {
+            fs::remove_file(&dest).map_err(|e| permission_hint(e, &dest))?;
+        }
+        fs::copy(&client, &dest).map_err(|e| permission_hint(e, &dest))?;
+        fs::set_permissions(&dest, fs::Permissions::from_mode(0o755))
+            .map_err(|e| permission_hint(e, &dest))?;
+        println!("  with {} (from {})", dest.display(), client.display());
+    }
     Ok(())
 }
 
@@ -254,6 +301,7 @@ fn uninstall_from(dir: &Path) -> Result<()> {
     // dirs only exist on installs from before assets moved per-distro.
     let bin_dir = dir.join("bin");
     remove_file(&bin_dir.join(PLUGIN_NAME));
+    remove_file(&bin_dir.join("distrofs"));
     remove_file(&config);
     for admin in [true, false] {
         let assets = dir.join(ops::assets_flavor(admin));
@@ -264,6 +312,16 @@ fn uninstall_from(dir: &Path) -> Result<()> {
             remove_file(&p);
         }
         remove_dir_if_empty(&assets);
+    }
+    let guest = plugin_guest_binary(dir);
+    remove_file(&guest);
+    // Pre-split installs shipped the server under its old name.
+    remove_file(&guest.with_file_name("distrofs"));
+    if let Some(libexec_app) = guest.parent() {
+        remove_dir_if_empty(libexec_app);
+        if let Some(libexec) = libexec_app.parent() {
+            remove_dir_if_empty(libexec);
+        }
     }
     let bin_gone = remove_dir_if_empty(&bin_dir);
     let gone = remove_dir_if_empty(dir) && bin_gone;

@@ -13,6 +13,8 @@ cargo fmt --all -- --check
 step "cargo clippy"
 cargo clippy --workspace --all-targets -- -D warnings
 
+# The guest file server lives in the standalone distrofs project —
+# its own release gate covers the musl builds.
 step "cargo test --workspace (PROPTEST_CASES=${PROPTEST_CASES:-default})"
 cargo test --workspace
 
@@ -22,8 +24,10 @@ sh -n assets/*
 step "cargo audit"
 cargo audit
 
-step "cargo deny check"
-cargo deny check
+# --workspace keeps the check honest if a workspace member is ever
+# re-added. (`cargo audit` reads the shared Cargo.lock.)
+step "cargo deny --workspace check"
+cargo deny --workspace check
 
 step "THIRD-PARTY-NOTICES.yaml freshness"
 tmp=$(mktemp)

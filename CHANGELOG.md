@@ -12,6 +12,22 @@ docs/design/release.md.
 
 ### Added
 
+- **Host file access (`container distro fs`)** — the first phase of a
+  `\\wsl$` equivalent (#27): `fs ls`/`stat`/`get`/`put`/`check`
+  browse and copy files inside a distro from macOS, booting it if
+  needed. A small guest file server (`distrofs`, shipped in the
+  distro's `/sbin.distro` assets) starts on demand and exits when
+  idle; it's reached over a `--publish-socket` relay, so
+  `--network none` distros work too. Each connection is checked
+  against Apple's runtime code signature and a per-session secret,
+  and guest symlinks resolve inside the distro, never on the host.
+  New `--files`/`--no-files` on `create`/`import`/`set` (on by
+  default, off under `--restricted`); running distros pick up the
+  relay at their next start. The guest binary is a separate
+  `aarch64-linux-musl` build (`scripts/build-distrofs.sh`;
+  `install-plugin` copies it beside the plugin). A Finder volume via
+  FSKit is the next phase — docs/design/host-file-access.md.
+
 - **amd64 (x86-64) distros on Apple silicon**: `--arch amd64` on
   `cm --install`/`--import`, `container distro create`/`import`, and
   `catalog install` selects x86-64 sources — catalog entries resolve

@@ -29,6 +29,7 @@
 !/.devin/.markdownlint.json
 
 # Keep some config files
+!/.cargo
 !/.devcontainer
 !/.github
 !.git*[^~]

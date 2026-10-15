@@ -11,6 +11,7 @@ repository = "https://github.com/daphnediane/container-distro"
 readme = "README.md"
 # Published crate stays lean: binaries + assets + notices only.
 exclude = [
+    "/.cargo/",
     "/.claude/",
     "/.devin/",
     "/.github/",
@@ -22,6 +23,10 @@ exclude = [
     "/scripts/",
     "/deny.toml",
 ]
+
+# The guest file server moved to the standalone `distrofs` project
+# (https://github.com/daphnediane/distrofs); `scripts/build-distrofs.sh`
+# builds it there and installs `distrofs-server-<arch>` into libexec.
 
 [dependencies]
 anyhow = "1.0"

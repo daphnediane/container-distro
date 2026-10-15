@@ -484,6 +484,74 @@ preference stores a package shouldn't normally reach.
   is package opt-out, not a boundary: the conf is honored even for
   ad-hoc imports because it only *suppresses* host writes.
 
+### T13. Host file access runs a root file server in the guest ([#27])
+
+`container distro fs` (and, later, the FSKit volume) reads and
+writes a distro's whole root filesystem through `distrofs`, a server
+started on demand as **guest root** and reached through a
+`--publish-socket` relay that every distro with `files` on carries
+([host-file-access]). Today's `fs get` hands the host user any guest
+file, `/etc/shadow` included — the same reach as `container distro
+run --root` or `container cp`, which that user already has.
+
+- **Accepted because:** it's the `\\wsl$` feature, and it adds no
+  capability the host user lacks — anything running as the user can
+  already `container exec -u 0` into the distro. The relay is
+  host-initiated: a guest can't open anything through it.
+- **Host surface and connection hygiene:** the relay's host end is a
+  socket bound by Apple's runtime helper in
+  `<Darwin user temp>/container-distro/s/` — outside `$HOME`, so no
+  virtiofs share can plant a symlink there (T6's shape). macOS has no
+  public `connectat`, so `connect(2)` follows symlinks; the defence is
+  layered instead, and lives in the standalone `distrofs` client: the
+  socket's directory chain and leaf are verified before connect, and —
+  what makes the check-then-connect race irrelevant — after
+  connecting, the peer's **audit token** must satisfy the
+  runtime-helper code requirement container-distro passes as
+  `--peer-requirement` (`identifier
+  com.apple.container.container-runtime-linux`, Apple anchor, team
+  `UPBK2H6LZM`). Which *container* answered is proven by a **mutual
+  HMAC-SHA256 handshake** over a fresh per-launch 32-byte token: the
+  server proves it was launched by us in that container; the client
+  proves it to the server.
+- **The distrofs client binary itself is a trust boundary:** it is
+  handed the session token and the socket path, so before exec
+  container-distro verifies it — a signed copy must satisfy
+  `identifier "io.github.daphnediane.distrofs" and anchor apple
+  generic`; an unsigned (cargo/dev) copy must be owned by us or root
+  on a path writable only by trusted accounts, checked up to `/`. A
+  `DISTROFS` env override exists but is `--dev`-gated — same rule as
+  `CONTAINER_CLI` — so a planted variable can't swap the binary that
+  receives the token.
+- **Guest-internal:** a root server is a privilege target for guest
+  users. Its socket sits in a `0700` root directory, the client must
+  prove the token before any request is served, and the server exits
+  30 s after its last client (no listener between sessions). The token
+  reaches it through `container exec --env NAME` inheritance — never
+  argv — and is removed from its environment at start.
+- **Guest → host input:** replies are untrusted. Frames are capped
+  (16 MiB) before allocation, calls time out, in-flight requests are
+  bounded, directory entry names must be single components (no `/`,
+  NUL, `.`/`..`), and symlink targets are confined with chroot
+  semantics before anything host-side resolves them — the macOS VFS
+  follows links client-side, so a raw `/Users/me/.ssh` or `../../..`
+  would otherwise point into the host. The server only resolves single
+  components against `O_PATH` fds (`openat(…O_NOFOLLOW)`), and
+  presents virtiofs shares and pseudo filesystems as empty read-only
+  directories.
+- **Restricted distros:** `files` defaults off under `--restricted`
+  (`--files` opts in): the relay is inert, but mounting puts untrusted
+  content in front of Finder, Quick Look, and Spotlight once the FSKit
+  front-end lands.
+- **Residuals:** the requirement pins Apple's signing of the runtime
+  helper — a self-built `container` fails closed (no override seam
+  yet; one would need the `--dev` gate). The relay is added at
+  materialize, so a distro running from before an upgrade needs a
+  stop/start before `fs` works.
+- **Re-evaluate if:** the FSKit volume ships (Spotlight/Quick Look
+  exposure, `nosuid`/`nodev`, mount ownership presentation), or
+  distro-to-distro mounts add a guest-initiated path.
+
 ## Restricted distros
 
 The user-facing description of `--restricted` -- what it sets and what
@@ -539,6 +607,12 @@ Each open gap adds attack surface; flagging the traps up front.
   override is an explicit per-invocation flag with no `$HOME` search
   path — a guest-rewritten default catalog would point familiar names
   at hostile images.
+- **Host file access, FSKit phase ([host-file-access], [#27]).** The
+  CLI half is T13. The Finder volume adds Spotlight/Quick Look
+  parsing of guest content (mount `nobrowse` until decided), must
+  mount `nosuid,nodev`, and moves the token-holding connect into a
+  launch agent that passes the authenticated fd to a sandboxed
+  module — the agent's XPC surface becomes host attack surface.
 - **Publishing beyond loopback.** `create`/`import`/`migrate`/`set` warn
   when a publish spec binds a non-loopback address, and
   `start`/first-run reports each published listener (loopback as info,
@@ -588,10 +662,12 @@ Each open gap adds attack surface; flagging the traps up front.
 [#18]: https://github.com/daphnediane/container-distro/issues/18
 [#19]: https://github.com/daphnediane/container-distro/issues/19
 [#20]: https://github.com/daphnediane/container-distro/issues/20
+[#27]: https://github.com/daphnediane/container-distro/issues/27
 [#34]: https://github.com/daphnediane/container-distro/issues/34
 [apple/container#2325]: https://github.com/apple/container/issues/2325
 [configuration-files]: notes/configuration-files.md
 [gui-apps]: notes/gui-apps.md
+[host-file-access]: host-file-access.md
 [packaging]: packaging.md
 [remote-wsl-interop]: remote-wsl-interop.md
 [Restricted distros]: ../security.md#restricted-distros

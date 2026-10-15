@@ -66,6 +66,7 @@ use crate::container::{
     self, ArgvMode, ContainerInfo, Machine, MachineDetail, container_cmd, default_machine_name,
     ensure_started, validate_name,
 };
+use crate::distrofs;
 use crate::naming::{label_key, label_lookup, state_dir};
 use crate::oci;
 use crate::terminal;
@@ -220,7 +221,8 @@ pub struct CreateOptions {
     pub preset: Option<Preset>,
 
     /// Restricted defaults for semi-trusted images: home mount none, no
-    /// network, no SSH agent, no sudo/doas. Explicit flags still apply.
+    /// network, no SSH agent, no sudo/doas, no host file-access relay.
+    /// Explicit flags still apply.
     /// A convenience preset, not a sandbox. (`--preset restricted`)
     #[arg(long, visible_alias = "untrusted")]
     pub restricted: bool,
@@ -279,6 +281,15 @@ pub struct CreateOptions {
     /// Don't generate macOS terminal profiles for the new distro
     #[arg(long)]
     pub no_terminal_profile: bool,
+
+    /// Publish the host file-access relay (`container distro fs`) —
+    /// the default, except under --restricted
+    #[arg(long, conflicts_with = "no_files")]
+    pub files: bool,
+
+    /// Don't publish the host file-access relay
+    #[arg(long)]
+    pub no_files: bool,
 
     /// The caller opens the profile in Terminal.app right after
     /// create (`cm --install --terminal`): that open *is* the import,
@@ -576,19 +587,31 @@ pub(crate) fn write_assets(dir: &Path, admin: bool) -> Result<()> {
         }
     }
     for (name, body) in asset_files(admin) {
-        let path = dir.join(name);
-        if fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink()) {
-            fs::remove_file(&path)
-                .with_context(|| format!("failed to remove planted link {}", path.display()))?;
-        }
-        unlock(&path);
-        if fs::read(&path).ok().as_deref() != Some(body.as_bytes()) {
-            write_nofollow(&path, body.as_bytes())?;
-        }
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755))?;
-        set_locked(&path, true)?;
+        write_locked_asset(&dir.join(name), body.as_bytes())?;
+    }
+    // The guest file server is a build artifact, not embedded: copied
+    // in when this install has one (a missing build leaves any earlier
+    // copy — the protocol handshake catches version skew).
+    if let Some(bin) = distrofs::guest_binary() {
+        let body = fs::read(&bin).with_context(|| format!("failed to read {}", bin.display()))?;
+        write_locked_asset(&dir.join(distrofs::GUEST_BINARY), &body)?;
     }
     set_locked(dir, true)
+}
+
+/// Write one init asset at `path` (refreshing only when it differs),
+/// `0755`, `uchg`-locked; a planted symlink is removed, never followed.
+fn write_locked_asset(path: &Path, body: &[u8]) -> Result<()> {
+    if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        fs::remove_file(path)
+            .with_context(|| format!("failed to remove planted link {}", path.display()))?;
+    }
+    unlock(path);
+    if fs::read(path).ok().as_deref() != Some(body) {
+        write_nofollow(path, body)?;
+    }
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
+    set_locked(path, true)
 }
 
 /// The init-assets dir inside `name`'s journal — every journaled
@@ -821,6 +844,7 @@ fn create_intent(opts: &CreateOptions) -> Intent {
         memory: opts.memory.clone(),
         wsl_conf: mode_from_flags(use_conf.as_ref(), opts.ignore_wsl_conf.as_ref(), None),
         terminal_profile: flag_pair(opts.terminal_profile, opts.no_terminal_profile),
+        files: flag_pair(opts.files, opts.no_files),
     }
 }
 
@@ -897,6 +921,7 @@ impl CreateOptions {
                 .or_else(|| self.no_wsl_conf.then(ConfList::none)),
             wsl_conf_ignore: self.ignore_wsl_conf.clone(),
             terminal_profile: flag_pair(self.terminal_profile, self.no_terminal_profile),
+            files: flag_pair(self.files, self.no_files),
             ..SpecChanges::default()
         }
     }
@@ -956,13 +981,29 @@ fn create_container(spec: &DistroSpec, id: &str) -> Result<()> {
     let assets = journal_assets_dir(&spec.name)?;
     let (resolved, _) = spec.resolve();
     let auto = auto_shares(&resolved)?;
-    let args = resolved.create_args(
+    let mut args = resolved.create_args(
         &resolve_ctx(),
         id,
         &assets.to_string_lossy(),
         &host_home()?,
         &auto,
     );
+    if resolved.files {
+        // The relay's host end depends on the runtime id, so it's
+        // computed here rather than in the pure `create_args`. A
+        // failure (unsafe socket dir, over-long path) costs file access,
+        // not the boot.
+        match distrofs::publish_socket_arg(id) {
+            Ok(spec) => {
+                let image = args.pop().unwrap_or_default();
+                args.extend(["--publish-socket".to_string(), spec, image]);
+            }
+            Err(e) => eprintln!(
+                "container-distro: warning: `{}`: host file access unavailable: {e:#}",
+                spec.name
+            ),
+        }
+    }
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     run_container_quiet(&args)
 }
@@ -1023,6 +1064,51 @@ fn ensure_running(name: &str) -> Result<ContainerInfo> {
     ensure_journal(name)?;
     let mut lock = DistroLock::acquire(name)?;
     ensure_running_locked(name, &mut lock)
+}
+
+/// What a file-access session needs from distro `name`: its running
+/// container and the provisioned account that owns host-created files.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FilesTarget {
+    pub name: String,
+    pub id: String,
+    pub uid: u32,
+    pub gid: u32,
+}
+
+/// Resolve `name` (or the default distro) for host file access,
+/// starting it if needed — WSL boots a distro on `\\wsl$` access too.
+/// Refuses before booting anything when the distro has files off.
+pub fn files_target(name: Option<String>) -> Result<FilesTarget> {
+    ensure_started()?;
+    let name = resolve(name)?;
+    container::warn_unverified_version();
+    ensure_journal(&name)?;
+    let r = read_journal(&name)?.resolve().0;
+    if !r.files {
+        bail!(
+            "host file access is off for `{name}` — `container distro set {name} --files` turns it on{}",
+            if r.preset == Preset::Restricted {
+                " (restricted distros default to off: mounting puts untrusted content in front of Finder)"
+            } else {
+                ""
+            }
+        );
+    }
+    let info = ensure_running(&name)?;
+    // A distro already running from before a distrofs build existed
+    // (or before this one) gets it now: the assets dir is a live
+    // read-only share, so a refresh lands without a restart.
+    {
+        let _lock = DistroLock::acquire(&name)?;
+        refresh_mounted_assets(&name, r.admin)?;
+    }
+    Ok(FilesTarget {
+        id: info.id().to_string(),
+        uid: r.user.uid,
+        gid: r.user.gid,
+        name,
+    })
 }
 
 /// Whether nothing is the default: no default distro among `distros` (a
@@ -3733,6 +3819,9 @@ fn reject_machine_opts(opts: &CreateOptions) -> Result<()> {
     }
     if opts.terminal_profile || opts.no_terminal_profile {
         bad.push("--terminal-profile/--no-terminal-profile");
+    }
+    if opts.files || opts.no_files {
+        bad.push("--files/--no-files");
     }
     // `--ignore-wsl-conf` is fine — a machine never honors the file
     // anyway, so ignoring it asks for nothing the machine doesn't do.

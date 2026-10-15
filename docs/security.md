@@ -53,6 +53,14 @@ guest as roughly equivalent to code run on the host as you.
   guest root in one command. That's the WSL model too; the VM boundary,
   not capabilities, is what contains the guest. `--no-sudo` skips the
   grant (see the caveats below).
+- **A file-access relay** (`container distro fs`): each distro
+  publishes a socket the host can use to read and write its whole
+  root filesystem through a file server started on demand as guest
+  root. The relay is host-initiated — a guest can't reach the host
+  through it — and every connection is checked against Apple's
+  runtime signature plus a per-session secret. It adds nothing the
+  host user can't already do with `container distro run --root`.
+  Off under `--restricted`; `--no-files` turns it off.
 - **Published ports** bind `127.0.0.1` by default -- keep it that way
   unless you want LAN-reachable services; a `0.0.0.0` bind changes
   exposure for *other* machines too.
@@ -73,7 +81,8 @@ guest as roughly equivalent to code run on the host as you.
 | `--no-ssh`                      | No SSH-agent forwarding                                                                                                                                                         |
 | `--no-sudo`                     | Skip the sudo/doas grant -- future grants only; can't remove files already in a rootfs                                                                                          |
 | `--network none`                | No interface, DNS, or outbound (loopback only)                                                                                                                                  |
-| `--restricted` (`--untrusted`)  | All four at once -- see below                                                                                                                                                   |
+| `--no-files`                    | No host file-access relay (`container distro fs` refuses the distro)                                                                                                            |
+| `--restricted` (`--untrusted`)  | All of the above at once -- see below                                                                                                                                           |
 | `--trusted`                     | The mirror preset: rw home, rw `/Volumes` automount, agent on                                                                                                                   |
 
 `--automount` shares get `nosuid,nodev` automatically — `/Volumes` is
@@ -109,7 +118,8 @@ would raise, but an explicit flag always wins over it.
 `--network none` (loopback only -- no interface, DNS, or outbound),
 `--no-ssh`, and `--no-sudo` (the assets dir mounted at `/sbin.distro`
 lacks `grant-admin.sh`, so no privilege-granting code exists in the
-guest). It exists for semi-trusted images -- generated code, random
+guest), plus `--no-files` (no host file-access relay — `--files`
+opts back in). It exists for semi-trusted images -- generated code, random
 images, imported rootfses.
 
 **It is not a panacea, and not a sandbox.** What it does not do:
@@ -135,7 +145,7 @@ What remains trusted: the VM boundary (the real containment), the
 
 ## Deeper reading
 
-The full security analysis -- each accepted trade-off (T1–T8) with its
+The full security analysis -- each accepted trade-off (T1–T13) with its
 rationale and re-evaluation triggers, the review findings list
 (C1–C12), and the risks that planned features would add -- is in
 [design/security.md](design/security.md). Reporting: see
