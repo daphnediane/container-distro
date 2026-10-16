@@ -15,11 +15,11 @@
 
 use std::env;
 
+use crate::container::{self, Machine};
+use crate::ops::{self as distro, DistroSummary};
 use anyhow::{Context, Result, bail};
-use container_distro::container::{self, Machine};
-use container_distro::ops::{self as distro, DistroSummary};
 
-use crate::cli::Backend;
+use super::args::Backend;
 
 /// What a `-d NAME` (or the default) refers to.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -18,8 +18,8 @@ use std::io::ErrorKind;
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 
+use crate::man;
 use anyhow::{Context, Result, bail};
-use container_distro::man;
 
 /// The canonicalized `cm` executable we're aliasing.
 fn our_exe() -> Result<PathBuf> {

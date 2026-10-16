@@ -12,11 +12,11 @@
 
 use std::path::PathBuf;
 
+use crate::forward::PortMapping;
+pub use crate::spec::HomeMount;
+use crate::spec::{Arch, ConfList, MountSpec, Preset, PublishSpec};
 use anyhow::{Result, bail};
 use clap::{ArgAction, Parser, ValueEnum};
-use container_distro::forward::PortMapping;
-pub use container_distro::spec::HomeMount;
-use container_distro::spec::{Arch, ConfList, MountSpec, Preset, PublishSpec};
 
 /// What `--install` installs from.
 #[derive(Debug, Clone, PartialEq)]

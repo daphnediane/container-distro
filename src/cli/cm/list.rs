@@ -11,9 +11,19 @@
 //!   `wsl.exe -l -v` (editor extensions regex-match it)
 //! - `cm -l -v -v` — the same table with extra columns appended
 
-use container_distro::container::{Machine, MachineDetail};
-use container_distro::ops::DistroSummary;
-use container_distro::table::{columns, human_bytes, title_case};
+use crate::container::{Machine, MachineDetail};
+use crate::ops::DistroSummary;
+use crate::table::{columns, human_bytes, title_case};
+
+use std::path::PathBuf;
+use std::process::ExitCode;
+
+use anyhow::Result;
+
+use super::backend;
+use crate::catalog_ops;
+use crate::container;
+use crate::spec::Arch;
 
 /// Header printed by `cm -l` (WSL: "Windows Subsystem for Linux Distributions:").
 pub const LIST_HEADER: &str = "Container Machines:";
@@ -80,7 +90,7 @@ impl Entry {
 /// conflicts: both rows stay and are marked so every format can
 /// annotate them; shadowing is an operational-resolution concern, not a
 /// display one. A default distro still takes the default marker from
-/// the default machine (matching [`crate::backend::resolve`]).
+/// the default machine (matching [`super::backend::resolve`]).
 pub fn merge(mut machines: Vec<Entry>, distros: Vec<Entry>) -> Vec<Entry> {
     let distro_names: std::collections::BTreeSet<&str> =
         distros.iter().map(|d| d.name.as_str()).collect();
@@ -195,6 +205,88 @@ pub fn format_verbose(entries: &[Entry], verbosity: u8) -> String {
         .zip(columns(&rows, 2))
         .map(|(p, extra)| format!("{p:<prefix_w$}{extra}\n"))
         .collect()
+}
+
+pub(super) fn run(
+    running_only: bool,
+    quiet: bool,
+    verbosity: u8,
+    online: bool,
+    cache: bool,
+    catalog_file: Option<PathBuf>,
+    arch: Option<Arch>,
+) -> Result<ExitCode> {
+    if online {
+        print!(
+            "{}",
+            catalog_ops::render_online(
+                catalog_file.as_deref(),
+                verbosity,
+                true,
+                backend::distros_enabled(),
+                "cm --install <Distro>",
+                arch.unwrap_or_else(Arch::host),
+            )?
+        );
+        return Ok(ExitCode::SUCCESS);
+    }
+    if cache {
+        print!("{}", catalog_ops::render_cache(catalog_file.as_deref()));
+        return Ok(ExitCode::SUCCESS);
+    }
+    container::ensure_started()?;
+    let machines = container::list_machines()?;
+    let distros = backend::distro_summaries(running_only)?;
+    for name in backend::clashes(&machines, &distros) {
+        eprintln!("cm: `{name}` is both a machine and a distro; `-d {name}` uses the distro");
+    }
+    let mut machine_entries = Vec::new();
+    for m in machines {
+        if running_only && !m.is_running() {
+            continue;
+        }
+        // --arch filters on a machine's platform, which only inspect
+        // reports.
+        let detail = if verbosity >= 2 || arch.is_some() {
+            container::inspect_machine(&m.id).ok()
+        } else {
+            None
+        };
+        machine_entries.push(Entry::from_machine(&m, detail.as_ref()));
+    }
+    let mut entries = merge(
+        machine_entries,
+        distros.iter().map(Entry::from_distro).collect(),
+    );
+    if let Some(arch) = arch {
+        entries.retain(|e| {
+            e.platform
+                .as_deref()
+                .is_some_and(|p| p.rsplit('/').next() == Some(arch.as_str()))
+        });
+    }
+    if entries.is_empty() {
+        if let Some(arch) = arch {
+            eprintln!("No {arch} container machines or distros are installed.");
+        } else if running_only {
+            eprintln!("There are no running container machines or distros.");
+        } else {
+            eprintln!(
+                "No container machines or distros are installed.\n\
+                 Use `cm --install <image>` to create one."
+            );
+        }
+        return Ok(ExitCode::FAILURE);
+    }
+    let out = if quiet {
+        format_quiet(&entries)
+    } else if verbosity > 0 {
+        format_verbose(&entries, verbosity)
+    } else {
+        format_simple(&entries)
+    };
+    print!("{out}");
+    Ok(ExitCode::SUCCESS)
 }
 
 #[cfg(test)]

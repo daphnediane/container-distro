@@ -59,8 +59,9 @@ The repository is a single crate:
 | --------------------------- | ------------------------------------------------------------------- |
 | `src/`                      | `container_distro` library: shared `container` CLI plumbing         |
 |                             | (naming, OCI, forwarder, …) plus distro spec/ops/plugin logic       |
-| `src/bin/cm/`               | the `cm` binary (WSL-compatible CLI)                                |
-| `src/bin/container-distro/` | the `container-distro` binary (`container distro` plugin front end) |
+| `src/cli/cm/`               | `cm` front end (WSL-compatible CLI), one file per action group      |
+| `src/cli/distro/`           | `container distro` plugin front end, one file per larger subcommand |
+| `src/bin/`                  | one-line `main`s for the `cm` and `container-distro` binaries       |
 
 ## Install
 

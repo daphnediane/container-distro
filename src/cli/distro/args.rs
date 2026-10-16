@@ -8,11 +8,13 @@
 
 use std::path::PathBuf;
 
-use clap::{ArgAction, Parser, Subcommand, ValueEnum};
-use container_distro::ops::CreateOptions;
-use container_distro::spec::{
-    Arch, Automount, ConfList, HomeMount, MountSpec, Preset, PublishSpec, ResetTarget,
-};
+use clap::{Parser, Subcommand, ValueEnum};
+
+pub use super::catalog::CatalogCommand;
+pub use super::list::ListArgs;
+pub use super::run::RunArgs;
+pub use super::set::SetArgs;
+use crate::ops::CreateOptions;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -43,62 +45,6 @@ pub enum Format {
 }
 
 #[derive(Debug, Subcommand)]
-pub enum CatalogCommand {
-    /// List the installable-distro catalog
-    #[command(visible_alias = "ls")]
-    List {
-        /// Show local cache/image/instance state; repeat for source refs
-        #[arg(short, long, action = ArgAction::Count)]
-        verbose: u8,
-        /// Use FILE instead of the built-in catalog
-        #[arg(long, value_name = "FILE")]
-        catalog: Option<PathBuf>,
-        /// List entries installable on ARCH — amd64 selects x86-64
-        /// sources (Rosetta-translated on Apple silicon)
-        #[arg(long, value_enum, value_name = "ARCH")]
-        arch: Option<Arch>,
-    },
-
-    /// Show one catalog entry and its local state
-    Info {
-        /// Catalog entry to inspect (`catalog list` shows the choices)
-        #[arg(value_name = "DISTRO")]
-        distro: String,
-        /// Use FILE instead of the built-in catalog
-        #[arg(long, value_name = "FILE")]
-        catalog: Option<PathBuf>,
-        #[arg(long, value_enum, default_value_t = Format::Table)]
-        format: Format,
-    },
-
-    /// Install a distro from the catalog (default: Ubuntu)
-    Install {
-        /// Catalog entry to install (`catalog list` shows the choices)
-        #[arg(value_name = "DISTRO")]
-        distro: Option<String>,
-        /// Distro name (default: the catalog entry's NAME, or the .wsl
-        /// package's oobe.defaultName)
-        #[arg(short = 'n', long)]
-        name: Option<String>,
-        /// Use FILE instead of the built-in catalog
-        #[arg(long, value_name = "FILE")]
-        catalog: Option<PathBuf>,
-        #[command(flatten)]
-        opts: Box<CreateOptions>,
-    },
-
-    /// List cached .wsl catalog downloads
-    Cache {
-        /// Use FILE instead of the built-in catalog for entry names
-        #[arg(long, value_name = "FILE")]
-        catalog: Option<PathBuf>,
-    },
-
-    /// Delete cached .wsl catalog downloads
-    Purge,
-}
-
-#[derive(Debug, Subcommand)]
 pub enum Command {
     /// Create a distro from an image and boot it
     Create {
@@ -119,19 +65,7 @@ pub enum Command {
 
     /// List distros
     #[command(visible_alias = "ls")]
-    List {
-        /// Only names
-        #[arg(short, long)]
-        quiet: bool,
-        /// Only running distros
-        #[arg(long)]
-        running: bool,
-        /// Only distros of this architecture
-        #[arg(long, value_enum, value_name = "ARCH")]
-        arch: Option<Arch>,
-        #[arg(long, value_enum, default_value_t = Format::Table)]
-        format: Format,
-    },
+    List(ListArgs),
 
     /// Show distros' container configuration as JSON
     Inspect {
@@ -162,126 +96,11 @@ pub enum Command {
     },
 
     /// Run a command or interactive shell in a distro, booting it if needed
-    Run {
-        /// Distro (default distro if omitted)
-        #[arg(short = 'n', long)]
-        name: Option<String>,
-        /// Run as USER (name or uid[:gid]); default: your account
-        #[arg(short, long, conflicts_with = "root")]
-        user: Option<String>,
-        /// Run as root
-        #[arg(long)]
-        root: bool,
-        /// Working directory (default: the current directory if it is
-        /// under the shared home, else the guest home)
-        #[arg(short = 'w', long = "workdir", visible_alias = "cwd")]
-        workdir: Option<String>,
-        /// Environment variable KEY=VALUE (or KEY to inherit)
-        #[arg(short, long)]
-        env: Vec<String>,
-        /// Run the command line through the user's shell (`$SHELL -c`)
-        #[arg(long)]
-        shell: bool,
-        /// Interactive shell is non-login
-        #[arg(long)]
-        no_login: bool,
-        /// Command and arguments (default: a login shell)
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        command: Vec<String>,
-    },
+    Run(RunArgs),
 
     /// Change cpus/memory/mounts/ports (recreates the container, keeping
     /// its filesystem)
-    Set {
-        name: String,
-        /// Change the defaults tier — re-derives every option you
-        /// haven't explicitly pinned
-        #[arg(long, value_enum, conflicts_with_all = ["restricted", "trusted"])]
-        preset: Option<Preset>,
-        /// Restricted tier — `--preset restricted` keeping your pinned
-        /// options
-        #[arg(long, visible_alias = "untrusted", conflicts_with = "trusted")]
-        restricted: bool,
-        /// Trusted tier — `--preset trusted` keeping your pinned options
-        #[arg(long)]
-        trusted: bool,
-        /// Un-pin an option back to inherited (`--reset home-mount`),
-        /// clear a list (`--reset mounts`), or reset everything to a
-        /// tier (`--reset restricted` — also sets the preset)
-        #[arg(long, value_enum)]
-        reset: Vec<ResetTarget>,
-        #[arg(long)]
-        cpus: Option<u64>,
-        #[arg(long)]
-        memory: Option<String>,
-        #[arg(long, value_enum)]
-        home_mount: Option<HomeMount>,
-        /// Attach to network NAME ("none" disables, "default" restores)
-        #[arg(long, value_name = "NAME")]
-        network: Option<String>,
-        /// Forward the host SSH agent socket into the distro
-        #[arg(long, conflicts_with = "no_ssh")]
-        ssh: bool,
-        /// Stop forwarding the host SSH agent socket
-        #[arg(long)]
-        no_ssh: bool,
-        /// Grant the provisioned user passwordless sudo/doas
-        #[arg(long, conflicts_with = "no_sudo")]
-        sudo: bool,
-        /// Stop provisioning sudo/doas (does not remove existing grants
-        /// inside the guest)
-        #[arg(long)]
-        no_sudo: bool,
-        /// Auto-manage /Volumes mounts at /mnt/<name>, rescanning now and
-        /// at each start; `--automount ro` mounts read-only
-        #[arg(long, value_enum, num_args = 0..=1, require_equals = true,
-              default_missing_value = "rw", value_name = "rw|ro|none",
-              conflicts_with = "no_automount")]
-        automount: Option<Automount>,
-        /// Stop auto-managing /Volumes mounts (removes the automounts)
-        #[arg(long)]
-        no_automount: bool,
-        /// Honor the guest's /etc/wsl.conf — optionally a comma list
-        /// of features: hostname, fstab, init, command, automount, or
-        /// `all`/`none` (a bare flag means `all`)
-        #[arg(long, value_name = "FEATURE,...|all|none", num_args = 0..=1,
-              require_equals = true, default_missing_value = "all")]
-        use_wsl_conf: Option<ConfList>,
-        /// Stop honoring /etc/wsl.conf entirely (drops the snapshots)
-        #[arg(long, conflicts_with_all = ["use_wsl_conf", "ignore_wsl_conf"])]
-        no_wsl_conf: bool,
-        /// Deny parts of /etc/wsl.conf — subtracted from what would
-        /// resolve (`all` drops the snapshots too)
-        #[arg(long, value_name = "FEATURE,...|all|none")]
-        ignore_wsl_conf: Option<ConfList>,
-        /// Add (or replace, by DST) a mount: SRC:DST[:ro]
-        #[arg(long = "add-volume", value_name = "SRC:DST[:ro]")]
-        add_volumes: Vec<MountSpec>,
-        /// Remove the mount at guest path DST
-        #[arg(long = "rm-volume", value_name = "DST")]
-        rm_volumes: Vec<String>,
-        /// Publish a port (replaces one on the same host port)
-        #[arg(long = "publish", value_name = "SPEC")]
-        publish: Vec<PublishSpec>,
-        /// Stop publishing HOST_PORT
-        #[arg(long = "unpublish", value_name = "HOST_PORT")]
-        unpublish: Vec<u16>,
-        /// Generate the terminal-profile launchers (the `.terminal`
-        /// file and iTerm2 dynamic profile) — open the distro in
-        /// Terminal with `container distro terminal NAME`
-        #[arg(long, conflicts_with = "no_terminal_profile")]
-        terminal_profile: bool,
-        /// Don't generate terminal profiles for this distro
-        #[arg(long)]
-        no_terminal_profile: bool,
-        /// Record host file-access intent for the planned `container
-        /// distro fs`
-        #[arg(long, conflicts_with = "no_files")]
-        files: bool,
-        /// Record intent against host file access
-        #[arg(long)]
-        no_files: bool,
-    },
+    Set(SetArgs),
 
     /// Regenerate the `.terminal` launchers and iTerm2 dynamic
     /// profiles for every distro — repairs files missing after an
@@ -434,6 +253,7 @@ pub enum Command {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::spec::Arch;
     use std::path::Path;
 
     fn parse(argv: &[&str]) -> Result<Cli, clap::Error> {
@@ -596,7 +416,7 @@ mod tests {
     #[test]
     fn run_passes_command_verbatim() {
         let cli = parse(&["distro", "run", "-n", "d1", "--", "ls", "-la"]).unwrap();
-        let Command::Run { command, .. } = cli.command else {
+        let Command::Run(RunArgs { command, .. }) = cli.command else {
             panic!("expected run");
         };
         assert_eq!(command, ["ls", "-la"]);

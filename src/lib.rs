@@ -41,6 +41,7 @@ pub fn dev_mode() -> bool {
 
 pub mod catalog;
 pub mod catalog_ops;
+pub mod cli;
 pub mod completions;
 pub mod container;
 pub mod forward;

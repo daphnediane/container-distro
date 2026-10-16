@@ -8,12 +8,13 @@ description: How `cm` (WSL-compatible wrapper) and the `container distro` plugin
 A single-crate Cargo repository (`container-distro`) shipping both
 binaries:
 
-- `src/bin/cm/` — the `cm` binary: `wsl.exe` argument semantics on top
+- `src/cli/cm/` — the `cm` front end: `wsl.exe` argument semantics on top
   of Apple's `container` CLI. Optionally symlinked to `wsl`.
-- `src/bin/container-distro/` — the `container-distro` binary. It
+- `src/cli/distro/` — the `container-distro` front end. It
   registers as the `container distro` CLI plugin and creates
   machine-like containers ("distros") with what `container machine`
   lacks: mounts outside `$HOME`, published ports, export/import, `set`.
+- `src/bin/` — one-line `main`s over those front ends.
 - `src/` — the `container_distro` library: shared `container` CLI
   wrappers and serde types, `naming` (persistent names/labels), `oci`
   (rootfs tar → OCI layout), `catalog`/`catalog_ops` (installable
@@ -152,7 +153,7 @@ lacks `grant-admin.sh`; the `admin` label records `true`/`false`/`never`
 explicit `--sudo` does). `set` accepts `--network`, `--ssh`/`--no-ssh`,
 `--sudo`/`--no-sudo`.
 
-`cm` treats machines and distros as one namespace (`src/bin/cm/backend.rs`),
+`cm` treats machines and distros as one namespace (`src/cli/cm/backend.rs`),
 linking the library rather than exec'ing the plugin: `-d NAME` resolves a
 distro first, then a machine; a default distro overrides the default
 machine; `-l` merges both — same-named pairs stay as two rows annotated

@@ -58,8 +58,9 @@ One published crate shipping two binaries over a shared library:
 | --------------------------- | ------------------------------------------------------------------- |
 | `src/`                      | `container_distro` library: shared `container` CLI plumbing         |
 |                             | (naming, OCI, forwarder, self-update, …) plus distro logic          |
-| `src/bin/cm/`               | the `cm` binary (WSL-compatible CLI)                                |
-| `src/bin/container-distro/` | the `container-distro` binary (`container distro` plugin front end) |
+| `src/cli/cm/`               | `cm` front end (WSL-compatible CLI), one file per action group      |
+| `src/cli/distro/`           | `container distro` plugin front end, one file per larger subcommand |
+| `src/bin/`                  | one-line `main`s for the `cm` and `container-distro` binaries       |
 | `assets/`                   | distro init scripts (`sbin.distro*/`)                               |
 | `scripts/`                  | maintainer scripts (below)                                          |
 | `packaging/`                | pkg resources: Distribution.xml, uninstaller/updater, signing conf  |
