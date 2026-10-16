@@ -562,7 +562,8 @@ wall.
 
 ## Findings and resolutions
 
-Numbered C1–C12 from the 2026-10-03 review. Status reflects the fix
+Numbered C1–C12 from the 2026-10-03 review; later findings continue
+the sequence. Status reflects the fix
 commits that follow this document.
 
 | #   | Severity   | Issue                                                                                                                                                  | Status                                                                                                                                                                                                                                                                   |
@@ -579,6 +580,7 @@ commits that follow this document.
 | C10 | Low        | `--automount` mounts every `/Volumes/*` rw (DMGs, USB, network shares); lowercase/`→`- collisions produce duplicate targets                            | **Partial** -- case preserved, target collisions deduped + warned, `--automount ro` available; rw-all-`/Volumes` remains an accepted opt-in                                                                                                                              |
 | C11 | Info       | `uninstall` check-then-delete TOCTOU; snapshot images cleaned by name prefix not label                                                                 | **Fixed** -- uninstall removes only files it installed; imported images carry a `distro` label cleanup matches                                                                                                                                                           |
 | C12 | Info (bug) | `resolve_shell` probe breaks under `machine run` re-eval → always falls back to `/bin/sh`                                                              | **Fixed** -- probe passed as one pre-joined string                                                                                                                                                                                                                       |
+| C13 | Medium     | Lock/write helpers followed symlinks: `chflags` unlocked a planted link's target; launcher/iTerm2 writes went through planted links                    | **Fixed** -- `lchflags`; launcher, iTerm2 and asset writes/chmods go through `O_NOFOLLOW`; tests target temp files, not `/etc/passwd`                                                                                                                                    |
 
 ## Risks introduced by gap-closing work
 

@@ -472,8 +472,11 @@ fn asset_files(admin: bool) -> Vec<(&'static str, &'static str)> {
 /// process clears the flag (verified against a running distro).
 fn set_locked(path: &Path, locked: bool) -> Result<()> {
     let c = CString::new(path.as_os_str().as_bytes())?;
-    // SAFETY: `c` is a valid NUL-terminated path; chflags only reads it.
-    let rc = unsafe { libc::chflags(c.as_ptr(), if locked { libc::UF_IMMUTABLE } else { 0 }) };
+    // `lchflags`, not `chflags`: a symlink planted at `path` gets its
+    // own flags changed, never its target's — following it would let
+    // a guest-planted link unlock any file the host user can chflag.
+    // SAFETY: `c` is a valid NUL-terminated path; lchflags only reads it.
+    let rc = unsafe { libc::lchflags(c.as_ptr(), if locked { libc::UF_IMMUTABLE } else { 0 }) };
     if rc == 0 {
         Ok(())
     } else {
@@ -533,7 +536,8 @@ pub(crate) fn is_locked(path: &Path) -> bool {
 /// Write `body` to `path` via `O_NOFOLLOW`, so a symlink planted
 /// through a shared-home mount is removed rather than followed — the
 /// alternative is a refresh clobbering an arbitrary file the user owns.
-fn write_nofollow(path: &Path, body: &[u8]) -> Result<()> {
+/// `mode` is applied through the open descriptor, never the path.
+pub(crate) fn write_nofollow(path: &Path, body: &[u8], mode: u32) -> Result<()> {
     let c = CString::new(path.as_os_str().as_bytes())?;
     for _ in 0..2 {
         // SAFETY: `c` is a valid NUL-terminated path.
@@ -541,15 +545,17 @@ fn write_nofollow(path: &Path, body: &[u8]) -> Result<()> {
             libc::open(
                 c.as_ptr(),
                 libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC | libc::O_NOFOLLOW,
-                0o755,
+                mode as libc::c_uint,
             )
         };
         if fd >= 0 {
             // SAFETY: fd is a live descriptor open() just returned.
             let mut f = unsafe { fs::File::from_raw_fd(fd) };
+            f.write_all(body)
+                .with_context(|| format!("failed to write {}", path.display()))?;
             return f
-                .write_all(body)
-                .with_context(|| format!("failed to write {}", path.display()));
+                .set_permissions(fs::Permissions::from_mode(mode))
+                .with_context(|| format!("failed to chmod {}", path.display()));
         }
         let e = io::Error::last_os_error();
         if e.raw_os_error() == Some(libc::ELOOP)
@@ -600,10 +606,23 @@ fn write_locked_asset(path: &Path, body: &[u8]) -> Result<()> {
     }
     unlock(path);
     if fs::read(path).ok().as_deref() != Some(body) {
-        write_nofollow(path, body)?;
+        write_nofollow(path, body, 0o755)?;
+    } else {
+        chmod_nofollow(path, 0o755)?;
     }
-    fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
     set_locked(path, true)
+}
+
+/// `chmod` that refuses a symlink at `path` (`O_NOFOLLOW` open, then
+/// `fchmod`) instead of changing the mode of whatever it points at.
+fn chmod_nofollow(path: &Path, mode: u32) -> Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    fs::File::options()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+        .and_then(|f| f.set_permissions(fs::Permissions::from_mode(mode)))
+        .with_context(|| format!("failed to chmod {}", path.display()))
 }
 
 /// The init-assets dir inside `name`'s journal — every journaled
@@ -686,7 +705,7 @@ fn write_default(name: Option<&str>) -> Result<()> {
             // Locked at rest like the init assets: this file picks which
             // distro a bare `cm` enters, so it shouldn't be guest-writable.
             unlock(&path);
-            write_nofollow(&path, format!("{n}\n").as_bytes())?;
+            write_nofollow(&path, format!("{n}\n").as_bytes(), 0o644)?;
             set_locked(&path, true)?;
         }
         None => {
@@ -1926,7 +1945,11 @@ fn write_journal(name: &str, spec: &DistroSpec) -> Result<()> {
             fs::create_dir(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
         }
         unlock(&spec_path);
-        write_nofollow(&spec_path, &serde_json::to_vec_pretty(&spec.to_journal())?)?;
+        write_nofollow(
+            &spec_path,
+            &serde_json::to_vec_pretty(&spec.to_journal())?,
+            0o644,
+        )?;
         set_locked(&spec_path, true)?;
         set_locked(&dir, true)
     })
@@ -2021,7 +2044,7 @@ fn refresh_conf_snapshots(name: &str, id: &str, spec: &DistroSpec) {
                 let r = p.and_then(|p| {
                     with_journal_dir_unlocked(name, || {
                         unlock(&p);
-                        write_nofollow(&p, &text)?;
+                        write_nofollow(&p, &text, 0o644)?;
                         set_locked(&p, true)
                     })
                 });
@@ -2069,7 +2092,7 @@ fn write_conf_snapshots(
             unlock(&p);
             match text {
                 Some(t) => {
-                    write_nofollow(&p, t.as_bytes())?;
+                    write_nofollow(&p, t.as_bytes(), 0o644)?;
                     set_locked(&p, true)
                 }
                 None => match fs::remove_file(&p) {
@@ -2274,7 +2297,7 @@ fn migrate_once() -> Result<()> {
             }
         }
     }
-    write_nofollow(&marker, b"journal migration done\n")?;
+    write_nofollow(&marker, b"journal migration done\n", 0o644)?;
     set_locked(&marker, true)?;
     Ok(())
 }
@@ -4855,10 +4878,22 @@ mod tests {
     #[test]
     fn open_locked_rw_rejects_planted_symlink() {
         let dir = tempfile::tempdir().unwrap();
+        // The link targets a locked file of ours — standing in for
+        // another distro's journal asset. Never a system file: a lock
+        // call that follows the link there can raise an admin prompt.
+        let victim = dir.path().join("victim");
+        fs::write(&victim, b"keep").unwrap();
+        set_locked(&victim, true).unwrap();
         let spec_p = dir.path().join("spec.json");
-        std::os::unix::fs::symlink("/etc/passwd", &spec_p).unwrap();
-        assert!(open_locked_rw(&spec_p).is_err());
-        assert!(!spec_p.exists());
+        std::os::unix::fs::symlink(&victim, &spec_p).unwrap();
+        let refused = open_locked_rw(&spec_p).is_err();
+        let still_locked = is_locked(&victim);
+        // Unlock before asserting so the tempdir can always clean up.
+        set_locked(&victim, false).unwrap();
+        assert!(refused);
+        assert!(fs::symlink_metadata(&spec_p).is_err(), "link not removed");
+        assert!(still_locked, "unlock followed the planted link");
+        assert_eq!(fs::read(&victim).unwrap(), b"keep");
     }
 
     #[test]

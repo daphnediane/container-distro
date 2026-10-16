@@ -86,6 +86,11 @@ docs/design/release.md.
 - `cm --unregister`/`distro delete` no longer print a stray "Can't get
   settings set" AppleScript error for distros with no Terminal
   profile — removal only touches settings sets carrying our marker.
+- Locking and writing launch artifacts no longer follows symlinks: a
+  link planted at a journal path could clear the `uchg` lock on the
+  file it pointed to, and a link planted at a terminal launcher or the
+  iTerm2 profile file got our launcher written to its target
+  (security.md C13).
 
 ## 0.7.0 -- 2026-10-13
 

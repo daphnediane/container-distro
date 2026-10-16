@@ -249,15 +249,15 @@ fn script_contents(name: &str) -> String {
 /// journal assets — a rw-shared guest rewriting it would own the next
 /// profile launch.
 fn write_script_at(path: &Path, contents: &str) -> bool {
-    use std::os::unix::fs::PermissionsExt;
     if let Some(parent) = path.parent()
         && fs::create_dir_all(parent).is_err()
     {
         return false;
     }
     crate::ops::unlock(path);
-    let ok = fs::write(path, contents).is_ok()
-        && fs::set_permissions(path, fs::Permissions::from_mode(0o755)).is_ok();
+    // No-follow: a link planted here would otherwise get the launcher
+    // written (and locked open) at its target.
+    let ok = crate::ops::write_nofollow(path, contents.as_bytes(), 0o755).is_ok();
     if ok {
         crate::ops::lock(path);
     }
@@ -776,11 +776,8 @@ fn iterm2_write(profiles: Vec<Value>) -> bool {
     // `uchg`-locked like the other launch artifacts — the file sits
     // under a shared-able home and its Command runs on the host.
     crate::ops::unlock(&f);
-    let ok = fs::write(
-        &f,
-        serde_json::to_string_pretty(&json!({ "Profiles": profiles })).unwrap(),
-    )
-    .is_ok();
+    let body = serde_json::to_string_pretty(&json!({ "Profiles": profiles })).unwrap();
+    let ok = crate::ops::write_nofollow(&f, body.as_bytes(), 0o644).is_ok();
     if ok {
         crate::ops::lock(&f);
     }
@@ -922,6 +919,22 @@ pub fn reconcile(keep: &BTreeSet<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn launcher_write_replaces_planted_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let victim = dir.path().join("victim");
+        fs::write(&victim, b"keep").unwrap();
+        let script = dir.path().join("d1.sh");
+        std::os::unix::fs::symlink(&victim, &script).unwrap();
+        let wrote = write_script_at(&script, "#!/bin/sh\n");
+        let is_link = fs::symlink_metadata(&script).map(|m| m.file_type().is_symlink());
+        crate::ops::unlock(&script);
+        assert!(wrote);
+        assert!(!is_link.unwrap(), "the planted link was written through");
+        assert_eq!(fs::read(&victim).unwrap(), b"keep");
+        assert_eq!(fs::read(&script).unwrap(), b"#!/bin/sh\n");
+    }
 
     #[test]
     fn conf_enabled_maps_to_source_intent() {
