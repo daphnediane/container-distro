@@ -73,7 +73,10 @@ window, so it's distro-only and the run-shaping flags don't apply
 (`--user`, `--cd`, `--shell-type`, `--env`, `-e`, a command line).
 On `--install`/`--import` it replaces the console launch entirely.
 Asking to open is an opt-in — it pins `--terminal-profile` on the
-distro's journal.
+distro's journal. The first run asks macOS's permission for the app
+you ran `cm` from to control Terminal; see [Terminal automation
+permission](container-distro.md#terminal-automation-permission) if it
+fails with `-1743`.
 
 `--shell-type none` requires a command (it's the exec mode implied by
 `-e`); `--shell-type standard`/`login` choose the interactive shell.

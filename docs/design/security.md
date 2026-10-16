@@ -488,7 +488,7 @@ preference stores a package shouldn't normally reach.
   is far below that.
 - **Mitigations that exist:** the package supplies exactly one value
   — the `windowsterminal.enabled` boolean. The profile name, title,
-  and `cm -d` command are host-generated (distro names are already
+  and `run -n NAME` command are host-generated (distro names are already
   validated), and `ProfileTemplate` styling is not read at all
   ([#34]). The
   `ContainerDistroDistro` marker plus the ` (cm)` fallback mean a
@@ -497,6 +497,12 @@ preference stores a package shouldn't normally reach.
   one is left alone rather than rewritten. Removal edits the plist
   directly (and AppleScript only against an already-running
   Terminal), so cleanup can't be tricked into launching a window.
+- **Consent:** opening a window (`terminal`, `cm --terminal`) sends
+  Apple events to Terminal, so macOS's Automation (TCC) consent for
+  the *calling* app applies — we never request or bypass it, and a
+  denial fails the open with the `osascript` reason. Removal's
+  live-model `delete` is best-effort under the same consent; the
+  plist edit doesn't need it.
 - **Residuals:** Terminal's live settings model loads `Window
   Settings` lazily, so a profile deleted while Terminal runs could
   linger in its in-memory view until a pref reload — cosmetic, and

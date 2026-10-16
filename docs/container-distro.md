@@ -360,6 +360,26 @@ Asking to open is an opt-in: it pins `terminal_profile` like
 `set --terminal-profile` would, so `sync-profiles` keeps the
 artifacts rather than sweeping them.
 
+#### Terminal automation permission
+
+Opening the window drives Terminal through AppleScript, which macOS
+gates per *calling* app: the first `terminal`/`cm --terminal` run
+asks whether the app you ran it from — iTerm2, Visual Studio Code,
+Terminal itself — may control Terminal. Allow it. If the request was
+dismissed or denied, macOS remembers that and the command fails with
+`Not authorized to send Apple events to Terminal (-1743)`. Turn it on
+under **System Settings › Privacy & Security › Automation ›
+\<your app\> › Terminal**, or forget the answer so the next run asks
+again: `tccutil reset AppleEvents <bundle id>` (for example
+`com.microsoft.VSCode`; `osascript -e 'id of app "iTerm"'` prints an
+app's id).
+
+Removing a profile while Terminal is running (`delete`, `rename`,
+`cm --unregister`, `sync-profiles` pruning) also asks Terminal, via
+AppleScript, to drop the settings set from its live model. That
+request is best-effort: denying it is harmless, because the
+preferences edit that follows is what actually removes the profile.
+
 ### `set-default [NAME] | --clear`
 
 Set the default distro -- or unset it with `--clear`. The default distro
