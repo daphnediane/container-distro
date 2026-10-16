@@ -10,6 +10,22 @@ docs/design/release.md.
 
 ## 0.8.0-dev
 
+### Highlights
+
+- **amd64 (x86-64) distros on Apple silicon**: `--arch amd64` selects
+  x86-64 sources on install, import, and catalog installs — amd64-only
+  entries like SLES become installable — and `container` runs the
+  amd64 userspace translated under Rosetta on the arm64 kernel.
+- **Terminal.app integration**: `cm --terminal` / `container distro
+  terminal` opens a distro in Terminal under its own profile; profiles
+  are now importable `.terminal` launcher files instead of plist
+  writes, and `container distro sync-profiles` repairs and prunes the
+  artifacts.
+- **One binary, one install step**: `cm` is no longer built — it is an
+  alias script for `container-distro cli` — and `container-distro
+  install-all` sets up man pages, completions, the alias, and the
+  `container distro` plugin in one shot.
+
 ### Added
 
 - **amd64 (x86-64) distros on Apple silicon**: `--arch amd64` on
@@ -20,14 +36,12 @@ docs/design/release.md.
   rootfs archives are labeled `linux/amd64`. `container` auto-enables
   Rosetta, so the amd64 userspace runs translated on the arm64 kernel.
   The arch is journaled with the distro, so recreation/`set` keeps it.
-  For systemd distros, init masks `systemd-binfmt.service` when the
-  Rosetta registration is armed — its boot-time binfmt_misc flush would
-  otherwise drop x86-64 handling mid-boot.
 - **`--arch` on listings**: `cm -l --arch ARCH` and
   `container distro list --arch ARCH` filter installed machines and
   distros to that arch; `cm -l -o --arch ARCH` and
   `container distro catalog list --arch ARCH` render the catalog for
   that arch (status columns match against the selected arch's source).
+
 - **`cm --terminal` and `container distro terminal NAME`**: open a
   distro in Terminal.app — its `.terminal` profile imports into
   Terminal's settings and a window launches into the distro. On
@@ -79,14 +93,6 @@ docs/design/release.md.
   `container-distro install-all` afterwards (and `uninstall-all`
   before `cargo uninstall`). The binstall tarball ships just the
   binary.
-- **Silent profile imports no longer swap the launcher script.** With
-  Terminal running, the import used to replace `NAME.sh` with a
-  self-restoring no-op; now it arms a one-shot sentinel in the
-  distro's journal dir that the import window's
-  `container distro run --profile-launch` consumes before exiting.
-  Manual `NAME.sh CMD` runs are never swallowed, an unconsumed
-  sentinel expires after a minute, and `terminal NAME` always gets a
-  real session.
 - **Aliases are scripts, not symlinks.** `--install-alias` writes a
   two-line `/bin/sh` script that runs this binary's chosen interface,
   so an alias can target either `cm` or `container distro`. A bare
@@ -94,56 +100,86 @@ docs/design/release.md.
   (`wsl --install-alias wsl2` puts `wsl2` beside `wsl`), else next to
   the binary. Existing symlink aliases keep working; re-running
   `--install-alias` upgrades them.
-- **Terminal launchers run `container distro run`**, naming the binary
-  that generated them, instead of whatever `cm` sat beside it or first
+
+- **Terminal.app profiles are launcher files.** Each distro gets a
+  `terminal-profiles/NAME.terminal` profile file and a
+  `terminal-cmds/NAME.sh` launcher script under
+  `~/Library/Application Support/container-distro/` — plus an iTerm2
+  dynamic profile — instead of writes into Terminal's plist that a
+  running Terminal could silently drop on its next prefs flush.
+  Double-clicking the `.terminal` file imports the profile into
+  Terminal's settings and doubles as a launcher; `create`/`import`,
+  `set --terminal-profile`, `rename`, and `sync-profiles` import it
+  the same way. The imported profile just runs the launcher script,
+  so later command changes apply without a re-import; the window
+  closes on a clean exit and stays visible on a failed launch. A
+  same-named profile you made yourself is never overwritten — ours
+  imports as `NAME 1` — and a profile you delete in Terminal's
+  settings stays deleted until `set --terminal-profile`,
+  `distro terminal`, or `sync-profiles` explicitly re-imports it.
+  All of these artifacts are `uchg`-locked so a guest with an
+  rw-shared home can't rewrite a host launcher.
+- **Importing a profile into a running Terminal briefly opens a
+  window.** Terminal applies a `.terminal` file by launching it, so
+  an import while Terminal is running opens a throwaway session whose
+  window flashes open and exits at once — that's the profile landing,
+  not a stray window. It can trigger on `create`/`import`,
+  `set --terminal-profile`, `sync-profiles`, or `rename`. `NAME.sh`
+  is never swapped out for it (the old import temporarily replaced
+  the script), manual `NAME.sh CMD` runs are never swallowed, and
+  `terminal NAME` always opens a real session.
+- **Terminal launchers run `container distro run`** from the binary
+  that generated them instead of whatever `cm` sat beside it or first
   on `PATH` — a plugin-only install no longer needs `cm` at all.
   `NAME.sh CMD…` now passes CMD as exact argv, like `run`, rather than
   through the guest shell (`NAME.sh sh -c '…'` for a pipeline).
   `container distro sync-profiles` rewrites existing launchers.
 
-- **Terminal.app profiles are launcher files.** Instead of writing
-  Terminal's plist, each distro gets `terminal-profiles/NAME.terminal`
-  plus a `terminal-cmds/NAME.sh` script under `~/Library/Application
-  Support/container-distro/`. Opening the file imports the settings
-  set through Terminal itself — into its live model, so a running
-  Terminal's next prefs flush can no longer silently drop a profile —
-  and the file doubles as a double-clickable launcher. Imported
-  profiles run the script (`container distro run -n NAME -w ~`), so command updates
-  never need a re-import, and `shellExitAction` closes the window on a
-  clean exit while a failed launch stays visible. iTerm2 dynamic
-  profiles run the same script. Terminal.app's `CommandString` isn't
-  shell-parsed — quoting can't save a path containing `Application
-  Support` — so profiles exec the script as
-  `~/.container-distro/terminal-cmds/NAME.sh`, tilde-expanded through a
-  `uchg`-locked symlink to the state dir; the scripts, `.terminal`
-  files, iTerm2 profile, and the symlink itself are all locked so a
-  guest with a rw-shared home can't rewrite a host launcher. A
-  same-named foreign profile is never overwritten — Terminal imports
-  ours as `NAME 1` — and a profile you delete in Terminal's prefs
-  stays deleted until `set --terminal-profile`, `distro terminal`, or
-  `sync-profiles` explicitly re-imports it.
 - **`cm --cd ~` follows the effective user.** `~`/`~/…` now expand to
-  the `-u` user's guest home — root → `/root`, a named user → its home
-  resolved live in the guest via `getent passwd` (NSS-aware, with an
-  `/etc/passwd` fallback in the same exec), an unmatched numeric uid →
-  `/`; no `-u` keeps the provisioned user. Machine `container exec`
-  resolves the same way.
+  the `-u` user's guest home — root → `/root`, a named user → its
+  home, an unmatched numeric uid → `/`; no `-u` keeps the provisioned
+  user. Machine `container exec` resolves the same way.
 
 ### Fixed
 
-- `cm --terminal` / `container distro terminal` say *why* Terminal
-  couldn't be driven — `osascript`'s message, plus where to grant the
-  Automation permission when that's missing — instead of a bare
-  "couldn't open the profile".
-
-- `cm --unregister`/`distro delete` no longer print a stray "Can't get
-  settings set" AppleScript error for distros with no Terminal
-  profile — removal only touches settings sets carrying our marker.
 - Locking and writing launch artifacts no longer follows symlinks: a
   link planted at a journal path could clear the `uchg` lock on the
   file it pointed to, and a link planted at a terminal launcher or the
   iTerm2 profile file got our launcher written to its target
   (security.md C13).
+- `cm --terminal` / `container distro terminal` say *why* Terminal
+  couldn't be driven — `osascript`'s message, plus where to grant the
+  Automation permission when that's missing — instead of a bare
+  "couldn't open the profile".
+- `cm --unregister`/`distro delete` no longer print a stray "Can't get
+  settings set" AppleScript error for distros with no Terminal
+  profile — removal only touches settings sets carrying our marker.
+
+### Technical details
+
+- amd64 on systemd distros: init masks `systemd-binfmt.service` while
+  the Rosetta registration is armed — its boot-time binfmt_misc flush
+  would otherwise drop x86-64 handling mid-boot.
+- A Terminal profile's command execs the launcher as
+  `~/.container-distro/terminal-cmds/NAME.sh`, tilde-expanded through a
+  `uchg`-locked symlink to the state dir: Terminal's `CommandString`
+  isn't shell-parsed, so quoting can't save a path containing
+  `Application Support`. The scripts, `.terminal` files, iTerm2
+  profile, and the symlink itself are all `uchg`-locked.
+- The running-Terminal import is one-shot: generation arms a
+  `profile-import` sentinel in the distro's journal dir, and the
+  import window's `container distro run --profile-launch` consumes it
+  and exits instead of starting a session. Unlinking the sentinel is
+  the one-shot, so only the import's own window exits early; an
+  unconsumed sentinel expires after a minute — covering a launch a
+  dormant Terminal drops — and a launcher run with a command never
+  consumes it.
+- Imported Terminal profiles run `container distro run -n NAME -w ~`
+  and carry a `ContainerDistroDistro` marker so removal only touches
+  what we made; `shellExitAction` closes the window on a clean exit.
+- `cm --cd ~` resolves a named `-u` user's home live in the guest via
+  `getent passwd` (NSS-aware), with an `/etc/passwd` fallback in the
+  same exec.
 
 ## 0.7.0 -- 2026-10-13
 
