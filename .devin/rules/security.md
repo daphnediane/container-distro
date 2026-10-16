@@ -35,6 +35,16 @@ accidental.
   select a *user*-privilege binary (`CONTAINER_CLI`) are PATH-
   equivalent — document them in the trade-off table, don't flag-gate
   them.
+- **Security tests aim at decoys, never real host files.** A test that
+  plants a symlink, or points a lock, write, chmod, delete, or
+  privileged operation at a target, uses a stand-in it creates under a
+  tempdir — a locked temp file, a fake binary — never `/etc/passwd`,
+  `/bin/sh`, dotfiles, the real state dir, or any other live file. If
+  the defense under test regresses, the operation lands on whatever
+  the test named: at best it hangs on an admin prompt (C13), at worst
+  it succeeds. Asserting on the decoy (still locked, content
+  unchanged) is the stronger test anyway. Literal system paths in
+  pure path arithmetic (no filesystem access) are fine.
 - **Document every new trade-off or shortcoming in `docs/design/security.md`.**
   New accepted risk → trade-off table entry; new violation/panic →
   findings table; new mitigation → note it under the risk it addresses.

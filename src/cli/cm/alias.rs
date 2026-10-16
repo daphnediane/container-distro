@@ -222,8 +222,10 @@ mod tests {
     #[test]
     fn foreign_symlink_refused() {
         let tmp = tempfile::tempdir().unwrap();
+        let decoy = tmp.path().join("other-binary");
+        fs::write(&decoy, b"").unwrap();
         let link = tmp.path().join("wsl");
-        symlink("/bin/sh", &link).unwrap();
+        symlink(&decoy, &link).unwrap();
         assert!(!points_to(&link, &our_exe().unwrap()));
     }
 }
