@@ -8,7 +8,7 @@ entries directly. At release time the `-dev` heading is renamed to
 `## X.Y.Z -- YYYY-MM-DD` and audited against the commit log -- see
 docs/design/release.md.
 
-## 0.8.0-dev
+## 0.8.0 -- 2026-10-15
 
 ### Highlights
 
@@ -154,6 +154,14 @@ docs/design/release.md.
 - `cm --unregister`/`distro delete` no longer print a stray "Can't get
   settings set" AppleScript error for distros with no Terminal
   profile — removal only touches settings sets carrying our marker.
+- Deleting a distro's Terminal profile while Terminal runs now warns
+  when the delete is refused — a running Terminal would otherwise
+  silently restore the profile on its next prefs flush — and the
+  warning points at the Automation permission when that's the cause.
+- rustls 0.23.46 for RUSTSEC-2026-0349 — an unauthenticated
+  ServerHello could poison the client's key-share prediction,
+  downgrading later connections to classical-only key exchange
+  ("harvest now, decrypt later" — no auth bypass).
 
 ### Technical details
 
