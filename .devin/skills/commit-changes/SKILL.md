@@ -6,7 +6,7 @@ description: Commit changes with formatted message and progress-log handling
 # Commit Changes
 
 1. Read `.devin/progress.md` if it exists — it records user prompts and work status since the last commit. Reflect anything still pending in your plan or the commit message.
-2. If the changes complete a `docs/TODO.md` item, remove the item there and record the user-facing change under the `## X.Y.Z-dev` section of `CHANGELOG.md` (matching the dev version in `Cargo.toml`). User-facing work that was never a TODO item gets an entry directly.
+2. If the changes complete a `docs/work/` item, delete its file and record the user-facing change under the `## X.Y.Z-dev` section of `CHANGELOG.md` (matching the dev version in `Cargo.toml`). User-facing work that was never a work item gets an entry directly.
 3. Check if a commit template exists at `.templates/next-commit.txt`; otherwise use the base template at `.templates/next-commit-base.txt`.
 4. Compose a commit message to `./next-commit.txt` following `.devin/rules/comment-file.md` (conventional-commit tag, subject, description, bullets).
 5. Add the `Co-Authored-By` attribution trailer after a blank line as specified in `.devin/rules/attribution.md`.

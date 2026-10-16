@@ -3,7 +3,7 @@
 User-facing changes per release, newest first. The top `## X.Y.Z-dev`
 section is the running draft for the in-flight release (matching the
 dev version in `Cargo.toml`): entries land there as work completes --
-finished `docs/TODO.md` items move here, other user-facing changes get
+finished `docs/work/` items move here, other user-facing changes get
 entries directly. At release time the `-dev` heading is renamed to
 `## X.Y.Z -- YYYY-MM-DD` and audited against the commit log -- see
 docs/design/release.md.

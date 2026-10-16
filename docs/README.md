@@ -6,15 +6,15 @@ the top-level [DEV.md](../DEV.md).
 
 ## User guides
 
-| Document            | Contents                                                                                     |
-| ------------------- | -------------------------------------------------------------------------------------------- |
-| [install]           | Building, `cargo install`, plugin registration, man pages, completions, uninstall            |
-| [cm]                | `cm` command-line reference -- the WSL-compatible front end                                  |
-| [container distro]  | `container distro`/`container-distro` subcommand reference                                   |
-| [cm vs wsl]         | Where `cm`'s behavior deliberately differs from `wsl.exe`                                    |
-| [machine vs distro] | Choosing between the `container machine` and `container distro` backends                     |
-| [security]          | Not a sandbox -- what's exposed by default, `--restricted`, and how to scope down            |
-| [TODO]              | Open work list -- planned features, pre-1.0 checklist; completed items move to the changelog |
+| Document            | Contents                                                                                               |
+| ------------------- | ------------------------------------------------------------------------------------------------------ |
+| [install]           | Building, `cargo install`, plugin registration, man pages, completions, uninstall                      |
+| [cm]                | `cm` command-line reference -- the WSL-compatible front end                                            |
+| [container distro]  | `container distro`/`container-distro` subcommand reference                                             |
+| [cm vs wsl]         | Where `cm`'s behavior deliberately differs from `wsl.exe`                                              |
+| [machine vs distro] | Choosing between the `container machine` and `container distro` backends                               |
+| [security]          | Not a sandbox -- what's exposed by default, `--restricted`, and how to scope down                      |
+| [work/]             | Open work list -- one file per item under `<area>/<milestone>/`; completed items move to the changelog |
 
 ## Design & architecture
 
@@ -59,5 +59,5 @@ Upstream references:
 [remote-wsl-interop]: design/remote-wsl-interop.md
 [security register]: design/security.md
 [security]: security.md
-[TODO]: TODO.md
+[work/]: work/
 [upstream-limitations]: design/upstream-limitations.md

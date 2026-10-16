@@ -16,11 +16,13 @@ assume good faith, don't be a jerk.
 - **Bug reports** -- open an [issue] with the `cm`/`container-distro`
   version (`cm --version`), your `container` version, macOS release,
   the command you ran, and what happened vs. what you expected.
-- **Feature ideas** -- check docs/TODO.md first; a fair amount of the
-  roadmap is already tracked there. For anything bigger than a small
-  fix, open an issue to discuss before writing code.
+- **Feature ideas** -- check the [open issues][issue] first; each
+  planned item has an issue linking its doc under docs/work/, so a
+  fair amount of the roadmap is already tracked. For anything bigger
+  than a small fix, open an issue to discuss before writing code.
 - **Pull requests** -- small, focused PRs are far easier to review
-  than sweeping ones.
+  than sweeping ones. PRs should reference the issue they implement;
+  only trivial fixes (typos, obvious bugs) should come in untracked.
 
 ## Development setup
 

@@ -159,7 +159,7 @@ container-distro`).
 - Some features reach into `container` internals that may change on
   newer releases -- a warning appears on unverified versions.
 - Distro names are lowercase DNS-style (`[a-z0-9-]`).
-- Open work and planned features: [docs/TODO.md](docs/TODO.md). The
+- Open work and planned features: [docs/work/](docs/work/). The
   rest of the docs live in [docs/](docs/README.md).
 
 ## Documentation
@@ -174,7 +174,7 @@ container-distro`).
 | [docs/machine-vs-distro.md](docs/machine-vs-distro.md) | `container machine` vs `container distro` -- which to use      |
 | [docs/security.md](docs/security.md)                   | Security model: not a sandbox, `--restricted`, scoping down    |
 | [SECURITY.md](SECURITY.md)                             | Reporting vulnerabilities (draft, pre-1.0)                     |
-| [docs/TODO.md](docs/TODO.md)                           | Roadmap and open items                                         |
+| [docs/work/](docs/work/)                               | Roadmap and open items                                         |
 | [docs/design/](docs/design/)                           | Architecture and design documents                              |
 
 ## License

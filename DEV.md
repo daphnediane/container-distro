@@ -177,6 +177,7 @@ publish — is [docs/design/release.md](docs/design/release.md).
 - `docs/design/security.md` — the threat-model register; required
   reading before touching anything that crosses the host/guest
   boundary or runs with privilege (installer paths included)
-- `docs/TODO.md` — the working roadmap
+- `docs/work/` — the working roadmap (one file per open item,
+  `<area>/<milestone>/<feature>.md`)
 
 [`container`]: https://github.com/apple/container

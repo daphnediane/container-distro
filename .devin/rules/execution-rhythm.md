@@ -11,11 +11,11 @@ description: Guidelines for implementing work items and plan phases
 - **Scope discipline**: Implement only the current item/phase; resist scope creep
 - **Always green**: `cargo test` must pass at every commit
 - **Document as you go**: Update inline docs and relevant documentation
-  files. When a `docs/TODO.md` item is completed, remove it there and
+  files. When a `docs/work/` item is completed, delete its file and
   record the user-facing change under the `## X.Y.Z-dev` section of
   `CHANGELOG.md` (matching the dev version in `Cargo.toml`) in the same
   commit — see `docs/design/release.md`. User-facing work that was never
-  a TODO item gets a changelog entry directly.
+  a work item gets a changelog entry directly.
 
 ## Progress Log
 

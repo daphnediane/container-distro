@@ -57,14 +57,14 @@ The mechanical bits are driven by [cargo-release] (`cargo install
    stale), and a vendored-catalog freshness check (refresh
    `vendor/microsoft/` with `scripts/update-microsoft-catalog.sh`
    when upstream's `DistributionInfo.json` has moved). Then confirm
-   [TODO] lists only still-open work — including pruning links to
+   [work] lists only still-open work — including pruning links to
    issues that closed this cycle — and the user-facing docs reflect
    what actually shipped. If the release has a GitHub milestone, sweep
    its open issues (`gh issue list --milestone <name> --state open`):
    each gets fixed in this release, re-milestoned/deferred, or
    consciously shipped around -- don't tag with release-scoped work
-   silently open. (Today that's `release-1` gating 1.0; interim minors
-   have no milestone and skip this.) If `container`'s minor version
+   silently open. (Today that's `1.0` gating the 1.0 release; interim
+   minors have no milestone and skip this.) If `container`'s minor version
    changed since the
    last release, first re-verify the appRoot internals we depend on
    ([Version gating]) and extend `VERIFIED_CONTAINER_MINOR` plus the
@@ -90,7 +90,7 @@ The mechanical bits are driven by [cargo-release] (`cargo install
    `## X.Y.Z-dev` section to `## X.Y.Z -- YYYY-MM-DD`, then audit it
    against the commit log since the previous tag
    (`git log --oneline v<prev>..HEAD`) -- add entries for anything that
-   landed without one. Completed work moved out of `TODO.md` as it
+   landed without one. Completed work moved out of `docs/work/` as it
    landed, so nothing done should still linger there. Commit this
    *before* releasing: `cargo release` requires a clean tree.
 3. Preview then cut the release:
@@ -233,12 +233,12 @@ newest first -- `## X.Y.Z -- YYYY-MM-DD` sections grouped Added /
 Changed / Fixed. The top section is the running draft for the
 in-flight release, titled `## X.Y.Z-dev` after the dev version in
 `Cargo.toml`: entries land there as work completes -- a finished
-`TODO.md` item is removed from TODO and recorded in the dev section in
-the same commit, and user-facing work that was never a TODO item gets
+`docs/work/` item's file is deleted and recorded in the dev section in
+the same commit, and user-facing work that was never a work item gets
 an entry directly. At release time the `-dev` heading is renamed to
 `## X.Y.Z -- YYYY-MM-DD` and the section is audited against the commit
 log for anything missed, so the changelog stays the permanent record
-and TODO stays a list of work that remains.
+and `docs/work/` stays a list of work that remains.
 
 ## Notes
 
@@ -260,5 +260,5 @@ and TODO stays a list of work that remains.
 [install]: ../install.md
 [packaging]: packaging.md
 [SemVer]: https://semver.org
-[TODO]: ../TODO.md
+[work]: ../work/
 [Version gating]: container-internals.md#version-gating

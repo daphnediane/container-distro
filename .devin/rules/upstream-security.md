@@ -23,7 +23,7 @@ confirmed.
   description of the finding — even when the details came from the
   user's prompt. Summarize neutrally (e.g. "upstream security review")
   in `next-commit.txt`, PR bodies, issues, and comments.
-- **Keep specifics out of public docs.** `docs/design/security.md`, `docs/TODO.md`,
+- **Keep specifics out of public docs.** `docs/design/security.md`, `docs/work/`,
   progress logs, and tracked notes cover *our* trade-offs; upstream
   findings are not ours to publish there.
 - **Reporting upstream is the user's call.** Present the finding and a
