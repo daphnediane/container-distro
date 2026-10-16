@@ -19,9 +19,9 @@ use anyhow::Result;
 use clap::{CommandFactory, Parser};
 
 use super::docs::Docs;
-use crate::ops;
+use crate::distro;
+use crate::distro::spec::{Intent, OriginSource};
 use crate::plugin;
-use crate::spec::{Intent, OriginSource};
 use args::{Cli, Command};
 
 pub fn main() -> ExitCode {
@@ -55,42 +55,42 @@ fn run(cli: Cli) -> Result<()> {
         Command::Create { name, opts, image } => {
             println!(
                 "{}",
-                ops::create(name, &opts, &image, OriginSource::Image, &Intent::default())?
+                distro::create(name, &opts, &image, OriginSource::Image, &Intent::default())?
             );
         }
         Command::Catalog { command } => catalog::run(command)?,
         Command::List(args) => list::run(args)?,
-        Command::Inspect { names } => ops::inspect(&names)?,
-        Command::Start { name } => ops::start(&name)?,
-        Command::Stop { names } => ops::stop(&names)?,
+        Command::Inspect { names } => distro::inspect(&names)?,
+        Command::Start { name } => distro::start(&name)?,
+        Command::Stop { names } => distro::stop(&names)?,
         Command::Delete { force, all, names } => {
             if all {
-                ops::delete_all(force)?
+                distro::delete_all(force)?
             } else {
-                ops::delete(force, &names)?
+                distro::delete(force, &names)?
             }
         }
         Command::Run(args) => run::run(args)?,
         Command::Set(args) => set::run(args)?,
-        Command::SyncProfiles => ops::sync_profiles()?,
-        Command::Terminal { name } => ops::open_terminal(&name)?,
-        Command::SetDefault { name, .. } => ops::set_default(name.as_deref())?,
-        Command::Export { name, output } => ops::export(&name, output.as_deref())?,
+        Command::SyncProfiles => distro::sync_profiles()?,
+        Command::Terminal { name } => distro::open_terminal(&name)?,
+        Command::SetDefault { name, .. } => distro::set_default(name.as_deref())?,
+        Command::Export { name, output } => distro::export(&name, output.as_deref())?,
         Command::Import { name, file, opts } => {
             println!(
                 "{}",
-                ops::import(
+                distro::import(
                     &name,
                     &file,
                     &opts,
-                    ops::ImportSource::Local,
+                    distro::ImportSource::Local,
                     &Intent::default(),
                     None
                 )?
             );
         }
         Command::Rename { old, new, force } => {
-            ops::rename(&old, &new, force)?;
+            distro::rename(&old, &new, force)?;
             println!("`{old}` renamed to `{new}`");
         }
         Command::Migrate {
@@ -102,9 +102,9 @@ fn run(cli: Cli) -> Result<()> {
             ..
         } => {
             let result = if out {
-                ops::migrate_to_machine(&name, target_name, keep, &opts)?
+                distro::migrate_to_machine(&name, target_name, keep, &opts)?
             } else {
-                ops::migrate(&name, target_name, keep, &opts)?
+                distro::migrate(&name, target_name, keep, &opts)?
             };
             println!("{result}");
         }

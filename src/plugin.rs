@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use crate::naming::APP_NAME;
 use anyhow::{Context, Result, bail};
 
-use crate::ops;
+use crate::distro;
 
 /// The plugin (and subcommand) name.
 pub const PLUGIN_NAME: &str = "distro";
@@ -259,11 +259,11 @@ fn uninstall_from(dir: &Path) -> Result<()> {
     remove_file(&bin_dir.join("distrofs"));
     remove_file(&config);
     for admin in [true, false] {
-        let assets = dir.join(ops::assets_flavor(admin));
-        ops::unlock(&assets);
+        let assets = dir.join(distro::assets_flavor(admin));
+        distro::unlock(&assets);
         for name in ["init", "create-user.sh", "grant-admin.sh"] {
             let p = assets.join(name);
-            ops::unlock(&p);
+            distro::unlock(&p);
             remove_file(&p);
         }
         remove_dir_if_empty(&assets);

@@ -4,50 +4,13 @@
  * See LICENSE file for full license text
  */
 
-//! macOS terminal profiles for distros (#30).
-//!
-//! A `.wsl` package's `wsl-distribution.conf` carries a
-//! `[windowsterminal]` section that Windows turns into a Windows
-//! Terminal profile when the distro is installed — `enabled`
-//! (default `true`) plus an optional `ProfileTemplate` styling
-//! fragment (not yet mapped). The macOS equivalents, generated on
-//! distro create/import, refreshed on rename, and removed on
-//! delete:
-//!
-//! - a `.terminal` file per distro under
-//!   `state_dir()/terminal-profiles/` — opening it
-//!   (`container distro terminal`, `cm --terminal`, double-click)
-//!   makes Terminal import the settings set *through its own model*,
-//!   so it survives the prefs flushes that drop profiles injected
-//!   behind a running Terminal's back, and launches `cm -d <name>`;
-//! - an iTerm2 dynamic profile in our own `container-distro.json`
-//!   under `DynamicProfiles`, written only when iTerm2 is installed.
-//!
-//! Imported Terminal profiles carry a `ContainerDistroDistro` marker,
-//! so rename/delete only touch what we made — a user's same-named
-//! profile is left alone, ours then taking a ` (cm)` suffix. Whether
-//! a distro wants profiles is journaled intent
-//! (`Intent::terminal_profile`): `explicit` carries
-//! `--terminal-profile`/`--no-terminal-profile`, `source` carries a
-//! package's `windowsterminal.enabled`, and the built-in default is
-//! `true`. Nothing tracks whether the imported profile still exists —
-//! only the user imports it (by opening the file), so a deletion is
-//! automatically honored; a sync just rewrites the launchers.
-//! Everything here is best-effort: a failure warns and never fails
-//! the distro operation.
-//!
-//! `[shortcut]` metadata — the Start-menu launcher equivalent —
-//! is #33; the `.terminal` files double as the launcher artifacts.
-
+use crate::naming::state_dir;
+use crate::wsl;
+use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-
-use serde_json::{Value, json};
-
-use crate::naming::state_dir;
-use crate::wsl;
 
 /// The dict holding Terminal's profiles in its preferences plist.
 const WINDOW_SETTINGS: &str = "Window Settings";
@@ -110,15 +73,15 @@ fn ensure_alias() -> Option<PathBuf> {
             if fs::read_link(&link).ok().as_deref() != Some(target.as_path()) {
                 return None;
             }
-            if !crate::ops::is_locked(&link) {
-                crate::ops::lock_symlink(&link);
+            if !crate::distro::is_locked(&link) {
+                crate::distro::lock_symlink(&link);
             }
             Some(link)
         }
         Ok(_) => None,
         Err(_) => {
             std::os::unix::fs::symlink(&target, &link).ok()?;
-            crate::ops::lock_symlink(&link);
+            crate::distro::lock_symlink(&link);
             Some(link)
         }
     }
@@ -254,12 +217,12 @@ fn write_script_at(path: &Path, contents: &str) -> bool {
     {
         return false;
     }
-    crate::ops::unlock(path);
+    crate::distro::unlock(path);
     // No-follow: a link planted here would otherwise get the launcher
     // written (and locked open) at its target.
-    let ok = crate::ops::write_nofollow(path, contents.as_bytes(), 0o755).is_ok();
+    let ok = crate::distro::write_nofollow(path, contents.as_bytes(), 0o755).is_ok();
     if ok {
-        crate::ops::lock(path);
+        crate::distro::lock(path);
     }
     ok
 }
@@ -383,7 +346,7 @@ fn write_artifacts(name: &str) -> bool {
     {
         return false;
     }
-    crate::ops::unlock(&f);
+    crate::distro::unlock(&f);
     if let Err(e) = plist::to_file_xml(&f, &terminal_profile_dict(name, &profile)) {
         eprintln!(
             "container-distro: warning: couldn't write {}: {e}",
@@ -391,7 +354,7 @@ fn write_artifacts(name: &str) -> bool {
         );
         return false;
     }
-    crate::ops::lock(&f);
+    crate::distro::lock(&f);
     if !write_script(name) {
         eprintln!("container-distro: warning: couldn't write {name}'s launcher script");
         return false;
@@ -525,7 +488,7 @@ pub fn open_terminal(name: &str) -> anyhow::Result<()> {
     // the park.
     if let Some(mut real) = script_file(name) {
         real.set_extension("sh.real");
-        crate::ops::unlock(&real);
+        crate::distro::unlock(&real);
         let _ = fs::remove_file(real);
     }
     // The pre-import model names: AS's live list when Terminal runs,
@@ -657,14 +620,14 @@ pub fn ensure_profile(name: &str) -> bool {
         &script,
         "#!/bin/sh\n/usr/bin/chflags nouchg \"$0\" \"$0.real\" 2>/dev/null\nmv -f \"$0.real\" \"$0\"\n/usr/bin/chflags uchg \"$0\" 2>/dev/null\nexit 0\n",
     ) {
-        crate::ops::unlock(&real);
+        crate::distro::unlock(&real);
         let _ = fs::remove_file(&real);
         return false;
     }
     if !open_launcher(name) {
         // The import never happened — put the real command back.
         let _ = write_script_at(&script, &script_contents(name));
-        crate::ops::unlock(&real);
+        crate::distro::unlock(&real);
         let _ = fs::remove_file(&real);
         return false;
     }
@@ -765,7 +728,7 @@ fn iterm2_profiles() -> Option<Vec<Value>> {
 fn iterm2_write(profiles: Vec<Value>) -> bool {
     let Some(f) = iterm2_file() else { return false };
     if profiles.is_empty() {
-        crate::ops::unlock(&f);
+        crate::distro::unlock(&f);
         return fs::remove_file(&f).is_ok() || !f.exists();
     }
     if let Some(parent) = f.parent()
@@ -775,11 +738,11 @@ fn iterm2_write(profiles: Vec<Value>) -> bool {
     }
     // `uchg`-locked like the other launch artifacts — the file sits
     // under a shared-able home and its Command runs on the host.
-    crate::ops::unlock(&f);
+    crate::distro::unlock(&f);
     let body = serde_json::to_string_pretty(&json!({ "Profiles": profiles })).unwrap();
-    let ok = crate::ops::write_nofollow(&f, body.as_bytes(), 0o644).is_ok();
+    let ok = crate::distro::write_nofollow(&f, body.as_bytes(), 0o644).is_ok();
     if ok {
-        crate::ops::lock(&f);
+        crate::distro::lock(&f);
     }
     ok
 }
@@ -847,11 +810,11 @@ pub fn remove(name: &str) {
         .into_iter()
         .flatten()
     {
-        crate::ops::unlock(&p);
+        crate::distro::unlock(&p);
         let _ = fs::remove_file(&p);
         let mut real = p.clone();
         real.set_extension("sh.real");
-        crate::ops::unlock(&real);
+        crate::distro::unlock(&real);
         let _ = fs::remove_file(real);
     }
 }
@@ -902,7 +865,7 @@ pub fn reconcile(keep: &BTreeSet<String>) {
             if let Some(stem) = stem
                 && !keep.contains(&stem)
             {
-                crate::ops::unlock(&p);
+                crate::distro::unlock(&p);
                 let _ = fs::remove_file(&p);
             }
         }
@@ -919,6 +882,7 @@ pub fn reconcile(keep: &BTreeSet<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn launcher_write_replaces_planted_link() {
@@ -929,7 +893,7 @@ mod tests {
         std::os::unix::fs::symlink(&victim, &script).unwrap();
         let wrote = write_script_at(&script, "#!/bin/sh\n");
         let is_link = fs::symlink_metadata(&script).map(|m| m.file_type().is_symlink());
-        crate::ops::unlock(&script);
+        crate::distro::unlock(&script);
         assert!(wrote);
         assert!(!is_link.unwrap(), "the planted link was written through");
         assert_eq!(fs::read(&victim).unwrap(), b"keep");

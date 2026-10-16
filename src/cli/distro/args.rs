@@ -14,7 +14,7 @@ pub use super::catalog::CatalogCommand;
 pub use super::list::ListArgs;
 pub use super::run::RunArgs;
 pub use super::set::SetArgs;
-use crate::ops::CreateOptions;
+use crate::distro::CreateOptions;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -253,7 +253,7 @@ pub enum Command {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::spec::Arch;
+    use crate::distro::spec::Arch;
     use std::path::Path;
 
     fn parse(argv: &[&str]) -> Result<Cli, clap::Error> {

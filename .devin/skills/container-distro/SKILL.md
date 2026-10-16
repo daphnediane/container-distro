@@ -19,7 +19,8 @@ binaries:
   wrappers and serde types, `naming` (persistent names/labels), `oci`
   (rootfs tar → OCI layout), `catalog`/`catalog_ops` (installable
   catalog and `.wsl` download flow), `forward` (TCP forwarder),
-  `table`, plus the distro `spec`/`ops`/`plugin` logic used by both
+  `table`, `plugin`, plus `distro` (operations, one submodule each,
+  with `distro::spec` and `distro::terminal`) used by both
   binaries.
 
 Persistent names (labels `io.github.daphnediane.container-distro.*`, the
@@ -62,20 +63,20 @@ any of them.
   `CONTAINER_DISTRO_RELEASES_URL` + `--dev` redirects the release API
   to a local fixture server (see DEV.md "Testing self-update")
 - `--export NAME FILE` (`-` = stdout) → distro: `container export`;
-  machine: `ops::export_machine` — stop, clone `rootfs.ext4` into a
+  machine: `distro::export_machine` — stop, clone `rootfs.ext4` into a
   never-started scratch container (explicit `--entrypoint /bin/sh`;
   `create` requires a command), `container export` it, delete on drop,
   restart the machine. Works around `container export` only reading
   `containers/<id>/rootfs.ext4`, never the `rootfs.json` mount source
 - `--import NAME [LOC] FILE` (`-` = stdin; LOC ignored) →
-  `ops::import_machine`: `oci::build_layout` + `image load`, then plain
+  `distro::import_machine`: `oci::build_layout` + `image load`, then plain
   `machine create` (NOT `--no-boot` — a never-booted machine's
   `machine run` races the boot and fails every time; create's internal
   boot absorbs it) plus a retrying `run -- true` boot probe; `--distro`
   → `distro import` instead
-- `--rename OLD NEW` → distro: `ops::rename` (journal dir + spec.name
+- `--rename OLD NEW` → distro: `distro::rename` (journal dir + spec.name
   move, converge/re-materialize; default marker follows). Machine:
-  `ops::rename_machine` — recreate under the new name (image + cpus/
+  `distro::rename_machine` — recreate under the new name (image + cpus/
   memory/home-mount from `machine inspect`), clone `rootfs.ext4` over
   its plugin-state disk (sibling temp + rename), boot-probe, remove
   the old machine, re-point default. `container machine` has no native
@@ -101,8 +102,8 @@ machine/distro name conflicts instead of shadowing (instances get
 `(machine)`/`(distro)` suffixes; info adds a `conflicts` section),
 and `catalog install`
 resolves catalog names only (`create` stays image-only), image entries
-call `ops::create`, and `.wsl` entries go through verified download +
-`ops::import` with `catalog:<name>` provenance. `set` recreates the
+call `distro::create`, and `.wsl` entries go through verified download +
+`distro::import` with `catalog:<name>` provenance. `set` recreates the
 container on the same
 filesystem: it clones `containers/<id>/rootfs.ext4` (`fs::copy` → clonefile
 on APFS) to `state_dir()/preserved/<id>.ext4` with a `<id>.json` spec
@@ -163,8 +164,8 @@ to operational resolution; `--install --distro`
 distros. `--dev` (global, both binaries) opts the invocation into dev
 seams: a non-default `CONTAINER_CLI` binary override and
 `CONTAINER_DISTRO_RELEASES_URL`; env alone is ignored (warned once). Creating a shared name is refused everywhere —
-`ops::bail_machine_shadow` (create/import/catalog install/migrate-in/
-distro rename targets) and `ops::bail_distro_shadow` (`import_machine`,
+`distro::bail_machine_shadow` (create/import/catalog install/migrate-in/
+distro rename targets) and `distro::bail_distro_shadow` (`import_machine`,
 `migrate --out`, `rename_machine`, `cm --install --machine`) — unless
 `--force` opts in (`CreateOptions.force`; it warns anyway). `migrate
 --keep` requires `-n NAME` for the same reason.

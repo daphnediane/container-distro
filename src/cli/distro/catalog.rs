@@ -14,8 +14,8 @@ use clap::{ArgAction, Subcommand};
 use super::args::Format;
 use crate::catalog;
 use crate::catalog_ops;
-use crate::ops::CreateOptions;
-use crate::spec::Arch;
+use crate::distro::CreateOptions;
+use crate::distro::spec::Arch;
 use crate::wsl;
 
 #[derive(Debug, Subcommand)]

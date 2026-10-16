@@ -17,8 +17,8 @@ use super::backend::{self, Target};
 use super::named_target;
 use super::run::launch;
 use crate::container::{self, ArgvMode};
-use crate::ops::{self as distro, CreateOptions};
-use crate::spec::{Arch, Intent};
+use crate::distro::spec::{Arch, Intent};
+use crate::distro::{self, CreateOptions};
 use crate::{catalog, catalog_ops};
 
 /// The positional `--install` argument is a catalog name when it

@@ -11,7 +11,7 @@ use std::os::unix::process::CommandExt;
 use anyhow::Result;
 use clap::Args;
 
-use crate::ops::{self, RunOpts};
+use crate::distro::{self, RunOpts};
 
 #[derive(Debug, Args)]
 pub struct RunArgs {
@@ -54,7 +54,7 @@ pub(super) fn run(args: RunArgs) -> Result<()> {
         no_login,
         command,
     } = args;
-    let mut cmd = ops::run_command(RunOpts {
+    let mut cmd = distro::run_command(RunOpts {
         name,
         user,
         root,

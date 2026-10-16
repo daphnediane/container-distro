@@ -109,7 +109,7 @@ pub struct Entry {
     /// its curation). A catalog can pin a tighter default for entries
     /// it wants to mark semi-trusted.
     #[serde(default)]
-    pub home_mount: Option<crate::spec::HomeMount>,
+    pub home_mount: Option<crate::distro::spec::HomeMount>,
 }
 
 /// What an entry installs from on this host.
@@ -583,7 +583,7 @@ mod tests {
         let f = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(f.path(), text).unwrap();
         let cat = load(Some(f.path())).unwrap();
-        use crate::spec::HomeMount;
+        use crate::distro::spec::HomeMount;
         assert_eq!(cat.entries[0].home_mount, Some(HomeMount::Ro));
         assert_eq!(cat.entries[1].home_mount, Some(HomeMount::None));
         assert_eq!(cat.entries[2].home_mount, None);

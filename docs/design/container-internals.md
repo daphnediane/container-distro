@@ -42,7 +42,7 @@ Risk tiers used below:
 | `machine run -i [-n -u -w -e ...] [-- cmd]`           | interactive shells, `--` commands, `-e` fallback, boot probe      |
 | `machine create --name --cpus --memory --home-mount`  | `cm --install`, `migrate --out`, `cm --rename --machine`          |
 | `machine set-default` / `machine stop` / `machine rm` | `cm -s` / `-t` / `--unregister`, `distro migrate`, machine rename |
-| `create` (many flags -- see spec.rs `create_args`)    | distro create/set/import                                          |
+| `create` (flags: `DistroSpec::create_args`)           | distro create/set/import                                          |
 | `start` / `stop` / `delete`                           | distro boot/stop/rm/`set`                                         |
 | `exec -i [-t] --user --env --workdir ID cmd...`       | `cm -e` on machines, all distro `run`, `init -u` provisioning     |
 | `list --all --format json`, `inspect`                 | distro enumeration and `distro inspect`                           |
@@ -84,7 +84,8 @@ missing ones fall back to defaults.
   plugin models it as a container with a custom init (`/sbin.machine/
   init`), the host uid/gid provisioned, home virtiofs at the same path,
   SSH-agent forwarding, all caps, no masked paths; our distro spec
-  replicates that shape (`spec.rs create_args`).
+  replicates that shape (`DistroSpec::create_args` in
+  `src/distro/spec/`).
 - `machine run` **shell-evaluates**: the guest init execs
   `$SHELL -c "$*"`, so argv is re-split ([apple/container#1954]). `cm -e`
   bypasses via `container exec`; the fallback path single-quotes each
@@ -165,7 +166,7 @@ missing ones fall back to defaults.
   `machine` is the only value excluded -- it's a hard-coded carve-out,
   not general plugin-owner filtering. **To hide distro containers the
   same way**, add `--label com.apple.container.plugin=machine` in
-  `spec.rs create_args` -- nothing else is needed, since all our ops
+  `DistroSpec::create_args` -- nothing else is needed, since all our ops
   already go through the distro label. Deferred for now: it's an
   upstream-internal label, and `container list -a` no longer showing
   your distro containers could surprise users (and would exempt them

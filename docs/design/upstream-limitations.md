@@ -62,11 +62,11 @@ created -- never a machine's backing container.
 same: [apple/container#1400] (export of running containers, closed),
 [apple/container#1265] (export should write a tar, closed),
 [apple/container#2325] (`export -o` deletes an existing directory,
-open -- already worked around in `ops::export`).
+open -- already worked around in `distro::export`).
 
 ### Workaround shipped: scratch regular container
 
-`ops::export_machine` creates a scratch `container create` (never
+`distro::export_machine` creates a scratch `container create` (never
 started), clonefile-copies the machine's `rootfs.ext4` -- found via
 `machine_rootfs`, i.e. the `rootfs.json`/`rootFsOverride` source, not a
 hard-coded path -- into `containers/<scratch-id>/rootfs.ext4`, runs

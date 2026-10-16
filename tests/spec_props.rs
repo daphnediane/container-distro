@@ -4,7 +4,7 @@
  * See LICENSE file for full license text
  */
 
-//! Property tests for the `FromStr` parsers in [`container_distro::spec`]
+//! Property tests for the `FromStr` parsers in [`container_distro::distro::spec`]
 //! (#17): these take user-supplied CLI strings, so they must never panic
 //! and must stay inside the documented grammar. Proptest writes any
 //! failing case into `proptest-regressions/` — commit those files; they
@@ -13,7 +13,7 @@
 
 use std::str::FromStr;
 
-use container_distro::spec::{Automount, HomeMount, MountSpec, PublishSpec};
+use container_distro::distro::spec::{Automount, HomeMount, MountSpec, PublishSpec};
 use proptest::prelude::*;
 use proptest::string::string_regex;
 

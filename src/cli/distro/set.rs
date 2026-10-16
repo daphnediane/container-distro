@@ -9,8 +9,8 @@
 use anyhow::Result;
 use clap::Args;
 
-use crate::ops;
-use crate::spec::{
+use crate::distro;
+use crate::distro::spec::{
     Automount, ConfList, HomeMount, MountSpec, Preset, PublishSpec, ResetTarget, SpecChanges,
 };
 
@@ -192,5 +192,5 @@ impl SetArgs {
 
 pub(super) fn run(args: SetArgs) -> Result<()> {
     let name = args.name.clone();
-    ops::set(&name, &args.changes())
+    distro::set(&name, &args.changes())
 }

@@ -12,7 +12,7 @@
 //! - `cm -l -v -v` — the same table with extra columns appended
 
 use crate::container::{Machine, MachineDetail};
-use crate::ops::DistroSummary;
+use crate::distro::DistroSummary;
 use crate::table::{columns, human_bytes, title_case};
 
 use std::path::PathBuf;
@@ -23,7 +23,7 @@ use anyhow::Result;
 use super::backend;
 use crate::catalog_ops;
 use crate::container;
-use crate::spec::Arch;
+use crate::distro::spec::Arch;
 
 /// Header printed by `cm -l` (WSL: "Windows Subsystem for Linux Distributions:").
 pub const LIST_HEADER: &str = "Container Machines:";

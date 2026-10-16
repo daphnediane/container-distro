@@ -15,15 +15,15 @@ use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
 use crate::container::{self, ImageListEntry, Machine, MachineDetail};
-use crate::naming;
-use crate::oci;
-use crate::ops::{self, CreateOptions};
-use crate::spec::{
+use crate::distro::spec::{
     Arch, HomeMount, Intent, LABEL_IMPORTED_FROM, LABEL_ROOTFS_SHA256, OriginSource, WslConfMode,
 };
+use crate::distro::{self, CreateOptions};
+use crate::naming;
+use crate::oci;
 use crate::table;
 use crate::wsl;
-use crate::{catalog, ops::ImportSource};
+use crate::{catalog, distro::ImportSource};
 
 /// What a catalog install resolves to on this host.
 #[derive(Debug)]
@@ -150,7 +150,7 @@ pub fn install_resolved(
             if name.is_some() {
                 requested.wsl_conf = Some(WslConfMode::all());
             }
-            ops::create(Some(distro_name), opts, image, origin, &requested)
+            distro::create(Some(distro_name), opts, image, origin, &requested)
         }
         Resolved::Wsl {
             download,
@@ -227,9 +227,9 @@ pub fn import_file(
     // the fetch). `import` re-checks — and issues the warning — for
     // --force.
     if !opts.force {
-        ops::bail_machine_shadow(&name, false)?;
+        distro::bail_machine_shadow(&name, false)?;
     }
-    ops::import(&name, file, opts, source, requested, Some(&pkg))
+    distro::import(&name, file, opts, source, requested, Some(&pkg))
 }
 
 /// A `container machine` plus the inspected fields catalog reporting
@@ -284,7 +284,7 @@ pub struct StatusProbe {
     machines: Vec<MachineState>,
     /// Distro rows keyed by id, so name joins and conflict checks are
     /// log-time and iteration order is deterministic.
-    distros: BTreeMap<String, ops::DistroSummary>,
+    distros: BTreeMap<String, distro::DistroSummary>,
 }
 
 /// A SHA-256 in cache-filename form: lowercase hex, `0x` stripped — the
@@ -320,7 +320,7 @@ impl StatusProbe {
                     .collect();
             }
             if include_distros {
-                distros = ops::summaries(false)
+                distros = distro::summaries(false)
                     .unwrap_or_default()
                     .into_iter()
                     .map(|d| (d.id.clone(), d))
@@ -425,7 +425,7 @@ impl StatusProbe {
         &self,
         e: &catalog::Entry,
         source: catalog::Source<'_>,
-        d: &ops::DistroSummary,
+        d: &distro::DistroSummary,
     ) -> bool {
         let catalog_source = format!("catalog:{}", e.name);
         d.source.as_deref() == Some(catalog_source.as_str())
@@ -448,7 +448,7 @@ impl StatusProbe {
         &self,
         e: &catalog::Entry,
         source: catalog::Source<'_>,
-    ) -> Vec<ops::DistroSummary> {
+    ) -> Vec<distro::DistroSummary> {
         self.distros
             .values()
             .filter(|d| self.distro_matches(e, source, d))
@@ -645,7 +645,7 @@ pub struct LocalMachine {
 pub struct NameConflict {
     pub name: String,
     pub machine: LocalMachine,
-    pub distro: ops::DistroSummary,
+    pub distro: distro::DistroSummary,
 }
 
 /// Everything local that corresponds to a catalog entry.
@@ -661,7 +661,7 @@ pub struct LocalInfo {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub machines: Vec<LocalMachine>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub distros: Vec<ops::DistroSummary>,
+    pub distros: Vec<distro::DistroSummary>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub conflicts: Vec<NameConflict>,
 }
@@ -1082,11 +1082,11 @@ mod tests {
             }],
             distros: BTreeMap::from([(
                 "dev".to_string(),
-                ops::DistroSummary {
+                distro::DistroSummary {
                     id: "dev".into(),
                     status: "running".into(),
                     image: Some("docker.io/library/alpine:latest".into()),
-                    ..ops::DistroSummary::default()
+                    ..distro::DistroSummary::default()
                 },
             )]),
         };
@@ -1135,11 +1135,11 @@ mod tests {
             machines: Vec::new(),
             distros: BTreeMap::from([(
                 "rocky".to_string(),
-                ops::DistroSummary {
+                distro::DistroSummary {
                     id: "rocky".into(),
                     status: "stopped".into(),
                     source: Some("catalog:RLCPlus-10".into()),
-                    ..ops::DistroSummary::default()
+                    ..distro::DistroSummary::default()
                 },
             )]),
         };

@@ -16,7 +16,7 @@ use super::args::{Args, ShellType};
 use super::backend::Target;
 use super::target;
 use crate::container::{self, ArgvMode};
-use crate::ops::{self as distro, RunOpts};
+use crate::distro::{self, RunOpts};
 
 /// Replace this process with the machine's or distro's command, for TTY
 /// passthrough.

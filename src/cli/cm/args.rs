@@ -12,9 +12,9 @@
 
 use std::path::PathBuf;
 
+pub use crate::distro::spec::HomeMount;
+use crate::distro::spec::{Arch, ConfList, MountSpec, Preset, PublishSpec};
 use crate::forward::PortMapping;
-pub use crate::spec::HomeMount;
-use crate::spec::{Arch, ConfList, MountSpec, Preset, PublishSpec};
 use anyhow::{Result, bail};
 use clap::{ArgAction, Parser, ValueEnum};
 

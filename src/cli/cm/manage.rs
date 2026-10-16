@@ -15,7 +15,7 @@ use super::args::Backend;
 use super::backend::{self, Target};
 use super::{named_target, passthru};
 use crate::container;
-use crate::ops::{self as distro, CreateOptions};
+use crate::distro::{self, CreateOptions};
 
 /// WSL `-s`: a distro becomes the default; a machine becomes the default
 /// and any default distro is cleared so the machine takes effect.

@@ -16,7 +16,7 @@
 use std::env;
 
 use crate::container::{self, Machine};
-use crate::ops::{self as distro, DistroSummary};
+use crate::distro::{self, DistroSummary};
 use anyhow::{Context, Result, bail};
 
 use super::args::Backend;

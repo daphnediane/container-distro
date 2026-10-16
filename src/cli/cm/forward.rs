@@ -15,8 +15,8 @@ use super::args::Backend;
 use super::backend::Target;
 use super::target;
 use crate::container::{self, ArgvMode};
+use crate::distro;
 use crate::forward::PortMapping;
-use crate::ops as distro;
 
 /// The IPv4 address of a running machine, booting it if needed.
 fn machine_ip(machine: Option<&str>) -> Result<(String, IpAddr)> {

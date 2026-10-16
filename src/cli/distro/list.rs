@@ -10,8 +10,8 @@ use anyhow::Result;
 use clap::Args;
 
 use super::args::Format;
-use crate::ops::{self, DistroSummary};
-use crate::spec::Arch;
+use crate::distro::spec::Arch;
+use crate::distro::{self, DistroSummary};
 use crate::table::{columns, human_bytes, local_datetime};
 
 #[derive(Debug, Args)]
@@ -37,7 +37,7 @@ pub(super) fn run(args: ListArgs) -> Result<()> {
         format,
     } = args;
     crate::container::ensure_started()?;
-    let mut rows = ops::summaries(running)?;
+    let mut rows = distro::summaries(running)?;
     if let Some(arch) = arch {
         rows.retain(|r| {
             r.platform
@@ -59,8 +59,8 @@ fn print_table(rows: &[DistroSummary]) {
     let dash = || "-".to_string();
     // Unpinned resources render the host's pick bracketed — `[8]`
     // means "derived, not set".
-    let (def_cpus, def_mem) = crate::ops::default_resources();
-    let def_mem = crate::spec::size_bytes(&def_mem).unwrap_or(0);
+    let (def_cpus, def_mem) = crate::distro::default_resources();
+    let def_mem = crate::distro::spec::size_bytes(&def_mem).unwrap_or(0);
     let mut table = vec![
         [
             "NAME", "IMAGE", "CREATED", "STATE", "IP", "CPUS", "MEMORY", "DISK", "MOUNTS", "PORTS",
