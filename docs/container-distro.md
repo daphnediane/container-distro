@@ -375,10 +375,11 @@ again: `tccutil reset AppleEvents <bundle id>` (for example
 app's id).
 
 Removing a profile while Terminal is running (`delete`, `rename`,
-`cm --unregister`, `sync-profiles` pruning) also asks Terminal, via
-AppleScript, to drop the settings set from its live model. That
-request is best-effort: denying it is harmless, because the
-preferences edit that follows is what actually removes the profile.
+`cm --unregister`, `sync-profiles` pruning) needs the same permission:
+the removal has to go through Terminal's live model, because a running
+Terminal writes its cached profiles back over its preferences file.
+Without the permission the command warns that the profile may
+reappear; quit Terminal and re-run, or allow it.
 
 ### `set-default [NAME] | --clear`
 

@@ -501,8 +501,9 @@ preference stores a package shouldn't normally reach.
   Apple events to Terminal, so macOS's Automation (TCC) consent for
   the *calling* app applies — we never request or bypass it, and a
   denial fails the open with the `osascript` reason. Removal's
-  live-model `delete` is best-effort under the same consent; the
-  plist edit doesn't need it.
+  live-model `delete` needs the same consent (a running Terminal
+  flushes its cache over a plist-only edit); a denial is reported as
+  a warning that the profile may reappear.
 - **Residuals:** Terminal's live settings model loads `Window
   Settings` lazily, so a profile deleted while Terminal runs could
   linger in its in-memory view until a pref reload — cosmetic, and

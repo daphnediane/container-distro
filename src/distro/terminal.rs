@@ -500,15 +500,9 @@ fn launch_window(name: &str, before: &[String], known: &str) -> Result<(), Strin
             if out.status.success() {
                 return Ok(());
             }
-            let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
-            Err(if msg.contains("-1743") {
-                format!(
-                    "{msg} — allow this app to control Terminal in System Settings \
-                     › Privacy & Security › Automation"
-                )
-            } else {
-                msg
-            })
+            Err(automation_hint(
+                String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            ))
         })
 }
 
@@ -688,30 +682,63 @@ fn terminal_owned(name: &str) -> Vec<String> {
 fn terminal_remove(name: &str) {
     for profile in terminal_owned(name) {
         if terminal_running() {
-            // The dictionary's `delete` works on settings sets — but
-            // only for profiles a *running* Terminal has loaded, and
-            // it lazily reloads `Window Settings`, so a profile we
-            // just wrote can be invisible to it. -1728 ("can't get
-            // settings set") is that benign case; the plist edit below
-            // is authoritative, so its stderr is noise.
-            let _ = Command::new("osascript")
-                .args([
-                    "-e",
-                    &format!("tell application \"Terminal\" to delete settings set \"{profile}\""),
-                ])
-                .stderr(Stdio::null())
-                .status();
+            // A running Terminal flushes its cached model back over
+            // the plist, so the delete has to go through the model —
+            // the plist edit below alone would be undone. `delete`
+            // only sees profiles the model has loaded (it reloads
+            // `Window Settings` lazily): -1728 ("can't get settings
+            // set") is that benign case. Anything else — notably
+            // -1743, no Automation consent — means the profile may
+            // come back, so say so.
+            if let Err(why) = live_delete(&profile) {
+                eprintln!(
+                    "warning: couldn't remove Terminal profile \"{profile}\" from the running \
+                     Terminal ({why}); it may reappear when Terminal saves its preferences — \
+                     quit Terminal and re-run, or allow the Automation permission"
+                );
+            }
         }
-        // The plist is authoritative either way — PlistBuddy covers
-        // both the not-running case (spawning Terminal just to delete
-        // would open a window) and a stale live model above. Its key
-        // paths are `:`-separated, so names containing dots still work.
+        // PlistBuddy covers the not-running case (spawning Terminal
+        // just to delete would open a window) and backs up the live
+        // delete. Its key paths are `:`-separated, so names containing
+        // dots still work.
         let _ = Command::new("/usr/libexec/PlistBuddy")
             .args(["-c", &format!("Delete ':{WINDOW_SETTINGS}:{profile}'")])
             .arg(terminal_plist())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();
+    }
+}
+
+/// `delete settings set PROFILE` against the running Terminal's model.
+/// `Ok` covers success and -1728 (the model never loaded it).
+fn live_delete(profile: &str) -> Result<(), String> {
+    let out = Command::new("osascript")
+        .args([
+            "-e",
+            &format!("tell application \"Terminal\" to delete settings set \"{profile}\""),
+        ])
+        .stdout(Stdio::null())
+        .output()
+        .map_err(|e| format!("failed to run osascript: {e}"))?;
+    let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    if out.status.success() || msg.contains("-1728") {
+        return Ok(());
+    }
+    Err(automation_hint(msg))
+}
+
+/// `osascript`'s message, plus where to grant the Automation
+/// permission when that is what's missing (-1743).
+fn automation_hint(msg: String) -> String {
+    if msg.contains("-1743") {
+        format!(
+            "{msg} — allow this app to control Terminal in System Settings \
+             › Privacy & Security › Automation"
+        )
+    } else {
+        msg
     }
 }
 
