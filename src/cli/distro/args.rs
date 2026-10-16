@@ -256,6 +256,20 @@ pub enum Command {
         target: String,
     },
 
+    /// Install everything around this binary: man pages and completions
+    /// for both interfaces, the `cm` alias, and the plugin
+    ///
+    /// Run after `cargo install container-distro` (or to repair an
+    /// install). Aliases are scripts running
+    /// `<prefix>/bin/container-distro cli`; an old `cm` binary of ours
+    /// is replaced. Packaging stages a payload with
+    /// `--prefix /usr/local --stage DIR`.
+    InstallAll(super::install_all::Target),
+
+    /// Remove what install-all installed (only files that are provably
+    /// ours)
+    UninstallAll(super::install_all::Target),
+
     /// Remove the `container distro` plugin registration
     /// (self-elevates with sudo when the plugin dir needs root)
     UninstallPlugin {

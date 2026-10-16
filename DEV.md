@@ -52,7 +52,8 @@ reference doc (`docs/cm.md` or `docs/container-distro.md`).
 
 ## Repository layout
 
-One published crate shipping two binaries over a shared library:
+One published crate shipping one binary, `container-distro`, over a
+shared library; `cm` is an alias script for `container-distro cli`:
 
 | Path                        | Contents                                                            |
 | --------------------------- | ------------------------------------------------------------------- |
@@ -64,7 +65,7 @@ One published crate shipping two binaries over a shared library:
 | `src/distro/`               | distro operations, one submodule each; `spec/` and `terminal`       |
 | `src/cli/cm/`               | `cm` front end (WSL-compatible CLI), one file per action group      |
 | `src/cli/distro/`           | `container distro` plugin front end, one file per larger subcommand |
-| `src/bin/`                  | one-line `main`s for the `cm` and `container-distro` binaries       |
+| `src/bin/`                  | the `container-distro` binary's one-line `main` (`cm` is an alias)  |
 | `assets/`                   | distro init scripts (`sbin.distro*/`)                               |
 | `scripts/`                  | maintainer scripts (below)                                          |
 | `packaging/`                | pkg resources: Distribution.xml, uninstaller/updater, signing conf  |
@@ -156,7 +157,7 @@ works if you're willing to re-install after).
 
 ## Dev-mode overrides
 
-`--dev` (a global flag on both binaries) is the per-invocation opt-in
+`--dev` (a global flag on both interfaces) is the per-invocation opt-in
 for seams that would be backdoors if the environment alone could
 enable them — see `.devin/rules/security.md`. Currently gated:
 

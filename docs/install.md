@@ -65,35 +65,38 @@ The repository is a single crate:
 | `src/distro/`               | distro operations, one submodule each; `spec/` and `terminal`       |
 | `src/cli/cm/`               | `cm` front end (WSL-compatible CLI), one file per action group      |
 | `src/cli/distro/`           | `container distro` plugin front end, one file per larger subcommand |
-| `src/bin/`                  | one-line `main`s for the `cm` and `container-distro` binaries       |
+| `src/bin/`                  | the `container-distro` binary's one-line `main` (`cm` is an alias)  |
 
 ## Install
 
-`cargo install` only copies binaries, so installing is cargo plus two
-small post-steps (plugin registration, man pages) -- each binary
-self-installs what it owns. The release [.pkg](#building-and-installing)
-skips all of this by installing the finished layout directly ([#14]).
+`cargo install` only copies the one binary, `container-distro`, so
+installing is cargo plus `install-all`, which sets up everything
+around it. The release [.pkg](#building-and-installing) skips this by
+installing the finished layout directly ([#14]) -- its payload is
+produced by the same `install-all`.
 
 ```bash
-cargo install --locked container-distro   # one crate, both binaries
+cargo install --locked container-distro
 # or from a checkout:
 cargo install --path .
 
-# man pages + shell completions (self-generated from the CLI
-# definitions -- never stale)
-cm --install-man
-container-distro install-man
-cm --install-completions          # bash/zsh/fish
-container-distro install-completions
-
-# optional: a `wsl` alias (bin + man page) so WSL-shaped tooling
-# finds it -- a bare name lands next to cm, or pass a path:
-cm --install-alias wsl
-cm --install-alias ~/.local/bin/wsl
-
-# optional: register the `container distro` subcommand (cm doesn't need it)
-container-distro install-plugin    # -> /usr/local/libexec/container-plugins/distro
+# the `cm` alias, man pages + shell completions for both interfaces
+# (self-generated from the CLI definitions -- never stale), and the
+# `container distro` plugin registration:
+container-distro install-all
+container-distro install-all --alias wsl   # ...plus a `wsl` alias
+container-distro install-all --no-plugin   # ...without the plugin
 ```
+
+`cm` is not a binary: it is an alias script running
+`container-distro cli` ([wsl aliases](#wsl-aliases)). `install-all`
+writes it beside the binary (`$CARGO_HOME/bin/cm`) and replaces a `cm`
+binary from an older release there. The individual steps remain
+available for partial installs: `install-man`, `install-completions`,
+`install-plugin`, `install-alias` (and `cli --install-man` etc. for
+the `cm` pages). Packaging stages a payload with `install-all --prefix
+/usr/local --stage DIR`: files are written under `DIR`, while aliases
+run `/usr/local/bin/container-distro`.
 
 `install-plugin` resolves `container` (`CONTAINER_CLI` under `--dev`,
 then `/usr/local/bin/container`, then `PATH`) as the invoking user --
@@ -128,11 +131,11 @@ The default target directory is `share/man/man1` of the prefix the
 binary is installed under -- derived from the binary's own path, so it
 follows the install wherever it went:
 
-- `cargo install` → `$CARGO_HOME/bin/cm` → `$CARGO_HOME/share/man/man1`
+- `cargo install` → `$CARGO_HOME/bin/container-distro` → `$CARGO_HOME/share/man/man1`
 - `cargo install --root /usr/local` → `/usr/local/share/man/man1`
 
 The binary must live in a `bin` directory for the default to apply; a
-dev build (`target/debug/cm`) has no install prefix and errors -- pass
+dev build (`target/debug/container-distro`) has no install prefix and errors -- pass
 an explicit dir in that case:
 
 ```bash
@@ -217,15 +220,17 @@ binaries are per-invocation, and running distros mount their own
 asset copies.
 
 For a `cargo install`/`cargo binstall` copy the same commands again --
-`cargo install` replaces the binaries, the
-`install-man`/`install-completions` commands rewrite the pages and
-scripts (they're rendered from the new binary, so they're always
-current), and `install-plugin` refreshes the registered copy (or
-`container-distro install-plugin --from <installed>` from a newer
-build). `cm --update` on such an install warns and asks before laying
-a pkg down next to it. From a checkout, `scripts/install-local.sh`
-bundles the maintainer version of this: `cargo install --path .`, `sudo
-container-distro install-plugin`, and both `install-man` runs.
+`cargo install` replaces the binary, and `container-distro install-all`
+rewrites the pages and completions (rendered from the new binary, so
+always current), refreshes the aliases, and re-registers the plugin
+copy. Upgrading from a release that still shipped a `cm` binary,
+`cargo install` removes that binary, so `cm` is missing until
+`install-all` writes the alias in its place; an old `wsl` symlink to
+it is upgraded to an alias script by `install-all --alias wsl` (or
+`cm --install-alias wsl`). `cm --update` on such an install warns and
+asks before laying a pkg down next to it. From a checkout,
+`scripts/install-local.sh` bundles the maintainer version of this:
+`cargo install --path .` then `container-distro install-all`.
 
 Upgrading from ≤0.4.1 needs `--force` once: the `cm` binary was owned
 by a separate `cm` package then, and cargo won't overwrite a binary
@@ -234,12 +239,14 @@ owned by another package (`cargo uninstall cm` first works too).
 ## Uninstall
 
 ```bash
-container-distro uninstall-plugin   # only removes our registration
-cm --uninstall-alias wsl            # if you installed one
-cm --uninstall-man && container-distro uninstall-man
-cm --uninstall-completions && container-distro uninstall-completions
-cargo uninstall container-distro   # removes both binaries
+container-distro uninstall-all [--alias wsl]   # aliases, pages, completions, plugin
+cargo uninstall container-distro               # the binary
 ```
+
+`uninstall-all` removes only what is provably ours: our alias scripts
+(or legacy symlinks to our binary), our generated pages and
+completions, and our plugin registration. Run it before `cargo
+uninstall` -- cargo doesn't know about the `cm` alias script.
 
 For a `.pkg` install, `sudo /usr/local/bin/uninstall-container-distro.sh -k`
 (add `-n` to preview every command first)

@@ -35,7 +35,7 @@ parts:
 ## Quick start
 
 The release `.pkg` is the easiest install -- signed, no toolchain,
-and it lays down everything: both binaries, the plugin registration,
+and it lays down everything: the binary, the `cm` alias, the plugin registration,
 man pages, completions, and the update/uninstall scripts. Download
 `container-distro-<version>.pkg` from the [latest release], then:
 
@@ -45,10 +45,11 @@ sudo installer -pkg container-distro-<version>.pkg -target /
 
 (or double-click the pkg -- an `-unsigned` CI build needs
 right-click → Open). `cargo install` and `cargo binstall` work too,
-but they only drop the binaries:
+followed by `install-all` for everything around the binary:
 
 ```bash
 cargo install --locked container-distro
+container-distro install-all   # cm alias, man pages, completions, plugin
 ```
 
 Then:
@@ -60,19 +61,12 @@ cm -e uname -a      # run a command
 cm                  # login shell in the default
 ```
 
-The pkg already installed these; a cargo install needs them as
-post-steps ([docs/install.md](docs/install.md) has the details):
+`cm` is a small alias script for `container-distro cli` — the pkg
+and `install-all` both install it ([docs/install.md](docs/install.md)
+has the details). Optional either way:
 
 ```bash
-cm --install-man && container-distro install-man   # man pages
-cm --install-completions                            # bash/zsh/fish completions
-container-distro install-plugin                     # the `container distro` subcommand
-```
-
-Optional either way:
-
-```bash
-cm --install-alias wsl                              # alias `cm` as `wsl`
+cm --install-alias wsl          # alias `cm` as `wsl`
 ```
 
 If `container` services aren't running, `cm` runs
@@ -90,7 +84,7 @@ cm --update                    # or: container distro update [VERSION]
 ```
 
 Cargo installs update with `cargo install --locked container-distro`
-(or `cargo binstall`) plus the same post-steps as a fresh install --
+(or `cargo binstall`) followed by `container-distro install-all` --
 [docs/install.md](docs/install.md#upgrade). Nothing needs stopping
 first. Apple's `container` itself updates separately via its own
 `update-container.sh`.
@@ -102,8 +96,9 @@ first. Apple's `container` itself updates separately via its own
 /usr/local/bin/uninstall-container-distro.sh -d   # delete it too (destroys distros)
 ```
 
-Add `-n` to preview every removal first. Cargo and manual installs
-have their own removal path -- [docs/install.md](docs/install.md#uninstall).
+Add `-n` to preview every removal first. Cargo installs run
+`container-distro uninstall-all` before `cargo uninstall
+container-distro` -- [docs/install.md](docs/install.md#uninstall).
 
 ## `cm` -- the WSL command line
 

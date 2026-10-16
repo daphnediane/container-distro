@@ -61,17 +61,15 @@ fi
 META=$(cargo metadata --no-deps --format-version 1)
 version=$(echo "$META" | jq -r '.packages[0].version')
 R="$(echo "$META" | jq -r '.target_directory')/release"
-[ -x "$R/cm" ] && [ -x "$R/container-distro" ] || {
-    echo "release binaries missing — run without --skip-build" >&2
+[ -x "$R/container-distro" ] || {
+    echo "release binary missing — run without --skip-build" >&2
     exit 1
 }
 # Report whether the binaries carry the embedded dep tree — absent on
 # a --skip-build reuse of a plain `cargo build`, or when
 # cargo-auditable wasn't installed above.
-for b in cm container-distro; do
-    otool -l "$R/$b" | grep -q dep-v0 || \
-        echo "  note: $b has no .dep-v0 dep tree (not built via cargo auditable)"
-done
+otool -l "$R/container-distro" | grep -q dep-v0 || \
+    echo "  note: container-distro has no .dep-v0 dep tree (not built via cargo auditable)"
 
 step "CycloneDX SBOM"
 SBOM="container-distro-$version-sbom.cdx"
@@ -112,11 +110,9 @@ if [ "$SIGN" = 1 ] && { [ -z "$APP_IDENTITY" ] || [ -z "$PKG_IDENTITY" ]; }; the
 fi
 
 if [ -n "$APP_IDENTITY" ]; then
-    step "codesign binaries ($APP_IDENTITY)"
-    for b in cm container-distro; do
-        codesign --force --sign "$APP_IDENTITY" \
-            --options runtime --timestamp "$R/$b"
-    done
+    step "codesign binary ($APP_IDENTITY)"
+    codesign --force --sign "$APP_IDENTITY" \
+        --options runtime --timestamp "$R/container-distro"
 fi
 
 step "stage payload"
@@ -126,22 +122,19 @@ step "stage payload"
 PAYLOAD="$OUT/payload"
 rm -rf "$PAYLOAD"
 mkdir -p "$PAYLOAD/bin" "$PAYLOAD/share/doc/container-distro"
-cp "$R/cm" "$R/container-distro" packaging/uninstall-container-distro.sh \
+cp "$R/container-distro" packaging/uninstall-container-distro.sh \
     packaging/update-container-distro.sh "$PAYLOAD/bin/"
 cp LICENSE THIRD-PARTY-NOTICES.yaml "$PAYLOAD/share/doc/container-distro/"
 # The vendored Microsoft manifest's license — not a crate, so
 # THIRD-PARTY-NOTICES.yaml doesn't cover it (#31).
 cp vendor/microsoft/LICENSE "$PAYLOAD/share/doc/container-distro/LICENSE-microsoft-wsl"
-# Everything else in the payload is produced by the binaries' own
-# install commands — the same output a manual install writes.
-"$R/container-distro" install-plugin \
+# Everything else in the payload — man pages, completions, the `cm`
+# alias script, the plugin copy — is produced by `install-all`, the
+# same output a manual install writes. `--stage` writes the payload
+# while the alias still runs the installed /usr/local binary.
+"$PAYLOAD/bin/container-distro" install-all --prefix /usr/local \
+    --stage "$PWD/$PAYLOAD" \
     --plugin-dir "$PWD/$PAYLOAD/libexec/container-plugins"
-"$R/cm" --install-man="$PWD/$PAYLOAD/share/man/man1"
-"$R/container-distro" install-man \
-    --dir "$PWD/$PAYLOAD/share/man/man1"
-"$R/cm" --install-completions="$PWD/$PAYLOAD/share"
-"$R/container-distro" install-completions \
-    --dir "$PWD/$PAYLOAD/share"
 
 step "pkgbuild"
 # The component pkg is an intermediate, not a release asset — keep it
@@ -220,7 +213,7 @@ step "cargo-binstall tarball"
 TDIR="container-distro-$TARGET-v$version"
 rm -rf "$OUT/$TDIR" "$OUT/$TDIR.tar.gz"
 mkdir -p "$OUT/$TDIR"
-cp "$R/cm" "$R/container-distro" LICENSE THIRD-PARTY-NOTICES.yaml "$OUT/$TDIR/"
+cp "$R/container-distro" LICENSE THIRD-PARTY-NOTICES.yaml "$OUT/$TDIR/"
 cp vendor/microsoft/LICENSE "$OUT/$TDIR/LICENSE-microsoft-wsl"
 tar -czf "$OUT/$TDIR.tar.gz" -C "$OUT" "$TDIR"
 rm -rf "$OUT/$TDIR"

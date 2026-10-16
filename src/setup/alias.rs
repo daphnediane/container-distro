@@ -28,6 +28,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 use crate::distro::write_nofollow;
+use crate::naming::LABEL_PREFIX;
 use crate::setup::layout::{self, FrontEnd, INVOKED_AS_FLAG};
 use crate::setup::{man, plugin};
 
@@ -136,8 +137,11 @@ fn points_to(link: &Path, target: &Path) -> bool {
 /// manpath, wherever the alias itself lives). Only links when `page` is
 /// installed — installing the alias doesn't install man pages, and a
 /// later `install-man` + `install-alias` adds just the link.
-fn install_man_link(name: &str, page: &str) -> Result<()> {
-    let dir = match man::default_man_dir() {
+fn install_man_link(name: &str, page: &str, man_dir: Option<&Path>) -> Result<()> {
+    if format!("{name}.1") == page {
+        return Ok(()); // the `cm` alias: its page is the real thing
+    }
+    let dir = match man_dir.map_or_else(man::default_man_dir, |d| Ok(d.to_path_buf())) {
         Ok(d) => d,
         // e.g. a dev build with no install prefix — the alias still
         // stands; just skip the man link.
@@ -184,27 +188,51 @@ fn install_man_link(name: &str, page: &str) -> Result<()> {
 pub fn install(target: &str, fe: FrontEnd) -> Result<()> {
     let link = alias_path(target)?;
     let (exe, prefix) = layout::self_invocation(fe)?;
+    install_at(&link, &exe, prefix, fe, None, false)
+}
+
+/// Write the alias at `link` running `exe` (with `prefix` leading
+/// arguments) as front end `fe`, linking its man page in `man_dir`
+/// (default: this install's). `exe` is baked as given — `install-all
+/// --stage` passes the *installed* path, not the staging copy.
+/// `replace_legacy` lets a pre-script `cm` binary of ours at `link` be
+/// replaced.
+pub(crate) fn install_at(
+    link: &Path,
+    exe: &Path,
+    prefix: &[&str],
+    fe: FrontEnd,
+    man_dir: Option<&Path>,
+    replace_legacy: bool,
+) -> Result<()> {
     if link == exe {
-        bail!("`{target}` resolves to the binary itself");
+        bail!("{} is the binary itself", link.display());
     }
-    let body = script(&exe, prefix)?;
+    let body = script(exe, prefix)?;
     if let Some(dir) = link.parent() {
         fs::create_dir_all(dir).with_context(|| format!("failed to create {}", dir.display()))?;
     }
     match link.symlink_metadata() {
         Ok(m) if m.file_type().is_symlink() => {
-            if !points_to(&link, &exe) {
+            if !(points_to(link, exe) || points_to_legacy_binary(link)) {
                 bail!(
                     "{} is a symlink to something else — refusing to replace it",
                     link.display()
                 );
             }
             // write_nofollow swaps the link for the script.
-            write_nofollow(&link, body.as_bytes(), 0o755)?;
+            write_nofollow(link, body.as_bytes(), 0o755)?;
             println!("Upgraded {} to an alias script", link.display());
         }
+        Ok(_) if replace_legacy && is_legacy_binary(link) => {
+            write_nofollow(link, body.as_bytes(), 0o755)?;
+            println!(
+                "Replaced the old {} binary with an alias script",
+                link.display()
+            );
+        }
         Ok(_) => {
-            let current = fs::read_to_string(&link).unwrap_or_default();
+            let current = fs::read_to_string(link).unwrap_or_default();
             if !is_our_script(&current) {
                 bail!(
                     "{} exists and isn't one of our aliases — refusing",
@@ -214,39 +242,69 @@ pub fn install(target: &str, fe: FrontEnd) -> Result<()> {
             if current == body {
                 println!("{} is already up to date", link.display());
             } else {
-                write_nofollow(&link, body.as_bytes(), 0o755)?;
+                write_nofollow(link, body.as_bytes(), 0o755)?;
                 println!("Updated {}", link.display());
             }
         }
         Err(e) if e.kind() == ErrorKind::NotFound => {
-            write_nofollow(&link, body.as_bytes(), 0o755)?;
+            write_nofollow(link, body.as_bytes(), 0o755)?;
             println!("Installed {} -> {}", link.display(), exe.display());
         }
         Err(e) => return Err(e).with_context(|| format!("failed to stat {}", link.display())),
     }
-    install_man_link(&alias_name(&link)?, man_page(fe))
+    install_man_link(&alias_name(link)?, man_page(fe), man_dir)
+}
+
+/// Whether `path` is a binary from a release that still shipped `cm`
+/// as its own executable — a Mach-O file embedding our label prefix,
+/// which every release has carried. Read, never executed.
+fn is_legacy_binary(path: &Path) -> bool {
+    let Ok(bytes) = fs::read(path) else {
+        return false;
+    };
+    // MH_MAGIC_64 (little-endian on disk) or a universal binary.
+    let macho = bytes.starts_with(&[0xcf, 0xfa, 0xed, 0xfe])
+        || bytes.starts_with(&[0xca, 0xfe, 0xba, 0xbe]);
+    let marker = LABEL_PREFIX.as_bytes();
+    macho && bytes.windows(marker.len()).any(|w| w == marker)
+}
+
+/// A legacy alias: a symlink to one of those binaries (`wsl` → `cm`),
+/// or to an alias script one was replaced by — `install-all` swaps
+/// `cm` before it reaches `wsl`.
+fn points_to_legacy_binary(link: &Path) -> bool {
+    link_target(link).is_ok_and(|t| {
+        is_legacy_binary(&t) || fs::read_to_string(&t).is_ok_and(|c| is_our_script(&c))
+    })
 }
 
 /// `uninstall-alias NAME|PATH` — remove the alias and its man-page
 /// link, only when each is provably ours.
 pub fn uninstall(target: &str) -> Result<()> {
-    let link = alias_path(target)?;
+    uninstall_at(&alias_path(target)?, None, false)
+}
+
+/// Remove the alias at `link` and its man-page link in `man_dir`
+/// (default: this install's). `remove_legacy` also removes a
+/// pre-script `cm` binary of ours there.
+pub(crate) fn uninstall_at(link: &Path, man_dir: Option<&Path>, remove_legacy: bool) -> Result<()> {
     let exe = layout::current_exe()?;
     match link.symlink_metadata() {
         Ok(m) if m.file_type().is_symlink() => {
-            if !points_to(&link, &exe) {
+            if !(points_to(link, &exe) || points_to_legacy_binary(link)) {
                 bail!(
                     "{} is a symlink, but not to this binary — refusing",
                     link.display()
                 );
             }
-            remove(&link)?;
+            remove(link)?;
         }
+        Ok(_) if remove_legacy && is_legacy_binary(link) => remove(link)?,
         Ok(_) => {
-            if !is_our_script(&fs::read_to_string(&link).unwrap_or_default()) {
+            if !is_our_script(&fs::read_to_string(link).unwrap_or_default()) {
                 bail!("{} isn't one of our aliases — refusing", link.display());
             }
-            remove(&link)?;
+            remove(link)?;
         }
         Err(e) if e.kind() == ErrorKind::NotFound => {
             println!("Not installed ({})", link.display());
@@ -254,10 +312,17 @@ pub fn uninstall(target: &str) -> Result<()> {
         Err(e) => return Err(e).with_context(|| format!("failed to stat {}", link.display())),
     }
     // The man-page link: only remove a symlink to one of our pages.
-    let Ok(man_dir) = man::default_man_dir() else {
+    let Ok(man_dir) = man_dir.map_or_else(man::default_man_dir, |d| Ok(d.to_path_buf())) else {
         return Ok(());
     };
-    let man_link = man_dir.join(format!("{}.1", alias_name(&link)?));
+    let page = format!("{}.1", alias_name(link)?);
+    if [FrontEnd::Cm, FrontEnd::Distro]
+        .iter()
+        .any(|&fe| man_page(fe) == page)
+    {
+        return Ok(()); // a real page, not an alias link — the man pages own it
+    }
+    let man_link = man_dir.join(page);
     match man_link.symlink_metadata() {
         Ok(m) if m.file_type().is_symlink() => {
             let ours = [FrontEnd::Cm, FrontEnd::Distro]
@@ -352,6 +417,61 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["--invoked-as", alias.as_str(), "cli", "-d", "a b"]
         );
+    }
+
+    /// A stand-in for a pre-alias `cm` binary: Mach-O magic plus our
+    /// label prefix somewhere inside.
+    fn fake_legacy_cm(path: &Path) {
+        let mut b = vec![0xcf, 0xfa, 0xed, 0xfe, 0, 0];
+        b.extend_from_slice(LABEL_PREFIX.as_bytes());
+        fs::write(path, b).unwrap();
+    }
+
+    #[test]
+    fn legacy_binary_needs_magic_and_marker() {
+        let d = tempfile::tempdir().unwrap();
+        let cm = d.path().join("cm");
+        fake_legacy_cm(&cm);
+        assert!(is_legacy_binary(&cm));
+        let no_magic = d.path().join("text");
+        fs::write(&no_magic, LABEL_PREFIX).unwrap();
+        assert!(!is_legacy_binary(&no_magic));
+        let no_marker = d.path().join("other");
+        fs::write(&no_marker, [0xcf, 0xfa, 0xed, 0xfe, 1, 2, 3]).unwrap();
+        assert!(!is_legacy_binary(&no_marker));
+    }
+
+    #[test]
+    fn install_at_upgrades_legacy_cm_and_its_symlink_alias() {
+        let d = tempfile::tempdir().unwrap();
+        let (cm, wsl) = (d.path().join("cm"), d.path().join("wsl"));
+        fake_legacy_cm(&cm);
+        symlink("cm", &wsl).unwrap();
+        let exe = d.path().join("container-distro");
+        let man = d.path().join("man1");
+        // Without the opt-in, a legacy binary is someone else's file.
+        assert!(install_at(&cm, &exe, &["cli"], FrontEnd::Cm, Some(&man), false).is_err());
+        install_at(&cm, &exe, &["cli"], FrontEnd::Cm, Some(&man), true).unwrap();
+        install_at(&wsl, &exe, &["cli"], FrontEnd::Cm, Some(&man), false).unwrap();
+        for a in [&cm, &wsl] {
+            let meta = fs::symlink_metadata(a).unwrap();
+            assert!(meta.is_file(), "{}", a.display());
+            assert!(is_our_script(&fs::read_to_string(a).unwrap()));
+        }
+        uninstall_at(&wsl, Some(&man), false).unwrap();
+        uninstall_at(&cm, Some(&man), false).unwrap();
+        assert!(!cm.exists() && !wsl.exists());
+    }
+
+    #[test]
+    fn uninstall_removes_a_legacy_binary_only_when_asked() {
+        let d = tempfile::tempdir().unwrap();
+        let cm = d.path().join("cm");
+        fake_legacy_cm(&cm);
+        let man = d.path().join("man1");
+        assert!(uninstall_at(&cm, Some(&man), false).is_err());
+        uninstall_at(&cm, Some(&man), true).unwrap();
+        assert!(!cm.exists());
     }
 
     #[test]

@@ -446,9 +446,12 @@ fn model_state() -> (Vec<String>, usize) {
 /// import's model name is a filename dedup — or, when the profile was
 /// already imported, `known` (the marker-bearing plist key). A miss
 /// just leaves the window default-styled.
-fn launch_window(name: &str, before: &[String], known: &str) -> bool {
+/// Spawn a Terminal window running `name`'s launcher and adopt its
+/// settings set. The error carries `osascript`'s own message, plus how
+/// to grant the Automation permission when that is what's missing.
+fn launch_window(name: &str, before: &[String], known: &str) -> Result<(), String> {
     let Some(script) = script_file(name) else {
-        return false;
+        return Err("no launcher script path".into());
     };
     let esc = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
     let before_list = before
@@ -490,9 +493,23 @@ fn launch_window(name: &str, before: &[String], known: &str) -> bool {
             ),
         ])
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| format!("failed to run osascript: {e}"))
+        .and_then(|out| {
+            if out.status.success() {
+                return Ok(());
+            }
+            let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            Err(if msg.contains("-1743") {
+                format!(
+                    "{msg} — allow this app to control Terminal in System Settings \
+                     › Privacy & Security › Automation"
+                )
+            } else {
+                msg
+            })
+        })
 }
 
 /// `container distro terminal` / `cm --terminal`: refresh the
@@ -531,8 +548,8 @@ pub fn open_terminal(name: &str) -> anyhow::Result<()> {
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
     let known = terminal_owned(name).into_iter().next().unwrap_or_default();
-    if !launch_window(name, &before, &known) {
-        anyhow::bail!("couldn't open {name}'s profile in Terminal.app");
+    if let Err(why) = launch_window(name, &before, &known) {
+        anyhow::bail!("couldn't open {name}'s profile in Terminal.app: {why}");
     }
     Ok(())
 }

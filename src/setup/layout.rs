@@ -97,30 +97,12 @@ pub enum FrontEnd {
 /// was run as (`"$0"`), so bare-name aliases it creates land beside it.
 pub const INVOKED_AS_FLAG: &str = "--invoked-as";
 
-/// Hidden leading argument selecting the `container distro` front end
-/// in a binary whose own front end is `cm` — what launchers baked by
-/// the `cm` binary use. `container-distro` reaches `cm` through its
-/// public `cli` subcommand instead.
-pub const DISTRO_FRONT_END_FLAG: &str = "--front-end=distro";
+static INVOKED_AS: OnceLock<PathBuf> = OnceLock::new();
 
-#[derive(Debug)]
-struct Invocation {
-    native: FrontEnd,
-    invoked_as: Option<PathBuf>,
-}
-
-static INVOCATION: OnceLock<Invocation> = OnceLock::new();
-
-/// Record how this process was started; the binaries' `main` calls this
-/// once, before any front end runs.
-pub fn set_invocation(native: FrontEnd, invoked_as: Option<PathBuf>) {
-    let _ = INVOCATION.set(Invocation { native, invoked_as });
-}
-
-/// The front end this binary runs without a selector (`Distro` when
-/// [`set_invocation`] never ran, e.g. in tests).
-fn native() -> FrontEnd {
-    INVOCATION.get().map_or(FrontEnd::Distro, |i| i.native)
+/// Record the alias path this process was started through; `main`
+/// calls this once, before any front end runs.
+pub fn set_invoked_as(path: PathBuf) {
+    let _ = INVOKED_AS.set(path);
 }
 
 /// The alias path this process was started through, when a generated
@@ -128,17 +110,16 @@ fn native() -> FrontEnd {
 /// the user keeps aliases.
 #[must_use]
 pub fn invoked_as() -> Option<&'static Path> {
-    INVOCATION.get().and_then(|i| i.invoked_as.as_deref())
+    INVOKED_AS.get().map(PathBuf::as_path)
 }
 
-/// The leading arguments that reach front end `want` in a binary whose
-/// own front end is `native`.
+/// The leading arguments that reach front end `want` of the
+/// `container-distro` binary.
 #[must_use]
-pub fn front_end_args(native: FrontEnd, want: FrontEnd) -> &'static [&'static str] {
-    match (native, want) {
-        (FrontEnd::Distro, FrontEnd::Cm) => &["cli"],
-        (FrontEnd::Cm, FrontEnd::Distro) => &[DISTRO_FRONT_END_FLAG],
-        _ => &[],
+pub fn front_end_args(want: FrontEnd) -> &'static [&'static str] {
+    match want {
+        FrontEnd::Cm => &["cli"],
+        FrontEnd::Distro => &[],
     }
 }
 
@@ -147,7 +128,7 @@ pub fn front_end_args(native: FrontEnd, want: FrontEnd) -> &'static [&'static st
 /// launchers and aliases bake this — never a sibling or `PATH` lookup,
 /// which could resolve to some other binary.
 pub fn self_invocation(want: FrontEnd) -> Result<(PathBuf, &'static [&'static str])> {
-    Ok((current_exe()?, front_end_args(native(), want)))
+    Ok((current_exe()?, front_end_args(want)))
 }
 
 /// [`prefix_of`] the running binary, with an error naming it — for
@@ -167,12 +148,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_front_end_args_reach_the_other_front_end() {
-        use FrontEnd::{Cm, Distro};
-        assert!(front_end_args(Cm, Cm).is_empty());
-        assert!(front_end_args(Distro, Distro).is_empty());
-        assert_eq!(front_end_args(Distro, Cm), ["cli"]);
-        assert_eq!(front_end_args(Cm, Distro), [DISTRO_FRONT_END_FLAG]);
+    fn test_front_end_args() {
+        assert_eq!(front_end_args(FrontEnd::Cm), ["cli"]);
+        assert!(front_end_args(FrontEnd::Distro).is_empty());
     }
 
     #[test]

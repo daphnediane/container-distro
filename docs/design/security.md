@@ -287,7 +287,7 @@ answer was to take the files out of reach rather than move them:
   re-locks inside the script — host-side, where flags are allowed.
 - What a launcher *runs* is the binary that wrote it, canonicalized
   (`layout::self_invocation`) — `<container-distro> run -n NAME`, or
-  the plugin copy, or `cm` with a hidden `--front-end=distro`. Earlier
+  the plugin copy's own path. Earlier
   launchers baked a sibling `cm` or else the first `cm` on `PATH`,
   which let whatever shadowed `cm` on `PATH` at generation time become
   a locked, host-run launcher target. There is no lookup now.
@@ -298,11 +298,13 @@ answer was to take the files out of reach rather than move them:
   a rw-shared home exposes equally (`~/.cargo/bin`; T1), and locking
   them would break `cargo install`/uninstall. Removal only deletes a
   file carrying our marker line or a legacy symlink to this binary.
-  The two hidden leading arguments are honored only as `argv[1]`, so
-  a guest command line can't carry them: `--invoked-as` only picks
-  the directory a *bare-name* alias is written to (user privilege,
-  the alias's own directory); `--front-end=distro` only selects which
-  of this binary's interfaces parses the rest.
+  The hidden leading `--invoked-as PATH` is honored only as
+  `argv[1]`, so a guest command line can't carry it, and it only
+  picks the directory a *bare-name* alias is written to (user
+  privilege, the alias's own directory). `install-all` replaces a
+  pre-alias `cm` *binary* only when it is a Mach-O file embedding our
+  label prefix — read, never executed — and `--stage` bakes the
+  `--prefix` path into aliases, never the staging copy.
 
 The pre-journal world gets exactly one trusted upgrade: a
 `journalized` marker (itself `uchg`-locked, so unforgeable) gates a

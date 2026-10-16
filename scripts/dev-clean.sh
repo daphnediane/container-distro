@@ -142,6 +142,11 @@ done
 [ -n "$CM" ] && { x "$CM" --uninstall-alias wsl 2>/dev/null || true; }
 
 step "cargo uninstall"
+# The `cm` alias script isn't a cargo bin — cargo leaves it behind.
+if [ -n "$CD" ] && [ -f "$CH/bin/cm" ]; then
+    x "$CD" uninstall-alias "$CH/bin/cm" ||
+        echo "  ($CH/bin/cm isn't an alias script — cargo uninstall handles an old binary)"
+fi
 if command -v cargo >/dev/null 2>&1 &&
     { [ -e "$CH/bin/cm" ] || [ -e "$CH/bin/container-distro" ]; }; then
     x cargo uninstall container-distro ||

@@ -4,10 +4,10 @@
  * See LICENSE file for full license text
  */
 
-//! The command-line front ends: `cm`'s WSL-style interface and the
-//! `container distro` plugin's subcommands. Both binaries are thin
-//! `main`s over [`main`], which also reaches the other front end —
-//! `container-distro cli …` runs `cm`.
+//! The command-line front ends: the `container distro` plugin's
+//! subcommands and `cm`'s WSL-style interface, which
+//! `container-distro cli …` runs — `cm` itself is an alias script for
+//! that. The binary is a thin `main` over [`main`].
 
 pub mod cm;
 pub mod distro;
@@ -20,43 +20,34 @@ use std::process::{ExitCode, ExitStatus};
 use anyhow::{Context, Result};
 
 use crate::container;
-use crate::setup::layout::{self, DISTRO_FRONT_END_FLAG, FrontEnd, INVOKED_AS_FLAG};
+use crate::setup::layout::{self, INVOKED_AS_FLAG};
 
-/// Entry point for both binaries; `native` is the binary's own front
-/// end.
-pub fn main(native: FrontEnd) -> ExitCode {
+/// Entry point of the `container-distro` binary. Generated `cm`-style
+/// aliases run it as `container-distro --invoked-as "$0" cli …`.
+pub fn main() -> ExitCode {
     let mut argv: Vec<OsString> = std::env::args_os().collect();
-    let (invoked_as, selected) = take_prelude(&mut argv);
-    layout::set_invocation(native, invoked_as);
-    match selected.unwrap_or(native) {
-        FrontEnd::Cm => cm::main_from(argv),
-        FrontEnd::Distro => distro::main_from(argv),
+    if let Some(path) = take_invoked_as(&mut argv) {
+        layout::set_invoked_as(path);
     }
+    distro::main_from(argv)
 }
 
-/// Strip the hidden leading arguments generated aliases and launchers
-/// pass — `--invoked-as PATH`, then `--front-end=distro` — honored only
-/// in that position, so they can never collide with a front end's own
-/// arguments or a guest command line.
-fn take_prelude(argv: &mut Vec<OsString>) -> (Option<PathBuf>, Option<FrontEnd>) {
-    let mut invoked_as = None;
-    if argv.get(1).is_some_and(|a| a == INVOKED_AS_FLAG) && argv.len() > 2 {
-        let path = PathBuf::from(argv.remove(2));
-        argv.remove(1);
-        // `$0` may be relative to the caller's cwd; keep it unresolved
-        // otherwise — its directory is the point.
-        invoked_as = Some(if path.is_absolute() {
-            path
-        } else {
-            std::env::current_dir().map_or(path.clone(), |d| d.join(&path))
-        });
+/// Strip the hidden leading `--invoked-as PATH` generated aliases pass
+/// — honored only in that position, so it can never collide with a
+/// front end's own arguments or a guest command line.
+fn take_invoked_as(argv: &mut Vec<OsString>) -> Option<PathBuf> {
+    if !(argv.get(1).is_some_and(|a| a == INVOKED_AS_FLAG) && argv.len() > 2) {
+        return None;
     }
-    let mut selected = None;
-    if argv.get(1).is_some_and(|a| a == DISTRO_FRONT_END_FLAG) {
-        argv.remove(1);
-        selected = Some(FrontEnd::Distro);
-    }
-    (invoked_as, selected)
+    let path = PathBuf::from(argv.remove(2));
+    argv.remove(1);
+    // `$0` may be relative to the caller's cwd; keep it unresolved
+    // otherwise — its directory is the point.
+    Some(if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir().map_or(path.clone(), |d| d.join(&path))
+    })
 }
 
 /// `NAME VERSION`, then `container --version` — shared by
@@ -88,31 +79,29 @@ mod tests {
     }
 
     #[test]
-    fn prelude_strips_invoked_as_and_selector() {
-        let mut a = argv(&["x", "--invoked-as", "/b/wsl", "--front-end=distro", "run"]);
-        let (inv, sel) = take_prelude(&mut a);
-        assert_eq!(inv.as_deref(), Some(std::path::Path::new("/b/wsl")));
-        assert_eq!(sel, Some(FrontEnd::Distro));
-        assert_eq!(a, argv(&["x", "run"]));
+    fn invoked_as_is_stripped() {
+        let mut a = argv(&["x", "--invoked-as", "/b/wsl", "cli", "-l"]);
+        assert_eq!(
+            take_invoked_as(&mut a).as_deref(),
+            Some(std::path::Path::new("/b/wsl"))
+        );
+        assert_eq!(a, argv(&["x", "cli", "-l"]));
     }
 
     #[test]
-    fn prelude_only_counts_in_leading_position() {
-        // A guest command line that happens to contain the flags is
+    fn invoked_as_only_counts_in_leading_position() {
+        // A guest command line that happens to contain the flag is
         // passed through untouched.
-        let mut a = argv(&["cm", "--", "echo", "--invoked-as", "x"]);
-        assert_eq!(take_prelude(&mut a), (None, None));
-        assert_eq!(a.len(), 5);
-        let mut a = argv(&["cm", "-e", "--front-end=distro"]);
-        assert_eq!(take_prelude(&mut a), (None, None));
+        let mut a = argv(&["x", "cli", "--", "echo", "--invoked-as", "y"]);
+        assert_eq!(take_invoked_as(&mut a), None);
+        assert_eq!(a.len(), 6);
     }
 
     #[test]
     fn relative_invoked_as_is_made_absolute() {
         let mut a = argv(&["x", "--invoked-as", "bin/wsl"]);
-        let (inv, _) = take_prelude(&mut a);
         assert_eq!(
-            inv.unwrap(),
+            take_invoked_as(&mut a).unwrap(),
             std::env::current_dir().unwrap().join("bin/wsl")
         );
     }

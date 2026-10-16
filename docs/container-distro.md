@@ -55,9 +55,8 @@ dir and all launching `container distro run -n NAME`:
 
 - `terminal-cmds/NAME.sh` — a launcher script (`exec
   '<container-distro>' run -n NAME -w '~' "$@"`, naming the binary
-  that wrote it — the plugin copy, `container-distro`, or `cm` with a
-  hidden front-end selector; `NAME.sh CMD…` runs CMD as exact argv,
-  like `run`). Imported profiles point at the *script*, so command
+  that wrote it — `container-distro` or the plugin copy;
+  `NAME.sh CMD…` runs CMD as exact argv, like `run`). Imported profiles point at the *script*, so command
   changes propagate without re-importing. Profiles reach it through
   `~/.container-distro`, a symlink to the state dir, as the run
   command `~/.container-distro/terminal-cmds/NAME.sh` — Terminal
@@ -494,6 +493,28 @@ of this binary, so a plugin-only install still gets one.
 
 Print the `container-distro` version, then `container --version` —
 the same report as `cm --version`.
+
+### `install-all` / `uninstall-all [--prefix DIR] [--alias NAME]... [--no-plugin | --plugin-dir DIR]`
+
+Install (or remove) everything around an installed binary in one
+step — run it after `cargo install container-distro`:
+
+- man pages and shell completions for both interfaces
+  (`container-distro*` and `cm`);
+- the `cm` alias script, plus each `--alias NAME` (for example `wsl`)
+  as another `cm`-style alias, each with a `NAME(1)` link to `cm.1`;
+  a `cm` *binary* from an older release is replaced (it's recognized
+  by our embedded label prefix, never run);
+- the `container distro` plugin registration (`install-plugin`,
+  elevating when the plugin dir needs root) unless `--no-plugin`.
+
+`--prefix` defaults to the prefix of the running binary; files go to
+`<prefix>/bin`, `<prefix>/share/man/man1`, and `<prefix>/share`.
+`install-all --stage DIR` (packaging) writes that layout under `DIR`
+while the aliases still run `<prefix>/bin/container-distro`. Every step
+runs even when one fails, and the command then fails, naming the
+failed steps. `uninstall-all` removes only what is provably ours; run
+it before `cargo uninstall`.
 
 ### `install-alias NAME|PATH` / `uninstall-alias NAME|PATH`
 

@@ -21,7 +21,7 @@ use std::process::ExitCode;
 use anyhow::{Context, Result};
 use args::{Action, Args, Backend};
 use backend::Target;
-use clap::{CommandFactory, Parser};
+use clap::CommandFactory;
 
 use super::docs::Docs;
 use super::exit_code;
@@ -29,14 +29,6 @@ use crate::catalog::wsl;
 use crate::container;
 use crate::setup::alias;
 use crate::setup::layout::FrontEnd;
-
-/// Parse `argv` as `cm` arguments and run them. A lone `-v` is
-/// `--version`, as with `wsl -v`; `-v` everywhere else stays
-/// `--verbose`, which needs `--list`.
-pub(super) fn main_from(mut argv: Vec<OsString>) -> ExitCode {
-    lone_v_is_version(&mut argv[1..]);
-    main_args(Args::parse_from(argv))
-}
 
 /// WSL's `-v` overload: alone it is `--version` (`wsl -v`); anywhere
 /// else it stays `--verbose`, which needs `--list`. `args` is
@@ -170,6 +162,6 @@ fn version() -> Result<ExitCode> {
 }
 
 /// `cm(1)` and the `cm` completions.
-fn docs() -> Docs {
+pub(super) fn docs() -> Docs {
     Docs::new(args::Args::command(), "cm")
 }

@@ -9,6 +9,7 @@
 
 mod args;
 mod catalog;
+mod install_all;
 mod list;
 mod run;
 mod set;
@@ -130,6 +131,8 @@ fn run(command: Command) -> Result<ExitCode> {
         Command::Version => return super::print_version("container-distro"),
         Command::InstallAlias { target } => alias::install(&target, FrontEnd::Distro)?,
         Command::UninstallAlias { target } => alias::uninstall(&target)?,
+        Command::InstallAll(t) => install_all::install(t)?,
+        Command::UninstallAll(t) => install_all::uninstall(t)?,
         Command::Cli(_) => unreachable!("handled in main_from"),
         Command::Update {
             version,

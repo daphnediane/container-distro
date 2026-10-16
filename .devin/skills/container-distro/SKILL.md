@@ -5,17 +5,19 @@ description: How `cm` (WSL-compatible wrapper) and the `container distro` plugin
 
 # container-distro (`cm` + `container distro`)
 
-A single-crate Cargo repository (`container-distro`) shipping both
-binaries:
+A single-crate Cargo repository (`container-distro`) shipping one
+binary, `container-distro`, with two interfaces. `cm` is an alias
+script running `container-distro cli` (installed by `install-all`):
 
-- `src/cli/cm/` — the `cm` front end: `wsl.exe` argument semantics on top
-  of Apple's `container` CLI. Optionally symlinked to `wsl`.
+- `src/cli/cm/` — the `cm` front end (`container-distro cli`):
+  `wsl.exe` argument semantics on top of Apple's `container` CLI.
+  Optionally aliased as `wsl`.
 - `src/cli/distro/` — the `container-distro` front end. It
   registers as the `container distro` CLI plugin and creates
   machine-like containers ("distros") with what `container machine`
   lacks: mounts outside `$HOME`, published ports, export/import, `set`.
 - `src/bin/` — one-line `main`s over those front ends.
-- `src/` — the `container_distro` library used by both binaries:
+- `src/` — the `container_distro` library behind both interfaces:
   - `distro/` — distro operations, one submodule each, plus
     `distro::spec` (the journaled spec) and `distro::terminal`
   - `container/` — wrappers around the `container` CLI, serde types
@@ -166,7 +168,7 @@ machine; `-l` merges both — same-named pairs stay as two rows annotated
 `(machine)`/`(distro)` (KIND column at `-v -v`); shadowing applies only
 to operational resolution; `--install --distro`
 / `--share` / `--publish` create distros. `CM_BACKEND=machine` disables
-distros. `--dev` (global, both binaries) opts the invocation into dev
+distros. `--dev` (global, both interfaces) opts the invocation into dev
 seams: a non-default `CONTAINER_CLI` binary override and
 `CONTAINER_DISTRO_RELEASES_URL`; env alone is ignored (warned once). Creating a shared name is refused everywhere —
 `distro::bail_machine_shadow` (create/import/catalog install/migrate-in/

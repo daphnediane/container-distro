@@ -4,10 +4,10 @@
  * See LICENSE file for full license text
  */
 
-//! `container distro` — see [`container_distro::cli::distro`].
-
-use container_distro::setup::layout::FrontEnd;
+//! `container-distro`, the `container distro` plugin, and (through
+//! alias scripts running `container-distro cli`) `cm` — see
+//! [`container_distro::cli`].
 
 fn main() -> std::process::ExitCode {
-    container_distro::cli::main(FrontEnd::Distro)
+    container_distro::cli::main()
 }

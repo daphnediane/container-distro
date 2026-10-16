@@ -39,7 +39,6 @@ The working roadmap -- open work only, one file per item at
 - plumbing/ --
   [launcher-entries](plumbing/future/launcher-entries.md) ([#33]),
   [profile-styling](plumbing/future/profile-styling.md) ([#34]),
-  [locate-own-commands](plumbing/future/locate-own-commands.md) ([#36]),
   [subprocess-overhead](plumbing/future/subprocess-overhead.md) ([#9])
 
 [#3]: https://github.com/daphnediane/container-distro/issues/3
@@ -54,5 +53,4 @@ The working roadmap -- open work only, one file per item at
 [#33]: https://github.com/daphnediane/container-distro/issues/33
 [#34]: https://github.com/daphnediane/container-distro/issues/34
 [#35]: https://github.com/daphnediane/container-distro/issues/35
-[#36]: https://github.com/daphnediane/container-distro/issues/36
 [lower-level-integration]: ../design/lower-level-integration.md#rung-by-rung-how-low-can-cm-go

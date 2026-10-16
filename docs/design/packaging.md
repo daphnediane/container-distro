@@ -41,13 +41,15 @@ generated at build time: `LICENSE` plus each vendored crate's license
 expression, with the full texts staying in `THIRD-PARTY-NOTICES.yaml`
 (payload + release asset).
 
-The payload is **everything, no scripts**: `cm`, `container-distro`,
-the `container distro` plugin registration
+The payload is **everything, no scripts**: `container-distro`, the
+`cm` alias script, the `container distro` plugin registration
 (`libexec/container-plugins/distro/`), man pages, completions, and the
 license/notices files under `/usr/local` — all generated at build time
-by the binaries' own `install-plugin --plugin-dir`, `--install-man=`,
-and `install-completions --dir`, so the pkg can't drift from what a
-manual install produces. Zero install scripts means the installer adds
+by the binary's own `install-all --prefix /usr/local --stage <payload>`
+(the alias runs `/usr/local/bin/container-distro`, not the staging
+copy), so the pkg can't drift from what a manual install produces.
+("No scripts" means no installer scripts; the `cm` alias is a payload
+file.) Zero install scripts means the installer adds
 no code-execution surface of its own (security.md T9).
 
 Upgrades obsolete: for a same-identifier, higher-version install,

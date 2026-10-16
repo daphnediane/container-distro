@@ -19,6 +19,10 @@ a SHA-256 pinned in the binary; `CONTAINER_DISTRO_NO_INSTALL_OFFER=1`
 disables the offer). Non-interactive runs get the install instructions
 as an error instead.
 
+`cm` is an alias script for `container-distro cli`, installed by the
+pkg or `container-distro install-all`; anything below works as
+`container-distro cli …` (or `container distro cli …`) too.
+
 ## Machines and distros are one namespace
 
 `-d NAME` resolves a **distro** first, then a machine -- a name that
@@ -400,8 +404,9 @@ binary that wrote it (canonicalized) and which interface it runs, so
 `container-distro` too. A bare `NAME` lands next to the alias you ran
 the command through — `wsl --install-alias wsl2` puts `wsl2` beside
 `wsl` — else next to the binary. Aliases made by older releases
-(symlinks to `cm`) keep working, and re-running `--install-alias`
-upgrades them to scripts.
+(symlinks to the old `cm` binary) are upgraded to scripts by
+`container-distro install-all --alias NAME` or a re-run of
+`--install-alias`.
 
 `cm -v` on its own prints the version, as `wsl -v` does; with `--list`
 it is `--verbose`.

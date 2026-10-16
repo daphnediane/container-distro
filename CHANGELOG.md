@@ -51,6 +51,13 @@ docs/design/release.md.
   un-pins back to derived. The flags only journal intent for now —
   no relay is published and nothing else consumes the value yet.
 
+- **`container-distro install-all` / `uninstall-all`**: everything
+  around the binary in one step — man pages and completions for both
+  interfaces, the `cm` alias (plus `--alias wsl` etc.), and the
+  `container distro` plugin. Run it after `cargo install`; the pkg
+  payload is built by the same command (`--prefix /usr/local --stage
+  DIR`). It replaces a `cm` binary from an older release, and
+  `uninstall-all` removes only what is provably ours (#36).
 - **`container distro cli`**: runs the full WSL-compatible `cm`
   interface from the plugin binary — `container distro cli -d NAME` is
   `cm -d NAME` — so a plugin-only install has it too.
@@ -64,6 +71,14 @@ docs/design/release.md.
 
 ### Changed
 
+- **One binary.** `cm` is no longer built: it is an alias script for
+  `container-distro cli`, installed by the pkg and by `install-all`,
+  so every interface lives in the one binary and nothing has to find
+  a sibling (#36). `cargo install container-distro` now installs only
+  `container-distro` and removes an older `cm` binary — run
+  `container-distro install-all` afterwards (and `uninstall-all`
+  before `cargo uninstall`). The binstall tarball ships just the
+  binary.
 - **Aliases are scripts, not symlinks.** `--install-alias` writes a
   two-line `/bin/sh` script that runs this binary's chosen interface,
   so an alias can target either `cm` or `container distro`. A bare
@@ -107,6 +122,11 @@ docs/design/release.md.
   resolves the same way.
 
 ### Fixed
+
+- `cm --terminal` / `container distro terminal` say *why* Terminal
+  couldn't be driven — `osascript`'s message, plus where to grant the
+  Automation permission when that's missing — instead of a bare
+  "couldn't open the profile".
 
 - `cm --unregister`/`distro delete` no longer print a stray "Can't get
   settings set" AppleScript error for distros with no Terminal

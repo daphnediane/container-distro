@@ -38,9 +38,9 @@ globs: **/*.rs,**/Cargo.toml
 
 ## Running binaries
 
-- Run `cargo run --bin cm -- <args>` / `cargo run --bin
-  container-distro -- <args>` when exercising a binary, not
-  `./target/debug/<bin>`. `cargo run` rebuilds as needed; invoking the
+- Run `cargo run -- <args>` (or `cargo run -- cli <args>` for the
+  `cm` interface) when exercising the binary, not
+  `./target/debug/container-distro`. `cargo run` rebuilds as needed; invoking the
   binary directly silently uses whatever was last compiled, which is
   stale when only `check`/`clippy`/`test --lib` ran since the edits.
 
