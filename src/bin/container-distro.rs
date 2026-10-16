@@ -6,6 +6,8 @@
 
 //! `container distro` — see [`container_distro::cli::distro`].
 
+use container_distro::setup::layout::FrontEnd;
+
 fn main() -> std::process::ExitCode {
-    container_distro::cli::distro::main()
+    container_distro::cli::main(FrontEnd::Distro)
 }

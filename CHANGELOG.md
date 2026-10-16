@@ -30,7 +30,7 @@ docs/design/release.md.
   that arch (status columns match against the selected arch's source).
 - **`cm --terminal` and `container distro terminal NAME`**: open a
   distro in Terminal.app — its `.terminal` profile imports into
-  Terminal's settings and a window launches into `cm -d NAME`. On
+  Terminal's settings and a window launches into the distro. On
   `cm --install`/`--import`, `--terminal` replaces the console launch,
   and either command journals an explicit `--terminal-profile` opt-in
   so `sync-profiles` keeps the profile rather than pruning it.
@@ -51,7 +51,32 @@ docs/design/release.md.
   un-pins back to derived. The flags only journal intent for now —
   no relay is published and nothing else consumes the value yet.
 
+- **`container distro cli`**: runs the full WSL-compatible `cm`
+  interface from the plugin binary — `container distro cli -d NAME` is
+  `cm -d NAME` — so a plugin-only install has it too.
+- **`container distro version`**: prints the container-distro and
+  `container` versions, like `cm --version`.
+- **`container distro install-alias`/`uninstall-alias`**: aliases for
+  `container-distro` itself; `cli --install-alias` makes a `cm`-style
+  alias from the plugin binary.
+- **`cm -v`** alone prints the version, as `wsl -v` does (`-l -v`
+  stays `--verbose`).
+
 ### Changed
+
+- **Aliases are scripts, not symlinks.** `--install-alias` writes a
+  two-line `/bin/sh` script that runs this binary's chosen interface,
+  so an alias can target either `cm` or `container distro`. A bare
+  alias name now lands next to the alias you ran the command through
+  (`wsl --install-alias wsl2` puts `wsl2` beside `wsl`), else next to
+  the binary. Existing symlink aliases keep working; re-running
+  `--install-alias` upgrades them.
+- **Terminal launchers run `container distro run`**, naming the binary
+  that generated them, instead of whatever `cm` sat beside it or first
+  on `PATH` — a plugin-only install no longer needs `cm` at all.
+  `NAME.sh CMD…` now passes CMD as exact argv, like `run`, rather than
+  through the guest shell (`NAME.sh sh -c '…'` for a pipeline).
+  `container distro sync-profiles` rewrites existing launchers.
 
 - **Terminal.app profiles are launcher files.** Instead of writing
   Terminal's plist, each distro gets `terminal-profiles/NAME.terminal`
@@ -60,7 +85,7 @@ docs/design/release.md.
   set through Terminal itself — into its live model, so a running
   Terminal's next prefs flush can no longer silently drop a profile —
   and the file doubles as a double-clickable launcher. Imported
-  profiles run the script (`cm --cd ~ -d NAME`), so command updates
+  profiles run the script (`container distro run -n NAME -w ~`), so command updates
   never need a re-import, and `shellExitAction` closes the window on a
   clean exit while a failed launch stays visible. iTerm2 dynamic
   profiles run the same script. Terminal.app's `CommandString` isn't

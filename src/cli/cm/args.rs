@@ -497,14 +497,16 @@ pub struct Args {
     #[arg(long, value_name = "DIR", num_args = 0..=1, require_equals = true)]
     pub uninstall_completions: Option<Option<PathBuf>>,
 
-    /// Create an alias symlink to cm — a NAME lands next to the binary
-    /// (e.g. `wsl`), a PATH like ~/.local/bin/wsl is used as given — plus
-    /// a NAME(1) man-page symlink
+    /// Create an alias script that runs cm — a NAME (e.g. `wsl`) lands
+    /// next to the alias you ran this through, else next to the binary;
+    /// a PATH like ~/.local/bin/wsl is used as given — plus a NAME(1)
+    /// man-page symlink
     #[arg(long, value_name = "NAME|PATH")]
     pub install_alias: Option<String>,
 
-    /// Remove an alias created by --install-alias (only a symlink that
-    /// actually resolves to this cm, and its man-page symlink, are removed)
+    /// Remove an alias created by --install-alias (only one of our alias
+    /// scripts or a legacy symlink to this binary, and its man-page
+    /// symlink, are removed)
     #[arg(long, value_name = "NAME|PATH")]
     pub uninstall_alias: Option<String>,
 
@@ -858,7 +860,7 @@ impl Args {
     }
 
     fn validate_run(&self) -> Result<Action> {
-        // The launcher runs `cm -d NAME` — session-shaping flags the
+        // The launcher runs `run -n NAME` — session-shaping flags the
         // profile can't carry are rejected rather than ignored
         // (`--exec`/`--no-launch`/a command line conflict at parse).
         if self.terminal

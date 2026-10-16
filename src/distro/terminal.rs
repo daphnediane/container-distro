@@ -6,6 +6,7 @@
 
 use crate::catalog::wsl;
 use crate::naming::state_dir;
+use crate::setup::layout::{self, FrontEnd};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::fs;
@@ -32,22 +33,42 @@ pub(crate) fn conf_terminal_profile(conf: &str) -> Option<bool> {
         .map(|v| !v.trim().eq_ignore_ascii_case("false"))
 }
 
-/// `cm` resolved to an absolute path when it sits next to the running
-/// binary or on PATH, so a profile survives PATH-less launch contexts.
-fn cm_path() -> String {
-    std::env::current_exe()
+/// The running binary (canonicalized) and the leading arguments that
+/// reach its `container distro` front end — what every launcher runs as
+/// `… run -n NAME`. Never a sibling or `PATH` lookup: the result is
+/// baked into `uchg`-locked launchers, so it must be the binary doing
+/// the baking (security.md).
+fn run_invocation() -> (String, &'static [&'static str]) {
+    layout::self_invocation(FrontEnd::Distro).map_or_else(
+        |_| ("container-distro".to_string(), &[][..]),
+        |(exe, prefix)| (exe.display().to_string(), prefix),
+    )
+}
+
+/// The launcher binary's file name, for Terminal's close-warning
+/// exemption list.
+fn run_process_name() -> String {
+    layout::current_exe()
         .ok()
-        .and_then(|e| e.parent().map(|d| d.join("cm")))
-        .filter(|p| p.is_file())
-        .or_else(|| {
-            std::env::var_os("PATH").and_then(|path| {
-                std::env::split_paths(&path)
-                    .map(|d| d.join("cm"))
-                    .find(|p| p.is_file())
-            })
-        })
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|| "cm".into())
+        .and_then(|e| e.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| "container-distro".into())
+}
+
+/// `exe [prefix…] run -n NAME -w ~`, quoted for a shell or bare for a
+/// whitespace-tokenized `CommandString`.
+fn run_command_line(name: &str, quoted: bool) -> String {
+    let (exe, prefix) = run_invocation();
+    let q = |s: &str| {
+        if quoted {
+            format!("'{s}'")
+        } else {
+            s.to_string()
+        }
+    };
+    let mut parts = vec![q(&exe)];
+    parts.extend(prefix.iter().map(|a| a.to_string()));
+    parts.extend(["run".into(), "-n".into(), q(name), "-w".into(), q("~")]);
+    parts.join(" ")
 }
 
 /// `~/.container-distro` — a symlink to `state_dir()` giving a
@@ -100,11 +121,12 @@ fn alias_launch_path(name: &str) -> Option<String> {
 /// launcher script itself (it's +x with a shebang; a `/bin/sh` prefix
 /// would only add a process layer), reached through the alias so the
 /// path is space-free. The fallback when the alias can't be made runs
-/// `cm` directly (`~` survives tokenizing; cm expands it guest-side).
+/// `container distro run` directly (`~` survives tokenizing; `run`
+/// expands it guest-side).
 fn launch_command(name: &str) -> String {
     match alias_launch_path(name) {
         Some(p) => p,
-        None => format!("{} --cd ~ -d {name}", cm_path()),
+        None => run_command_line(name, false),
     }
 }
 
@@ -116,7 +138,7 @@ fn iterm2_command(name: &str) -> String {
     }
     match script_file(name) {
         Some(s) => format!("'{}'", s.display()),
-        None => format!("'{}' --cd '~' -d '{name}'", cm_path()),
+        None => run_command_line(name, true),
     }
 }
 
@@ -197,15 +219,13 @@ fn script_file(name: &str) -> Option<PathBuf> {
     )
 }
 
-/// The launcher's contents — `exec` so the window holds exactly `cm`,
-/// started at the guest home (`--cd ~`). `"$@"` lets `name.sh cmd…`
-/// run a guest command (the #33 launcher double-duty); a profile's
-/// own CommandString passes none.
+/// The launcher's contents — `exec` so the window holds exactly
+/// `container distro run`, started at the guest home (`-w ~`).
+/// `"$@"` lets `name.sh cmd…` run a guest command, passed as exact
+/// argv like `run`'s (the #33 launcher double-duty); a profile's own
+/// CommandString passes none.
 fn script_contents(name: &str) -> String {
-    format!(
-        "#!/bin/sh\nexec '{}' --cd '~' -d '{name}' \"$@\"\n",
-        cm_path()
-    )
+    format!("#!/bin/sh\nexec {} \"$@\"\n", run_command_line(name, true))
 }
 
 /// Write `name`'s launcher script (+x), `uchg`-locked at rest like the
@@ -247,8 +267,8 @@ fn terminal_running() -> bool {
 
 /// The `.terminal` settings-set dict `open` imports and launches.
 /// `shellExitAction` 1 = close the window when the shell exits cleanly,
-/// so a finished `cm` run drops its window but an error stays visible.
-/// `noWarnProcesses` exempts the launcher chain — `cm` execs
+/// so a finished session drops its window but an error stays visible.
+/// `noWarnProcesses` exempts the launcher chain — our binary execs
 /// `container exec` — from the "terminate running process" prompt on
 /// ⌘W/quit; Terminal can't see inside the container, so the guest's
 /// process tree never factors into the warning anyway.
@@ -263,7 +283,11 @@ fn terminal_profile_dict(name: &str, profile: &str) -> plist::Value {
         (
             "noWarnProcesses",
             plist::Value::Array(vec![
-                plist::Dictionary::from_iter([("ProcessName", plist::Value::from("cm"))]).into(),
+                plist::Dictionary::from_iter([(
+                    "ProcessName",
+                    plist::Value::from(run_process_name()),
+                )])
+                .into(),
                 plist::Dictionary::from_iter([("ProcessName", plist::Value::from("container"))])
                     .into(),
             ]),
@@ -883,6 +907,20 @@ pub fn reconcile(keep: &BTreeSet<String>) {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn launcher_runs_this_binary_distro_run() {
+        let exe = layout::current_exe().unwrap().display().to_string();
+        assert_eq!(
+            script_contents("d1"),
+            format!("#!/bin/sh\nexec '{exe}' run -n 'd1' -w '~' \"$@\"\n")
+        );
+        // The whitespace-tokenized fallback carries no quotes.
+        assert_eq!(
+            run_command_line("d1", false),
+            format!("{exe} run -n d1 -w ~")
+        );
+    }
 
     #[test]
     fn launcher_write_replaces_planted_link() {

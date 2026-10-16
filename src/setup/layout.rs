@@ -15,14 +15,24 @@
 //! A binary anywhere else (`target/debug/cm`) has no prefix, so callers
 //! need an explicit path or `--dev`.
 //!
-//! Paths are always relative to the canonicalized binary — an alias
-//! symlink (`wsl` → `cm`) resolves to the real install — never to an
-//! environment variable or a baked-in path, so nothing outside the
-//! binary's own tree can steer them.
+//! Paths are always relative to the canonicalized binary — a symlink
+//! to it resolves to the real install — never to an environment
+//! variable or a baked-in path, so nothing outside the binary's own
+//! tree can steer them.
+//!
+//! The same rule finds *our own commands*: there is no searching for a
+//! sibling `cm` or `container-distro`, or for either on `PATH`. Every
+//! binary carries both front ends, so [`self_invocation`] re-runs this
+//! binary with the leading arguments that select the wanted one, and
+//! that is what generated launchers and aliases bake. The one
+//! exception to "resolve everything" is [`invoked_as`]: an alias
+//! script passes its own unresolved path so aliases created through it
+//! land in the same directory.
 
 use std::env;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
 
@@ -74,6 +84,72 @@ pub fn libexec_dir_for(exe: &Path) -> Option<PathBuf> {
     prefix_of(&exe).map(|p| libexec_dir(&p))
 }
 
+/// Which command-line interface a process runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrontEnd {
+    /// `cm`'s WSL-style flags.
+    Cm,
+    /// `container distro`'s subcommands.
+    Distro,
+}
+
+/// Hidden leading argument: the alias path a generated alias script
+/// was run as (`"$0"`), so bare-name aliases it creates land beside it.
+pub const INVOKED_AS_FLAG: &str = "--invoked-as";
+
+/// Hidden leading argument selecting the `container distro` front end
+/// in a binary whose own front end is `cm` — what launchers baked by
+/// the `cm` binary use. `container-distro` reaches `cm` through its
+/// public `cli` subcommand instead.
+pub const DISTRO_FRONT_END_FLAG: &str = "--front-end=distro";
+
+#[derive(Debug)]
+struct Invocation {
+    native: FrontEnd,
+    invoked_as: Option<PathBuf>,
+}
+
+static INVOCATION: OnceLock<Invocation> = OnceLock::new();
+
+/// Record how this process was started; the binaries' `main` calls this
+/// once, before any front end runs.
+pub fn set_invocation(native: FrontEnd, invoked_as: Option<PathBuf>) {
+    let _ = INVOCATION.set(Invocation { native, invoked_as });
+}
+
+/// The front end this binary runs without a selector (`Distro` when
+/// [`set_invocation`] never ran, e.g. in tests).
+fn native() -> FrontEnd {
+    INVOCATION.get().map_or(FrontEnd::Distro, |i| i.native)
+}
+
+/// The alias path this process was started through, when a generated
+/// alias passed `--invoked-as` — unresolved, so its directory is where
+/// the user keeps aliases.
+#[must_use]
+pub fn invoked_as() -> Option<&'static Path> {
+    INVOCATION.get().and_then(|i| i.invoked_as.as_deref())
+}
+
+/// The leading arguments that reach front end `want` in a binary whose
+/// own front end is `native`.
+#[must_use]
+pub fn front_end_args(native: FrontEnd, want: FrontEnd) -> &'static [&'static str] {
+    match (native, want) {
+        (FrontEnd::Distro, FrontEnd::Cm) => &["cli"],
+        (FrontEnd::Cm, FrontEnd::Distro) => &[DISTRO_FRONT_END_FLAG],
+        _ => &[],
+    }
+}
+
+/// How to run this binary again with front end `want`: the
+/// canonicalized running binary plus its leading arguments. Generated
+/// launchers and aliases bake this — never a sibling or `PATH` lookup,
+/// which could resolve to some other binary.
+pub fn self_invocation(want: FrontEnd) -> Result<(PathBuf, &'static [&'static str])> {
+    Ok((current_exe()?, front_end_args(native(), want)))
+}
+
 /// [`prefix_of`] the running binary, with an error naming it — for
 /// defaults the user can override with an explicit path.
 pub fn current_prefix() -> Result<PathBuf> {
@@ -89,6 +165,15 @@ pub fn current_prefix() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_front_end_args_reach_the_other_front_end() {
+        use FrontEnd::{Cm, Distro};
+        assert!(front_end_args(Cm, Cm).is_empty());
+        assert!(front_end_args(Distro, Distro).is_empty());
+        assert_eq!(front_end_args(Distro, Cm), ["cli"]);
+        assert_eq!(front_end_args(Cm, Distro), [DISTRO_FRONT_END_FLAG]);
+    }
 
     #[test]
     fn test_prefix_of_bin_layouts() {

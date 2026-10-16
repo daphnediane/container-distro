@@ -226,6 +226,36 @@ pub enum Command {
         dir: Option<PathBuf>,
     },
 
+    /// Run the WSL-compatible `cm` interface: `cli ARGS` is `cm ARGS`
+    /// (see cm(1))
+    #[command(
+        disable_version_flag = true,
+        override_usage = "container-distro cli [OPTIONS] [-- <COMMAND LINE>]"
+    )]
+    Cli(Box<crate::cli::cm::args::Args>),
+
+    /// Print container-distro and container versions
+    Version,
+
+    /// Create an alias script NAME or PATH that runs container-distro
+    ///
+    /// A bare NAME goes next to the alias you ran this through, else
+    /// next to the binary. For a `cm`-style alias, use
+    /// `cli --install-alias`
+    InstallAlias {
+        #[arg(value_name = "NAME|PATH")]
+        target: String,
+    },
+
+    /// Remove an alias created by install-alias
+    ///
+    /// Only one of our alias scripts (or a legacy alias symlink to this
+    /// binary), and its man-page symlink, are removed
+    UninstallAlias {
+        #[arg(value_name = "NAME|PATH")]
+        target: String,
+    },
+
     /// Remove the `container distro` plugin registration
     /// (self-elevates with sudo when the plugin dir needs root)
     UninstallPlugin {

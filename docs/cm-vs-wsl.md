@@ -139,7 +139,7 @@ shell.
   macOS-native equivalent of a `.wsl` package's `windowsterminal`
   metadata (which Windows Terminal reads): a `.terminal` launcher file
   plus an iTerm2 dynamic profile when installed, launching
-  `cm -d NAME`. On by default; a package's
+  `container distro run -n NAME`. On by default; a package's
   `windowsterminal.enabled = false` opts out, and
   `cm --install --terminal-profile`/`--no-terminal-profile` (or
   `container distro set`) pins the answer. `cm --terminal` (or

@@ -8,6 +8,7 @@
 //! `container` plugin registration, man pages, completions,
 //! self-update, and the sudo re-exec those need.
 
+pub mod alias;
 pub mod completions;
 pub mod layout;
 pub mod man;

@@ -13,6 +13,7 @@ mod list;
 mod run;
 mod set;
 
+use std::ffi::OsString;
 use std::process::ExitCode;
 
 use anyhow::Result;
@@ -21,22 +22,32 @@ use clap::{CommandFactory, Parser};
 use super::docs::Docs;
 use crate::distro;
 use crate::distro::spec::{Intent, OriginSource};
-use crate::setup::plugin;
+use crate::setup::layout::FrontEnd;
+use crate::setup::{alias, plugin};
 use args::{Cli, Command};
 
-pub fn main() -> ExitCode {
+/// Parse `argv` as `container distro` arguments and run them.
+pub(super) fn main_from(mut argv: Vec<OsString>) -> ExitCode {
     // Invoked as `container distro …`, `container` may pass the plugin
     // name through as the first argument; drop it if so.
-    let mut argv: Vec<_> = std::env::args_os().collect();
     if argv.get(1).is_some_and(|a| a == plugin::PLUGIN_NAME) {
         argv.remove(1);
+    }
+    if argv.get(1).is_some_and(|a| a == "cli") {
+        super::cm::lone_v_is_version(&mut argv[2..]);
     }
     let cli = Cli::parse_from(argv);
     if cli.dev {
         crate::enable_dev();
     }
-    match run(cli) {
-        Ok(()) => ExitCode::SUCCESS,
+    // `cli` hands over to `cm`, which reports its own errors and exit
+    // codes.
+    let command = match cli.command {
+        Command::Cli(args) => return super::cm::main_args(*args),
+        command => command,
+    };
+    match run(command) {
+        Ok(code) => code,
         Err(e) => {
             eprintln!("container distro: {e:#}");
             ExitCode::FAILURE
@@ -50,8 +61,8 @@ fn docs() -> Docs {
     Docs::new(Cli::command(), "container-distro")
 }
 
-fn run(cli: Cli) -> Result<()> {
-    match cli.command {
+fn run(command: Command) -> Result<ExitCode> {
+    match command {
         Command::Create { name, opts, image } => {
             println!(
                 "{}",
@@ -116,6 +127,10 @@ fn run(cli: Cli) -> Result<()> {
         Command::InstallCompletions { dir } => docs().install_completions(dir)?,
         Command::UninstallCompletions { dir } => docs().uninstall_completions(dir)?,
         Command::UninstallPlugin { plugin_dir } => plugin::uninstall(plugin_dir)?,
+        Command::Version => return super::print_version("container-distro"),
+        Command::InstallAlias { target } => alias::install(&target, FrontEnd::Distro)?,
+        Command::UninstallAlias { target } => alias::uninstall(&target)?,
+        Command::Cli(_) => unreachable!("handled in main_from"),
         Command::Update {
             version,
             force,
@@ -124,5 +139,5 @@ fn run(cli: Cli) -> Result<()> {
             crate::setup::update::update(version.as_deref(), force, dry_run)?;
         }
     }
-    Ok(())
+    Ok(ExitCode::SUCCESS)
 }

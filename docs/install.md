@@ -86,8 +86,8 @@ container-distro install-man
 cm --install-completions          # bash/zsh/fish
 container-distro install-completions
 
-# optional: a `wsl` alias symlink (bin + man page) so WSL-shaped
-# tooling finds it -- a bare name lands next to cm, or pass a path:
+# optional: a `wsl` alias (bin + man page) so WSL-shaped tooling
+# finds it -- a bare name lands next to cm, or pass a path:
 cm --install-alias wsl
 cm --install-alias ~/.local/bin/wsl
 
@@ -186,14 +186,18 @@ of the same name is left in place with a warning.
 
 ### `wsl` aliases
 
-`cm --install-alias NAME|PATH` creates a symlink to `cm` -- a bare
-`NAME` (e.g. `wsl`) goes next to the binary itself, a `PATH` (like
-`~/.local/bin/wsl`) is used as given -- plus a `NAME(1)` symlink to
-`cm.1` in the man dir when the man page is installed (skipped otherwise;
-re-run `--install-alias` after `--install-man` to add just the link).
-`--uninstall-alias` removes both, and only when they're provably ours:
-the alias must be a symlink resolving to this `cm` binary and the man
-page a symlink to `cm.1` -- anything else is refused.
+`cm --install-alias NAME|PATH` writes a small alias script that runs
+`cm` -- a bare `NAME` (e.g. `wsl`) goes next to the alias you ran it
+through, else next to the binary; a `PATH` (like `~/.local/bin/wsl`) is
+used as given -- plus a `NAME(1)` symlink to `cm.1` in the man dir when
+the man page is installed (skipped otherwise; re-run `--install-alias`
+after `--install-man` to add just the link). `container-distro
+install-alias` does the same for `container-distro` itself, and
+`container-distro cli --install-alias` makes a `cm`-style alias from a
+plugin-only install. `--uninstall-alias` removes both, and only when
+they're provably ours: the alias must be one of our alias scripts (or a
+legacy symlink to this binary) and the man page a symlink to one of our
+pages -- anything else is refused.
 
 ## Upgrade
 

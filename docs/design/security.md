@@ -285,6 +285,24 @@ answer was to take the files out of reach rather than move them:
   `chflags(2)` follows links, so flagging the link naively locks the
   state dir instead). The silent-import no-op swap unlocks and
   re-locks inside the script — host-side, where flags are allowed.
+- What a launcher *runs* is the binary that wrote it, canonicalized
+  (`layout::self_invocation`) — `<container-distro> run -n NAME`, or
+  the plugin copy, or `cm` with a hidden `--front-end=distro`. Earlier
+  launchers baked a sibling `cm` or else the first `cm` on `PATH`,
+  which let whatever shadowed `cm` on `PATH` at generation time become
+  a locked, host-run launcher target. There is no lookup now.
+- **Alias scripts** (`install-alias`, `cm --install-alias`) are the
+  same shape — `exec '<canonical binary>' --invoked-as "$0" [cli]
+  "$@"`, written `O_NOFOLLOW` (C13) — but are *not* `uchg`-locked:
+  they live in bin directories next to the binaries they run, which
+  a rw-shared home exposes equally (`~/.cargo/bin`; T1), and locking
+  them would break `cargo install`/uninstall. Removal only deletes a
+  file carrying our marker line or a legacy symlink to this binary.
+  The two hidden leading arguments are honored only as `argv[1]`, so
+  a guest command line can't carry them: `--invoked-as` only picks
+  the directory a *bare-name* alias is written to (user privilege,
+  the alias's own directory); `--front-end=distro` only selects which
+  of this binary's interfaces parses the rest.
 
 The pre-journal world gets exactly one trusted upgrade: a
 `journalized` marker (itself `uchg`-locked, so unforgeable) gates a

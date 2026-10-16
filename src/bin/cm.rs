@@ -6,6 +6,8 @@
 
 //! `cm` — see [`container_distro::cli::cm`].
 
+use container_distro::setup::layout::FrontEnd;
+
 fn main() -> std::process::ExitCode {
-    container_distro::cli::cm::main()
+    container_distro::cli::main(FrontEnd::Cm)
 }

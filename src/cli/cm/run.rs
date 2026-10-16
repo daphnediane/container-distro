@@ -23,7 +23,7 @@ use crate::distro::{self, RunOpts};
 pub(super) fn run_in_target(args: &Args) -> Result<ExitCode> {
     if args.terminal {
         // Open the distro in Terminal.app via its `.terminal`
-        // launcher — the profile's `cm -d NAME` runs in the new window.
+        // launcher — the profile's `run -n NAME` runs in the new window.
         return match target(args.distribution.as_deref(), args.backend())? {
             Target::Distro(d) => distro::open_terminal(&d).map(|()| ExitCode::SUCCESS),
             Target::Machine(_) => bail!("--terminal opens distros; machines have no profile"),

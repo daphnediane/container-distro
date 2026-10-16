@@ -7,8 +7,7 @@
 //! `cm` — a WSL-compatible command-line wrapper for Apple container
 //! machines and `container distro` distros.
 
-mod alias;
-mod args;
+pub(super) mod args;
 mod backend;
 mod forward;
 mod install;
@@ -16,7 +15,8 @@ mod list;
 mod manage;
 mod run;
 
-use std::process::{ExitCode, ExitStatus};
+use std::ffi::OsString;
+use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use args::{Action, Args, Backend};
@@ -24,11 +24,34 @@ use backend::Target;
 use clap::{CommandFactory, Parser};
 
 use super::docs::Docs;
+use super::exit_code;
 use crate::catalog::wsl;
 use crate::container;
+use crate::setup::alias;
+use crate::setup::layout::FrontEnd;
 
-pub fn main() -> ExitCode {
-    let args = Args::parse();
+/// Parse `argv` as `cm` arguments and run them. A lone `-v` is
+/// `--version`, as with `wsl -v`; `-v` everywhere else stays
+/// `--verbose`, which needs `--list`.
+pub(super) fn main_from(mut argv: Vec<OsString>) -> ExitCode {
+    lone_v_is_version(&mut argv[1..]);
+    main_args(Args::parse_from(argv))
+}
+
+/// WSL's `-v` overload: alone it is `--version` (`wsl -v`); anywhere
+/// else it stays `--verbose`, which needs `--list`. `args` is
+/// everything after the program (or after `container-distro cli`).
+pub(super) fn lone_v_is_version(args: &mut [OsString]) {
+    if let [only] = args
+        && only == "-v"
+    {
+        *only = "--version".into();
+    }
+}
+
+/// Run already-parsed `cm` arguments — also `container-distro cli`'s
+/// entry — reporting errors as `cm:`.
+pub(super) fn main_args(args: Args) -> ExitCode {
     match run(args) {
         Ok(code) => code,
         Err(e) => {
@@ -38,7 +61,7 @@ pub fn main() -> ExitCode {
     }
 }
 
-fn run(args: Args) -> Result<ExitCode> {
+pub(super) fn run(args: Args) -> Result<ExitCode> {
     if args.dev {
         crate::enable_dev();
     }
@@ -53,7 +76,7 @@ fn run(args: Args) -> Result<ExitCode> {
         Action::UninstallCompletions(dir) => docs()
             .uninstall_completions(dir)
             .map(|()| ExitCode::SUCCESS),
-        Action::InstallAlias(t) => alias::install(&t).map(|()| ExitCode::SUCCESS),
+        Action::InstallAlias(t) => alias::install(&t, FrontEnd::Cm).map(|()| ExitCode::SUCCESS),
         Action::UninstallAlias(t) => alias::uninstall(&t).map(|()| ExitCode::SUCCESS),
         Action::Status => passthru(&["system", "status"]),
         Action::Update {
@@ -126,10 +149,6 @@ pub(super) fn passthru(args: &[&str]) -> Result<ExitCode> {
     Ok(exit_code(status))
 }
 
-pub(super) fn exit_code(status: ExitStatus) -> ExitCode {
-    ExitCode::from(status.code().map_or(1, |c| c.clamp(0, 255) as u8))
-}
-
 /// Resolve `-d` (or the default), starting services first. Names are
 /// validated before they're passed to any `container` subcommand so a
 /// flag-shaped value can't smuggle options into the inner CLI.
@@ -147,12 +166,7 @@ pub(super) fn named_target(name: &str, sel: Backend) -> Result<Target> {
 }
 
 fn version() -> Result<ExitCode> {
-    println!("cm {}", env!("CARGO_PKG_VERSION"));
-    if container::resolve_binary().is_none() {
-        println!("container: not installed");
-        return Ok(ExitCode::SUCCESS);
-    }
-    passthru(&["--version"])
+    super::print_version("cm")
 }
 
 /// `cm(1)` and the `cm` completions.

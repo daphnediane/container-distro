@@ -64,7 +64,7 @@ even when a same-named distro exists.
 | `--terminal`         | Open the distro in a Terminal.app window instead              |
 
 `--terminal` opens the distro's `.terminal` launcher — Terminal
-imports the profile (first time only) and runs `cm -d NAME` in a new
+imports the profile (first time only) and runs the distro in a new
 window, so it's distro-only and the run-shaping flags don't apply
 (`--user`, `--cd`, `--shell-type`, `--env`, `-e`, a command line).
 On `--install`/`--import` it replaces the console launch entirely.
@@ -304,7 +304,7 @@ only an explicit `--no-ssh` pin is refused — `--ssh`, `--trusted`, or
 `--install` (and `container distro create`/`import`) generates
 **terminal profiles** for the distro — WSL's `windowsterminal` metadata
 made macOS-native: a `.terminal` launcher file plus, when iTerm2 is
-installed, a dynamic profile, both launching `cm -d NAME`. Generation is
+installed, a dynamic profile, both launching `container distro run -n NAME`. Generation is
 on by default and yields to a package opt-out (a `.wsl` whose
 `wsl-distribution.conf` sets `windowsterminal.enabled = false`);
 `--terminal-profile`/`--no-terminal-profile` pin the answer explicitly
@@ -386,12 +386,25 @@ prefer real port publishing (`--publish` at install, or
 | `--uninstall-man[=DIR]`         | Remove `cm(1)` again -- only files still looking like our generated pages                                                                                           |
 | `--install-completions[=DIR]`   | Install bash/zsh/fish completions (generated from the CLI definition); bare, targets `share/` of the binary's install prefix                                        |
 | `--uninstall-completions[=DIR]` | Remove the completions again -- only files still looking like generated scripts                                                                                     |
-| `--install-alias NAME\|PATH`    | Symlink `NAME`/`PATH` to `cm` (e.g. `wsl`), plus `NAME(1)` → `cm.1` when the man page is installed                                                                  |
-| `--uninstall-alias NAME\|PATH`  | Remove an alias -- only a symlink that actually resolves to this `cm`, and its man-page link                                                                        |
+| `--install-alias NAME\|PATH`    | Write an alias script `NAME`/`PATH` running `cm` (e.g. `wsl`), plus `NAME(1)` → `cm.1` when the man page is installed                                               |
+| `--uninstall-alias NAME\|PATH`  | Remove an alias -- only one of our alias scripts (or a legacy symlink to this binary), and its man-page link                                                        |
 
 See [install.md] for where the defaults land. `--install-alias` is
 idempotent: re-running it after `cm --install-man` adds just the missing
-man-page link.
+man-page link, and refreshes an alias whose binary moved.
+
+An alias is a two-line `/bin/sh` script, not a symlink:
+`exec '<binary>' --invoked-as "$0" [cli] "$@"`. The script names the
+binary that wrote it (canonicalized) and which interface it runs, so
+`container-distro cli --install-alias wsl` makes a `cm`-style alias of
+`container-distro` too. A bare `NAME` lands next to the alias you ran
+the command through — `wsl --install-alias wsl2` puts `wsl2` beside
+`wsl` — else next to the binary. Aliases made by older releases
+(symlinks to `cm`) keep working, and re-running `--install-alias`
+upgrades them to scripts.
+
+`cm -v` on its own prints the version, as `wsl -v` does; with `--list`
+it is `--verbose`.
 
 ## Environment
 

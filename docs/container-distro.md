@@ -51,10 +51,13 @@ Journal files are `uchg`-locked at rest (design/security.md T6).
 Creating, installing, or importing a distro also generates **terminal
 profiles** — the `windowsterminal` metadata equivalent from a `.wsl`
 package's `wsl-distribution.conf`. The artifacts, all under the state
-dir and all launching `cm -d NAME`:
+dir and all launching `container distro run -n NAME`:
 
-- `terminal-cmds/NAME.sh` — a launcher script (`exec cm --cd '~' -d
-  NAME "$@"`). Imported profiles point at the *script*, so command
+- `terminal-cmds/NAME.sh` — a launcher script (`exec
+  '<container-distro>' run -n NAME -w '~' "$@"`, naming the binary
+  that wrote it — the plugin copy, `container-distro`, or `cm` with a
+  hidden front-end selector; `NAME.sh CMD…` runs CMD as exact argv,
+  like `run`). Imported profiles point at the *script*, so command
   changes propagate without re-importing. Profiles reach it through
   `~/.container-distro`, a symlink to the state dir, as the run
   command `~/.container-distro/terminal-cmds/NAME.sh` — Terminal
@@ -71,7 +74,7 @@ dir and all launching `cm -d NAME`:
   a double-click — makes Terminal *import* the profile through its
   own model (surviving the prefs flushes that drop profiles written
   behind a running Terminal's back). The `distro terminal`/`cm
-  --terminal` commands also guarantee a window running `cm -d NAME`:
+  --terminal` commands also guarantee a window running the distro:
   `open` launches one when Terminal is responsive, and when a dormant
   Terminal queues or drops it the commands spawn the window directly
   (adopting the imported profile for the title and close-on-exit).
@@ -350,7 +353,7 @@ profiles whose distro no longer exists.
 Open the distro in a new Terminal.app window: refreshes its
 `.terminal` launcher and `open`s it — Terminal imports the settings
 set (a no-op if already imported under that name) — then opens a
-window running `cm -d NAME`, spawning it directly when a dormant
+window running `container distro run -n NAME`, spawning it directly when a dormant
 Terminal queues the `open`'s launch. This is also how you re-import a
 profile you deleted, and `cm --terminal` does the same for the
 `-d`/default distro.
@@ -479,6 +482,29 @@ of the same name is left in place with a warning.
 
 Remove the plugin registration (only if it was installed by
 `container-distro`).
+
+### `cli [CM OPTIONS] [-- COMMAND LINE]`
+
+Run the WSL-compatible `cm` interface from this binary: `container
+distro cli -d NAME` is `cm -d NAME`, every flag included (see
+[cm.md](cm.md)). `cli --install-alias NAME` makes a `cm`-style alias
+of this binary, so a plugin-only install still gets one.
+
+### `version`
+
+Print the `container-distro` version, then `container --version` —
+the same report as `cm --version`.
+
+### `install-alias NAME|PATH` / `uninstall-alias NAME|PATH`
+
+Write (or remove) an alias script running `container-distro`, plus a
+`NAME(1)` → `container-distro.1` man-page link when that page is
+installed. Aliases are `/bin/sh` scripts that name this binary
+(canonicalized) and record which interface they run; a bare `NAME`
+lands next to the alias you ran the command through, else next to the
+binary — the plugin copy (`<plugins>/distro/bin/distro`) needs an
+explicit `PATH`. Removal only touches one of our alias scripts and its
+man-page symlink. For a `cm`-style alias, use `cli --install-alias`.
 
 ### `update [VERSION] [--force] [--dry-run]`
 
