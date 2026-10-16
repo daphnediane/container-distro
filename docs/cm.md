@@ -206,7 +206,7 @@ instead (`alpine:latest` → `alpine-latest`).
 The catalog is compiled in and merged from two files: a pinned,
 verbatim copy of Microsoft's `DistributionInfo.json` — the manifest
 behind `wsl --list --online`, MIT-licensed in `vendor/microsoft/` —
-and a small overlay (`src/catalog.json`) that adds entries Microsoft
+and a small overlay (`src/catalog/catalog.json`) that adds entries Microsoft
 doesn't publish (Alpine, Rocky, Oracle, UBI) and fills extension
 fields on entries it does. The schema is Microsoft's plus our
 `Image`/`HomeMount` extensions. Each `ModernDistributions` vendor

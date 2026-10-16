@@ -516,7 +516,7 @@ fn prune_cache() {
 
 fn file_sha256(path: &Path) -> Result<String> {
     let f = File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
-    Ok(crate::oci::hash_reader(f)?.0)
+    Ok(crate::util::oci::hash_reader(f)?.0)
 }
 
 #[cfg(test)]

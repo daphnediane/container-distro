@@ -103,7 +103,7 @@ fn same_bytes(a: &Path, b: &Path) -> bool {
         return false;
     };
     matches!(
-        (crate::oci::hash_reader(fa), crate::oci::hash_reader(fb)),
+        (crate::util::oci::hash_reader(fa), crate::util::oci::hash_reader(fb)),
         (Ok((ha, _)), Ok((hb, _))) if ha == hb
     )
 }
@@ -160,7 +160,7 @@ pub fn install(root: Option<PathBuf>, from: Option<&Path>) -> Result<()> {
     }
     let plugin_root = dir.parent().map_or_else(|| dir.clone(), Path::to_path_buf);
     let extra = vec!["--from".to_string(), exe.to_string_lossy().into_owned()];
-    crate::install::with_plugin_privilege("install-plugin", &plugin_root, &extra, || {
+    crate::setup::privilege::with_plugin_privilege("install-plugin", &plugin_root, &extra, || {
         install_into(&dir, &exe)
     })
 }
@@ -231,7 +231,7 @@ pub fn uninstall(root: Option<PathBuf>) -> Result<()> {
         _ => {}
     }
     let plugin_root = dir.parent().map_or_else(|| dir.clone(), Path::to_path_buf);
-    crate::install::with_plugin_privilege("uninstall-plugin", &plugin_root, &[], || {
+    crate::setup::privilege::with_plugin_privilege("uninstall-plugin", &plugin_root, &[], || {
         uninstall_from(&dir)
     })
 }
@@ -271,7 +271,7 @@ fn uninstall_from(dir: &Path) -> Result<()> {
     // The same installs kept the guest file server under the plugin
     // prefix's libexec — remove both artifact names so the retired
     // feature leaves nothing behind.
-    let libexec_app = crate::layout::libexec_dir(dir);
+    let libexec_app = crate::setup::layout::libexec_dir(dir);
     remove_file(&libexec_app.join("distrofs-server-aarch64"));
     remove_file(&libexec_app.join("distrofs"));
     remove_dir_if_empty(&libexec_app);

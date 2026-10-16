@@ -77,7 +77,7 @@ script would run (sudo/user prefixes included) is printed instead.
 Update is likewise script-shaped — `update-container-distro.sh` in
 `bin/` — but only as a thin wrapper: the real path is
 `container distro update` / `cm --update` in the binary itself
-(`src/update.rs`). It fetches the latest (or a named) GitHub release,
+(`src/setup/update.rs`). It fetches the latest (or a named) GitHub release,
 prefers the signed pkg, verifies the API-reported SHA-256 plus the
 Developer ID signature and a signing-team match against the installed
 binary's `TeamIdentifier`, then `exec`s `open -a Installer.app` so the
@@ -146,7 +146,7 @@ it. Options weighed:
 - **Existing first-run offer** (chosen): an interactive
   `cm`/`container-distro` already downloads the SHA-256-pinned,
   signature-checked Apple installer and opens it in Installer.app
-  (`src/install.rs`, security.md T8). Nothing container-related happens
+  (`src/container/install.rs`, security.md T8). Nothing container-related happens
   during our install — and none needs to.
 
 ## Signing and notarization

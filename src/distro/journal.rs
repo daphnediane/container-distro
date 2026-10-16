@@ -9,10 +9,10 @@
 use super::adopt::migrate_once;
 use super::lock::{is_locked, open_locked_rw, set_locked, unlock, write_nofollow};
 use super::{distro_name, distros, find};
+use crate::catalog::wsl;
 use crate::container::{self, container_cmd};
 use crate::distro::spec::{Automount, DistroSpec, HomeMount, JournalSpec};
 use crate::naming::state_dir;
-use crate::wsl;
 use anyhow::{Context, Result, bail};
 use std::fs;
 use std::io::{Seek, SeekFrom, Write};

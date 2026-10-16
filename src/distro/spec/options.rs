@@ -90,7 +90,7 @@ impl Arch {
 
     /// The host's own arch — what an unset `--arch` resolves to.
     pub fn host() -> Arch {
-        crate::oci::host_arch().parse().unwrap_or(Arch::Arm64)
+        crate::util::oci::host_arch().parse().unwrap_or(Arch::Arm64)
     }
 }
 

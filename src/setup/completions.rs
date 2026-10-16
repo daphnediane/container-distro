@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::layout;
+use crate::setup::layout;
 
 /// A shell a completion script is generated for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

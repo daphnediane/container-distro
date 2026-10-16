@@ -10,7 +10,7 @@ use super::run_container_quiet;
 use crate::container::{self, container_cmd};
 use crate::distro::spec::{Arch, LABEL_DISTRO};
 use crate::naming::label_lookup;
-use crate::oci;
+use crate::util::oci;
 use anyhow::Result;
 use std::path::Path;
 use std::process::Stdio;
@@ -51,7 +51,7 @@ pub(super) fn remove_snapshot_images(name: &str, keep: Option<&str>) {
 
 /// A SHA-256 in cache-filename form: lowercase hex, `0x` stripped —
 /// the form the shared image's reference and `rootfs-sha256` label
-/// use. (Mirrors `catalog_ops::normalize_sha`.)
+/// use. (Mirrors `catalog::normalize_sha`.)
 pub(super) fn normalized_sha(s: &str) -> String {
     s.strip_prefix("0x")
         .or_else(|| s.strip_prefix("0X"))

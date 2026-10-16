@@ -4,36 +4,16 @@
  * See LICENSE file for full license text
  */
 
-//! Installing Apple's `container` itself, and running privileged
-//! plugin file ops.
-//!
-//! `container` is a hard prerequisite — nothing works without it — so
-//! when it can't be resolved we offer (interactive terminals only,
-//! never as root) to download the signed installer for the release
-//! this build is verified against and `open` it. Installer.app does
-//! its own signature/notarization checks and collects the admin
-//! password; we never run `sudo installer` ourselves. The download is
-//! verified against a SHA-256 pinned in this binary and sanity-checked
-//! with `pkgutil --check-signature` — see security.md T8.
-//!
-//! [`sudo_re_exec`] is the other half: `install-plugin`/`uninstall-plugin`
-//! re-exec themselves under `sudo` when the plugin dir isn't
-//! user-writable, so the `container` resolution and the offer above
-//! always run as the invoking user.
-
-use std::ffi::CString;
+use crate::catalog::wsl;
+use crate::container::{INSTALLED_CONTAINER_PATH, PINNED_CONTAINER_VERSION};
+use crate::setup::privilege::is_root;
+use anyhow::{Context, Result, anyhow, bail};
 use std::fs::File;
 use std::io::{self, IsTerminal, Read, Write};
-use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
-
-use anyhow::{Context, Result, anyhow, bail};
 use tempfile::NamedTempFile;
-
-use crate::container::{INSTALLED_CONTAINER_PATH, PINNED_CONTAINER_VERSION};
-use crate::wsl;
 
 /// Set to skip the install offer entirely and get the manual
 /// instructions instead.
@@ -48,13 +28,8 @@ const PKG_SHA256: &str = "a24808cb202318fa1c3bbee0c6c6887fe1225fe899d7b687a0ddd9
 /// How long we wait for Installer.app to drop the CLI before telling
 /// the user to re-run — the installer UI moves at human speed.
 const INSTALL_WAIT: Duration = Duration::from_secs(600);
-const INSTALL_POLL: Duration = Duration::from_secs(3);
 
-/// Whether this process runs with euid 0.
-pub(crate) fn is_root() -> bool {
-    // SAFETY: geteuid is always safe to call.
-    unsafe { libc::geteuid() == 0 }
-}
+const INSTALL_POLL: Duration = Duration::from_secs(3);
 
 fn asset_name() -> String {
     format!("container-{PINNED_CONTAINER_VERSION}-installer-signed.pkg")
@@ -238,7 +213,7 @@ fn installer_pkg() -> Result<PathBuf> {
 
 pub(crate) fn sha256_of(path: &Path) -> Result<String> {
     let f = File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
-    Ok(crate::oci::hash_reader(f)?.0)
+    Ok(crate::util::oci::hash_reader(f)?.0)
 }
 
 fn verify_sha256(path: &Path) -> Result<()> {
@@ -294,60 +269,4 @@ fn wait_for_binary() -> Result<bool> {
         std::thread::sleep(INSTALL_POLL);
     }
     bail!("the installer did not finish in time — re-run your command when it completes")
-}
-
-/// Whether `dir` — or its nearest existing ancestor, when `dir` itself
-/// doesn't exist yet — is writable by this user. The test for whether
-/// plugin install/uninstall needs root.
-fn user_writable(dir: &Path) -> bool {
-    let mut probe = Some(dir);
-    while let Some(d) = probe {
-        if d.exists() {
-            let Ok(c) = CString::new(d.as_os_str().as_bytes()) else {
-                return false;
-            };
-            // SAFETY: c is a NUL-terminated path we just built.
-            return unsafe { libc::access(c.as_ptr(), libc::W_OK | libc::X_OK) } == 0;
-        }
-        probe = d.parent();
-    }
-    false
-}
-
-/// Re-exec this binary under `sudo` for the privileged half of
-/// `install-plugin`/`uninstall-plugin`: only the plugin-dir file ops
-/// run as root — `container` resolution (and the install offer) always
-/// ran as the invoking user first. The child is invoked with an
-/// explicit `--plugin-dir`, so `sudo`'s env_reset/secure_path can't
-/// change which `container` the dir is derived from. Same trust as
-/// telling the user to run `sudo` themselves — just fewer steps.
-pub(crate) fn sudo_re_exec(subcommand: &str, plugin_dir: &Path, extra: &[String]) -> Result<()> {
-    let exe = std::env::current_exe().context("cannot locate the running binary")?;
-    let mut cmd = Command::new("/usr/bin/sudo");
-    cmd.arg(exe)
-        .arg(subcommand)
-        .arg("--plugin-dir")
-        .arg(plugin_dir)
-        .args(extra);
-    eprintln!("{} requires administrator rights:", plugin_dir.display());
-    let status = cmd.status().context("failed to run sudo")?;
-    if !status.success() {
-        bail!("sudo did not complete — re-run `sudo container-distro {subcommand}` yourself");
-    }
-    Ok(())
-}
-
-/// Run the plugin-dir file ops directly when they're user-writable, or
-/// via [`sudo_re_exec`] when they need root. `plugin_dir` is the
-/// `<root>/container-plugins` value `--plugin-dir` takes.
-pub(crate) fn with_plugin_privilege(
-    subcommand: &str,
-    plugin_dir: &Path,
-    extra: &[String],
-    ops: impl FnOnce() -> Result<()>,
-) -> Result<()> {
-    if is_root() || user_writable(&plugin_dir.join(crate::plugin::PLUGIN_NAME)) {
-        return ops();
-    }
-    sudo_re_exec(subcommand, plugin_dir, extra)
 }

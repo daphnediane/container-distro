@@ -21,7 +21,7 @@ use crate::distro::spec::{
     LABEL_ROOTFS_SHA256,
 };
 use crate::naming::label_key;
-use crate::oci;
+use crate::util::oci;
 use anyhow::{Context, Result, bail};
 use std::fs;
 use std::path::{Path, PathBuf};

@@ -36,7 +36,9 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde_json::Value;
 use tempfile::NamedTempFile;
 
-use crate::{install, wsl};
+use crate::catalog::wsl;
+use crate::container::install;
+use crate::setup::privilege;
 
 /// The GitHub repo releases come from — matches Cargo.toml's
 /// `repository`, restated here so a typo can't redirect the download.
@@ -65,7 +67,7 @@ const INSTALLER_APP: &str = "/System/Library/CoreServices/Installer.app";
 /// into `open`; an early `Ok(())` means there was nothing to do or the
 /// user declined.
 pub fn update(version: Option<&str>, force: bool, dry_run: bool) -> Result<()> {
-    if install::is_root() {
+    if privilege::is_root() {
         bail!("run without sudo — Installer.app asks for admin rights itself");
     }
     let (tag, release) = fetch_release(version)?;

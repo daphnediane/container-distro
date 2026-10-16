@@ -18,7 +18,7 @@ use std::io::ErrorKind;
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 
-use crate::man;
+use crate::setup::man;
 use anyhow::{Context, Result, bail};
 
 /// The canonicalized `cm` executable we're aliasing.

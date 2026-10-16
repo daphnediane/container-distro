@@ -13,7 +13,7 @@
 
 use crate::container::{Machine, MachineDetail};
 use crate::distro::DistroSummary;
-use crate::table::{columns, human_bytes, title_case};
+use crate::util::table::{columns, human_bytes, title_case};
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -21,7 +21,7 @@ use std::process::ExitCode;
 use anyhow::Result;
 
 use super::backend;
-use crate::catalog_ops;
+use crate::catalog;
 use crate::container;
 use crate::distro::spec::Arch;
 
@@ -219,7 +219,7 @@ pub(super) fn run(
     if online {
         print!(
             "{}",
-            catalog_ops::render_online(
+            catalog::render_online(
                 catalog_file.as_deref(),
                 verbosity,
                 true,
@@ -231,7 +231,7 @@ pub(super) fn run(
         return Ok(ExitCode::SUCCESS);
     }
     if cache {
-        print!("{}", catalog_ops::render_cache(catalog_file.as_deref()));
+        print!("{}", catalog::render_cache(catalog_file.as_deref()));
         return Ok(ExitCode::SUCCESS);
     }
     container::ensure_started()?;

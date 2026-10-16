@@ -12,8 +12,8 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap_complete::shells::{Bash, Fish, Zsh};
 
-use crate::completions::{self, Shell};
-use crate::man;
+use crate::setup::completions::{self, Shell};
+use crate::setup::man;
 
 /// A front end's clap command under the name it's installed as —
 /// `container-distro`, not `container distro`, so pages are

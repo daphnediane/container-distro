@@ -16,10 +16,10 @@ use super::args::{Backend, InstallOpts, InstallSource};
 use super::backend::{self, Target};
 use super::named_target;
 use super::run::launch;
+use crate::catalog;
 use crate::container::{self, ArgvMode};
 use crate::distro::spec::{Arch, Intent};
 use crate::distro::{self, CreateOptions};
-use crate::{catalog, catalog_ops};
 
 /// The positional `--install` argument is a catalog name when it
 /// matches one (case-insensitive), otherwise an image reference —
@@ -34,11 +34,11 @@ fn resolve<'a>(
     cat: &'a catalog::Catalog,
     source: &'a InstallSource,
     arch: Arch,
-) -> Result<catalog_ops::Resolved<'a>> {
+) -> Result<catalog::Resolved<'a>> {
     match source {
-        InstallSource::Default => catalog_ops::resolve(cat, None, arch, false),
-        InstallSource::CatalogOrImage(a) => catalog_ops::resolve(cat, Some(a), arch, true),
-        InstallSource::Image(image) => Ok(catalog_ops::Resolved::Image {
+        InstallSource::Default => catalog::resolve(cat, None, arch, false),
+        InstallSource::CatalogOrImage(a) => catalog::resolve(cat, Some(a), arch, true),
+        InstallSource::Image(image) => Ok(catalog::Resolved::Image {
             image,
             name: None,
             requested: Intent::default(),
@@ -82,12 +82,12 @@ pub(super) fn install(opts: &InstallOpts) -> Result<ExitCode> {
     let cat = catalog::load(opts.catalog.as_deref())?;
     let resolved = resolve(&cat, &opts.source, opts.arch.unwrap_or_else(Arch::host))?;
     let (image, hint, requested) = match &resolved {
-        catalog_ops::Resolved::Image {
+        catalog::Resolved::Image {
             image,
             name,
             requested,
         } => (*image, *name, requested.clone()),
-        catalog_ops::Resolved::Wsl { name, .. } => {
+        catalog::Resolved::Wsl { name, .. } => {
             // Machines boot from images — a catalog entry that only
             // ships a rootfs download can't satisfy `--machine`.
             if opts.machine {
@@ -98,7 +98,7 @@ pub(super) fn install(opts: &InstallOpts) -> Result<ExitCode> {
             if !backend::distros_enabled() {
                 bail!("--install needs distro support (unset CM_BACKEND=machine)");
             }
-            let name = catalog_ops::install_resolved(resolved, opts.name.clone(), &create)?;
+            let name = catalog::install_resolved(resolved, opts.name.clone(), &create)?;
             if opts.no_launch {
                 return Ok(ExitCode::SUCCESS);
             }
@@ -111,8 +111,8 @@ pub(super) fn install(opts: &InstallOpts) -> Result<ExitCode> {
                 "--install defaults to a distro; that needs distro support (unset CM_BACKEND=machine)"
             );
         }
-        let name = catalog_ops::install_resolved(
-            catalog_ops::Resolved::Image {
+        let name = catalog::install_resolved(
+            catalog::Resolved::Image {
                 image,
                 name: hint,
                 requested: requested.clone(),
@@ -173,7 +173,7 @@ fn install_from_file(
     // `create` already pins terminal_profile when `--terminal` asked
     // to open the profile — the explicit opt-in `--terminal-profile`
     // would write.
-    let name = catalog_ops::import_file(
+    let name = catalog::import_file(
         file,
         opts.name.clone(),
         name_hint,
@@ -264,7 +264,7 @@ mod tests {
         // `wsl --install` registers `Ubuntu` — a catalog install takes
         // the entry's NAME, not a file- or image-derived name. The
         // default is a `.wsl` install on this host.
-        let catalog_ops::Resolved::Wsl { name, .. } =
+        let catalog::Resolved::Wsl { name, .. } =
             resolve(&cat, &InstallSource::Default, Arch::host()).unwrap()
         else {
             panic!("the catalog default should resolve to a .wsl download");
@@ -273,8 +273,7 @@ mod tests {
         assert_eq!(container::default_machine_name(name), "ubuntu");
         for arg in ["ubuntu", "UBUNTU-24.04"] {
             let source = InstallSource::CatalogOrImage(arg.to_string());
-            let catalog_ops::Resolved::Wsl { name, .. } =
-                resolve(&cat, &source, Arch::host()).unwrap()
+            let catalog::Resolved::Wsl { name, .. } = resolve(&cat, &source, Arch::host()).unwrap()
             else {
                 panic!("{arg} should resolve to a .wsl download");
             };
@@ -282,8 +281,7 @@ mod tests {
         }
         // Overlay entries without a `.wsl` download resolve to images.
         let source = InstallSource::CatalogOrImage("alpine".to_string());
-        let catalog_ops::Resolved::Image { name, .. } =
-            resolve(&cat, &source, Arch::host()).unwrap()
+        let catalog::Resolved::Image { name, .. } = resolve(&cat, &source, Arch::host()).unwrap()
         else {
             panic!("alpine should resolve to an image");
         };
@@ -297,8 +295,7 @@ mod tests {
     fn amd64_install_picks_the_amd64_download() {
         let cat = builtin();
         let source = InstallSource::CatalogOrImage("ubuntu".to_string());
-        let catalog_ops::Resolved::Wsl { download, .. } =
-            resolve(&cat, &source, Arch::Amd64).unwrap()
+        let catalog::Resolved::Wsl { download, .. } = resolve(&cat, &source, Arch::Amd64).unwrap()
         else {
             panic!("Ubuntu should resolve to a .wsl download on amd64");
         };
@@ -315,7 +312,7 @@ mod tests {
             InstallSource::CatalogOrImage("quay.io/x/y:1".to_string()),
             InstallSource::Image("alpine:3".to_string()),
         ] {
-            let catalog_ops::Resolved::Image { name, .. } =
+            let catalog::Resolved::Image { name, .. } =
                 resolve(&cat, &source, Arch::host()).unwrap()
             else {
                 panic!("{source:?} should resolve to an image");
@@ -328,7 +325,7 @@ mod tests {
     fn wsl_catalog_entries_keep_their_name() {
         let cat = builtin();
         let source = InstallSource::CatalogOrImage("rlcplus-9".to_string());
-        let catalog_ops::Resolved::Wsl { name, .. } = resolve(&cat, &source, Arch::host()).unwrap()
+        let catalog::Resolved::Wsl { name, .. } = resolve(&cat, &source, Arch::host()).unwrap()
         else {
             panic!("RLCPlus-9 should resolve to a .wsl download");
         };

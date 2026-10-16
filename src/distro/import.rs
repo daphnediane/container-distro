@@ -18,7 +18,7 @@ use crate::distro::spec::{
 };
 use crate::distro::terminal;
 use crate::naming::label_key;
-use crate::{oci, wsl};
+use crate::{catalog::wsl, util::oci};
 use anyhow::{Result, bail};
 use std::path::Path;
 

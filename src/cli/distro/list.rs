@@ -12,7 +12,7 @@ use clap::Args;
 use super::args::Format;
 use crate::distro::spec::Arch;
 use crate::distro::{self, DistroSummary};
-use crate::table::{columns, human_bytes, local_datetime};
+use crate::util::table::{columns, human_bytes, local_datetime};
 
 #[derive(Debug, Args)]
 pub struct ListArgs {

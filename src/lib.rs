@@ -40,18 +40,9 @@ pub fn dev_mode() -> bool {
 }
 
 pub mod catalog;
-pub mod catalog_ops;
 pub mod cli;
-pub mod completions;
 pub mod container;
 pub mod distro;
-pub mod forward;
-mod install;
-pub mod layout;
-pub mod man;
 pub mod naming;
-pub mod oci;
-pub mod plugin;
-pub mod table;
-pub mod update;
-pub mod wsl;
+pub mod setup;
+pub mod util;

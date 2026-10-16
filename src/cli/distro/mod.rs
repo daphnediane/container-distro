@@ -21,7 +21,7 @@ use clap::{CommandFactory, Parser};
 use super::docs::Docs;
 use crate::distro;
 use crate::distro::spec::{Intent, OriginSource};
-use crate::plugin;
+use crate::setup::plugin;
 use args::{Cli, Command};
 
 pub fn main() -> ExitCode {
@@ -121,7 +121,7 @@ fn run(cli: Cli) -> Result<()> {
             force,
             dry_run,
         } => {
-            crate::update::update(version.as_deref(), force, dry_run)?;
+            crate::setup::update::update(version.as_deref(), force, dry_run)?;
         }
     }
     Ok(())

@@ -56,8 +56,11 @@ One published crate shipping two binaries over a shared library:
 
 | Path                        | Contents                                                            |
 | --------------------------- | ------------------------------------------------------------------- |
-| `src/`                      | `container_distro` library: shared `container` CLI plumbing         |
-|                             | (naming, OCI, forwarder, self-update, …)                            |
+| `src/`                      | `container_distro` library: `naming` plus the modules below         |
+| `src/container/`            | `container` CLI wrappers, its JSON types, the install offer         |
+| `src/catalog/`              | installable catalog, `.wsl` packages, verified downloads            |
+| `src/setup/`                | layout, plugin registration, man/completions, self-update, sudo     |
+| `src/util/`                 | table rendering, OCI layout writer, TCP forwarder                   |
 | `src/distro/`               | distro operations, one submodule each; `spec/` and `terminal`       |
 | `src/cli/cm/`               | `cm` front end (WSL-compatible CLI), one file per action group      |
 | `src/cli/distro/`           | `container distro` plugin front end, one file per larger subcommand |

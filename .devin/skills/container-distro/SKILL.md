@@ -15,13 +15,18 @@ binaries:
   machine-like containers ("distros") with what `container machine`
   lacks: mounts outside `$HOME`, published ports, export/import, `set`.
 - `src/bin/` — one-line `main`s over those front ends.
-- `src/` — the `container_distro` library: shared `container` CLI
-  wrappers and serde types, `naming` (persistent names/labels), `oci`
-  (rootfs tar → OCI layout), `catalog`/`catalog_ops` (installable
-  catalog and `.wsl` download flow), `forward` (TCP forwarder),
-  `table`, `plugin`, plus `distro` (operations, one submodule each,
-  with `distro::spec` and `distro::terminal`) used by both
-  binaries.
+- `src/` — the `container_distro` library used by both binaries:
+  - `distro/` — distro operations, one submodule each, plus
+    `distro::spec` (the journaled spec) and `distro::terminal`
+  - `container/` — wrappers around the `container` CLI, serde types
+    for its JSON, and the offer to install it
+  - `catalog/` — the installable catalog, `.wsl` packages and the
+    verified download flow
+  - `setup/` — install layout, plugin registration, man pages,
+    completions, self-update, sudo re-exec
+  - `util/` — `table`, `oci` (rootfs tar → OCI layout), `forward`
+    (TCP forwarder)
+  - `naming` — persistent names/labels
 
 Persistent names (labels `io.github.daphnediane.container-distro.*`, the
 state dir `~/Library/Application Support/container-distro/`) all come
@@ -53,7 +58,7 @@ any of them.
 - `--forward HOST[:GUEST]` (repeatable, `-d` selects) → foreground
   localhost → machine-IP TCP forwarder
 - `--status` → `container system status`
-- `--update [VERSION] [--force] [--dry-run]` → `src/update.rs`
+- `--update [VERSION] [--force] [--dry-run]` → `src/setup/update.rs`
   self-update: fetch the latest (or tagged) GitHub release, prefer the
   signed `.pkg`, verify the API-reported SHA-256 + Developer ID
   signature + same-team `TeamIdentifier` vs the installed binary, then

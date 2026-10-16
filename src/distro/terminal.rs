@@ -4,8 +4,8 @@
  * See LICENSE file for full license text
  */
 
+use crate::catalog::wsl;
 use crate::naming::state_dir;
-use crate::wsl;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::fs;
@@ -704,7 +704,7 @@ fn iterm2_guid(name: &str) -> String {
 }
 
 fn wsl_sha(data: &[u8]) -> String {
-    crate::oci::sha256_hex(data)
+    crate::util::oci::sha256_hex(data)
 }
 
 fn iterm2_file() -> Option<PathBuf> {

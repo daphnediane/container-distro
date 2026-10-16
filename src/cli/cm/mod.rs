@@ -24,8 +24,8 @@ use backend::Target;
 use clap::{CommandFactory, Parser};
 
 use super::docs::Docs;
+use crate::catalog::wsl;
 use crate::container;
-use crate::wsl;
 
 pub fn main() -> ExitCode {
     let args = Args::parse();
@@ -60,7 +60,8 @@ fn run(args: Args) -> Result<ExitCode> {
             version,
             force,
             dry_run,
-        } => crate::update::update(version.as_deref(), force, dry_run).map(|()| ExitCode::SUCCESS),
+        } => crate::setup::update::update(version.as_deref(), force, dry_run)
+            .map(|()| ExitCode::SUCCESS),
         Action::Shutdown { system } => manage::shutdown(system),
         Action::List {
             running_only,

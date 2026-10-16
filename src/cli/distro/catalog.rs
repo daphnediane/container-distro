@@ -13,10 +13,9 @@ use clap::{ArgAction, Subcommand};
 
 use super::args::Format;
 use crate::catalog;
-use crate::catalog_ops;
+use crate::catalog::wsl;
 use crate::distro::CreateOptions;
 use crate::distro::spec::Arch;
-use crate::wsl;
 
 #[derive(Debug, Subcommand)]
 pub enum CatalogCommand {
@@ -83,7 +82,7 @@ pub(super) fn run(command: CatalogCommand) -> Result<()> {
         } => {
             print!(
                 "{}",
-                catalog_ops::render_online(
+                catalog::render_online(
                     catalog.as_deref(),
                     verbose,
                     true,
@@ -99,11 +98,11 @@ pub(super) fn run(command: CatalogCommand) -> Result<()> {
             format,
         } => {
             let cat = catalog::load(catalog.as_deref())?;
-            let info = catalog_ops::info(&cat, &distro)?;
+            let info = catalog::info(&cat, &distro)?;
             if format == Format::Json {
                 println!("{}", serde_json::to_string_pretty(&info)?);
             } else {
-                print!("{}", catalog_ops::render_info(&info));
+                print!("{}", catalog::render_info(&info));
             }
         }
         CatalogCommand::Install {
@@ -115,11 +114,11 @@ pub(super) fn run(command: CatalogCommand) -> Result<()> {
             let cat = catalog::load(catalog.as_deref())?;
             println!(
                 "{}",
-                catalog_ops::install(&cat, distro.as_deref(), name, &opts, false)?
+                catalog::install(&cat, distro.as_deref(), name, &opts, false)?
             );
         }
         CatalogCommand::Cache { catalog } => {
-            print!("{}", catalog_ops::render_cache(catalog.as_deref()));
+            print!("{}", catalog::render_cache(catalog.as_deref()));
         }
         CatalogCommand::Purge => {
             let (count, bytes) = wsl::purge_cache();

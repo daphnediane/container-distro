@@ -16,7 +16,7 @@ use super::backend::Target;
 use super::target;
 use crate::container::{self, ArgvMode};
 use crate::distro;
-use crate::forward::PortMapping;
+use crate::util::forward::PortMapping;
 
 /// The IPv4 address of a running machine, booting it if needed.
 fn machine_ip(machine: Option<&str>) -> Result<(String, IpAddr)> {
@@ -78,6 +78,6 @@ pub(super) fn forward(
         Target::Distro(d) => distro_ip(&d)?,
     };
     eprintln!("Forwarding to `{id}` (Ctrl-C to stop)");
-    crate::forward::forward(IpAddr::V4(Ipv4Addr::LOCALHOST), ip, mappings)?;
+    crate::util::forward::forward(IpAddr::V4(Ipv4Addr::LOCALHOST), ip, mappings)?;
     Ok(ExitCode::SUCCESS)
 }

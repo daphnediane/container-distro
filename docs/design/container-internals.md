@@ -53,7 +53,7 @@ Risk tiers used below:
 
 ## JSON shapes parsed (tier: JSON)
 
-Parsed in `src/container.rs`; unknown fields are ignored,
+Parsed in `src/container/types.rs`; unknown fields are ignored,
 missing ones fall back to defaults.
 
 - `system status --format json`: `status` (compared against
@@ -283,7 +283,7 @@ storage -- not a promised interface. Call sites are marked with
 
 ## Version gating
 
-`VERIFIED_CONTAINER_MINOR = ["1.5"]` (`src/container.rs`) records the
+`VERIFIED_CONTAINER_MINOR = ["1.5"]` (`src/container/mod.rs`) records the
 `major.minor` versions whose appRoot internals we've verified. Any code
 that reads or writes `appRoot` contents -- `container_disk_usage`,
 `container_dir`/`preserve_rootfs`/`restore_rootfs`/`set_rootfs_override`,
@@ -314,9 +314,9 @@ process on stderr when `server.version` isn't a verified release.
 9. `container export` semantics around `rootFsOverride` and existing
    output dirs.
 10. Then bump `VERIFIED_CONTAINER_MINOR` *and* the install-offer pin:
-    `PINNED_CONTAINER_VERSION` in `src/container.rs` and `PKG_SHA256`
+    `PINNED_CONTAINER_VERSION` in `src/container/mod.rs` and `PKG_SHA256`
     (the signed installer's `digest` on the GitHub release) in
-    `src/install.rs` — the offer only ever installs a release whose
+    `src/container/install.rs` — the offer only ever installs a release whose
     internals we have verified.
 
 ## Related documents

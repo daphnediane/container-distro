@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::layout;
+use crate::setup::layout;
 
 /// `<exe>/../share/man/man1` for a binary that lives in a `bin`
 /// directory — both macOS `man` and Linux man-db add

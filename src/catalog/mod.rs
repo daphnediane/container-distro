@@ -4,46 +4,24 @@
  * See LICENSE file for full license text
  */
 
-//! The installable-distro catalog — the `wsl --list --online` analogue.
-//!
-//! The schema is Microsoft's `DistributionInfo.json` (the manifest that
-//! backs `wsl --list --online`, in the `microsoft/WSL` repo) extended
-//! with an `Image` field for OCI image installs, so Microsoft's own
-//! file works as a `--catalog` argument. `ModernDistributions` holds
-//! the entries; the legacy `Distributions` array (Store appx packages)
-//! is ignored.
-//!
-//! An entry is installable from its `Image` (an OCI ref — a machine
-//! or distro, `container`'s choice) or, without one, from the `.wsl`
-//! rootfs download matching the host arch — which can only become a
-//! distro. Entries installable on neither count as not installable
-//! here and are hidden from `-l -o`, matching WSL-on-ARM (which hides
-//! entries without `Arm64Url`).
-//!
-//! The built-in catalog merges two compiled-in files:
-//! `vendor/microsoft/DistributionInfo.json` — a pinned, verbatim copy
-//! of Microsoft's manifest (MIT-licensed, refreshed at release time
-//! by `scripts/check-catalog-freshness.sh`) — and `catalog.json`, a
-//! small overlay. The overlay adds entries Microsoft doesn't publish
-//! and fills extension fields (`Image`, `HomeMount`, a missing arch
-//! download) on entries it does; on a name collision Microsoft's
-//! fields always win. `cm --catalog FILE` swaps in a user catalog
-//! instead of the merge, and is an explicit per-invocation flag,
-//! never auto-loaded from `$HOME` (security.md: anything under
-//! `$HOME` is guest-writable).
-//!
-//! Entry `Name`s deliberately contain no `/`, `:`, or `@`, so any
-//! argument shaped like a real image reference can never collide —
-//! passing a qualified ref (or `--from-image`) to `--install` bypasses
-//! the catalog.
+pub mod wsl;
 
+mod info;
+mod install;
+#[cfg(test)]
+mod test_support;
+
+use crate::util::table;
+use anyhow::{Context, Result, bail};
+use serde::Deserialize;
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use anyhow::{Context, Result, bail};
-use serde::Deserialize;
-
-use crate::table;
+pub use info::{
+    CacheInfo, CatalogEntryInfo, DownloadInfo, LocalImage, LocalInfo, LocalMachine, NameConflict,
+    SourceInfo, StatusProbe, info, render_cache, render_info, render_online,
+};
+pub use install::{Resolved, import_file, install, install_resolved, resolve};
 
 /// The compiled-in overlay — the same schema `--catalog` accepts.
 /// Merged over [`UPSTREAM`] for the built-in catalog.
@@ -53,7 +31,7 @@ const OVERLAY: &str = include_str!("catalog.json");
 /// (`vendor/microsoft/`, with its MIT `LICENSE` and the upstream
 /// commit in `UPSTREAM`). Verbatim — edit via
 /// `scripts/update-microsoft-catalog.sh`, not by hand.
-const UPSTREAM: &str = include_str!("../vendor/microsoft/DistributionInfo.json");
+const UPSTREAM: &str = include_str!("../../vendor/microsoft/DistributionInfo.json");
 
 /// A `.wsl` rootfs download: a URL plus the SHA-256 the download is
 /// verified against. The hash is mandatory — a verified download of a
