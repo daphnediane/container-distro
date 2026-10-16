@@ -9,6 +9,7 @@
 
 mod args;
 mod catalog;
+mod cli;
 mod install_all;
 mod list;
 mod run;
@@ -35,7 +36,7 @@ pub(super) fn main_from(mut argv: Vec<OsString>) -> ExitCode {
         argv.remove(1);
     }
     if argv.get(1).is_some_and(|a| a == "cli") {
-        super::cm::lone_v_is_version(&mut argv[2..]);
+        cli::lone_v_is_version(&mut argv[2..]);
     }
     let cli = Cli::parse_from(argv);
     if cli.dev {
@@ -44,7 +45,7 @@ pub(super) fn main_from(mut argv: Vec<OsString>) -> ExitCode {
     // `cli` hands over to `cm`, which reports its own errors and exit
     // codes.
     let command = match cli.command {
-        Command::Cli(args) => return super::cm::main_args(*args),
+        Command::Cli(args) => return cli::main_args(*args),
         command => command,
     };
     match run(command) {

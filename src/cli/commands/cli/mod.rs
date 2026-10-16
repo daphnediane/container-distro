@@ -23,9 +23,9 @@ use args::{Action, Args, Backend};
 use backend::Target;
 use clap::CommandFactory;
 
-use super::docs::Docs;
-use super::exit_code;
 use crate::catalog::wsl;
+use crate::cli::docs::Docs;
+use crate::cli::exit_code;
 use crate::container;
 use crate::setup::alias;
 use crate::setup::layout::FrontEnd;
@@ -158,7 +158,7 @@ pub(super) fn named_target(name: &str, sel: Backend) -> Result<Target> {
 }
 
 fn version() -> Result<ExitCode> {
-    super::print_version("cm")
+    crate::cli::print_version("cm")
 }
 
 /// `cm(1)` and the `cm` completions.

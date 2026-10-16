@@ -232,7 +232,7 @@ pub enum Command {
         disable_version_flag = true,
         override_usage = "container-distro cli [OPTIONS] [-- <COMMAND LINE>]"
     )]
-    Cli(Box<crate::cli::cm::args::Args>),
+    Cli(Box<super::cli::args::Args>),
 
     /// Print container-distro and container versions
     Version,

@@ -63,8 +63,8 @@ shared library; `cm` is an alias script for `container-distro cli`:
 | `src/setup/`                | layout, plugin registration, man/completions, self-update, sudo     |
 | `src/util/`                 | table rendering, OCI layout writer, TCP forwarder                   |
 | `src/distro/`               | distro operations, one submodule each; `spec/` and `terminal`       |
-| `src/cli/cm/`               | `cm` front end (WSL-compatible CLI), one file per action group      |
-| `src/cli/distro/`           | `container distro` plugin front end, one file per larger subcommand |
+| `src/cli/commands/`         | `container-distro` subcommands, one file per larger subcommand      |
+| `src/cli/commands/cli/`     | the `cli` subcommand: `cm`'s WSL-compatible interface               |
 | `src/bin/`                  | the `container-distro` binary's one-line `main` (`cm` is an alias)  |
 | `assets/`                   | distro init scripts (`sbin.distro*/`)                               |
 | `scripts/`                  | maintainer scripts (below)                                          |

@@ -9,10 +9,10 @@ A single-crate Cargo repository (`container-distro`) shipping one
 binary, `container-distro`, with two interfaces. `cm` is an alias
 script running `container-distro cli` (installed by `install-all`):
 
-- `src/cli/cm/` — the `cm` front end (`container-distro cli`):
+- `src/cli/commands/cli/` — the `cm` front end (`container-distro cli`):
   `wsl.exe` argument semantics on top of Apple's `container` CLI.
   Optionally aliased as `wsl`.
-- `src/cli/distro/` — the `container-distro` front end. It
+- `src/cli/commands/` — the `container-distro` subcommands. It
   registers as the `container distro` CLI plugin and creates
   machine-like containers ("distros") with what `container machine`
   lacks: mounts outside `$HOME`, published ports, export/import, `set`.
@@ -161,7 +161,7 @@ lacks `grant-admin.sh`; the `admin` label records `true`/`false`/`never`
 explicit `--sudo` does). `set` accepts `--network`, `--ssh`/`--no-ssh`,
 `--sudo`/`--no-sudo`.
 
-`cm` treats machines and distros as one namespace (`src/cli/cm/backend.rs`),
+`cm` treats machines and distros as one namespace (`src/cli/commands/cli/backend.rs`),
 linking the library rather than exec'ing the plugin: `-d NAME` resolves a
 distro first, then a machine; a default distro overrides the default
 machine; `-l` merges both — same-named pairs stay as two rows annotated

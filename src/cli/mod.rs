@@ -9,8 +9,7 @@
 //! `container-distro cli …` runs — `cm` itself is an alias script for
 //! that. The binary is a thin `main` over [`main`].
 
-pub mod cm;
-pub mod distro;
+pub mod commands;
 mod docs;
 
 use std::ffi::OsString;
@@ -29,7 +28,7 @@ pub fn main() -> ExitCode {
     if let Some(path) = take_invoked_as(&mut argv) {
         layout::set_invoked_as(path);
     }
-    distro::main_from(argv)
+    commands::main_from(argv)
 }
 
 /// Strip the hidden leading `--invoked-as PATH` generated aliases pass

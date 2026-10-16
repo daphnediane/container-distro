@@ -133,14 +133,14 @@ pub(super) fn install(t: Target) -> Result<()> {
             "man pages",
             Box::new(|| {
                 super::docs().install_man(Some(man.clone()))?;
-                crate::cli::cm::docs().install_man(Some(man.clone()))
+                super::cli::docs().install_man(Some(man.clone()))
             }),
         ),
         (
             "completions",
             Box::new(|| {
                 super::docs().install_completions(Some(share.clone()))?;
-                crate::cli::cm::docs().install_completions(Some(share.clone()))
+                super::cli::docs().install_completions(Some(share.clone()))
             }),
         ),
     ];
@@ -192,14 +192,14 @@ pub(super) fn uninstall(t: Target) -> Result<()> {
         "man pages",
         Box::new(|| {
             super::docs().uninstall_man(Some(man.clone()))?;
-            crate::cli::cm::docs().uninstall_man(Some(man.clone()))
+            super::cli::docs().uninstall_man(Some(man.clone()))
         }),
     ));
     steps.push((
         "completions",
         Box::new(|| {
             super::docs().uninstall_completions(Some(share.clone()))?;
-            crate::cli::cm::docs().uninstall_completions(Some(share.clone()))
+            super::cli::docs().uninstall_completions(Some(share.clone()))
         }),
     ));
     if !t.no_plugin {
