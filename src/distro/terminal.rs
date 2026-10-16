@@ -54,8 +54,78 @@ fn run_process_name() -> String {
         .unwrap_or_else(|| "container-distro".into())
 }
 
-/// `exe [prefix…] run -n NAME -w ~`, quoted for a shell or bare for a
-/// whitespace-tokenized `CommandString`.
+/// `run`'s hidden flag marking a launch from one of our profiles — the
+/// only kind of run that may consume a pending [`arm_import`].
+pub const PROFILE_LAUNCH_FLAG: &str = "--profile-launch";
+
+/// How long an armed import waits for the window `open` launches. A
+/// dormant Terminal can drop that launch; past the deadline a leftover
+/// sentinel is ignored, so it can't swallow a later real session.
+const IMPORT_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The sentinel `ensure_profile` arms in `name`'s journal dir — locked
+/// at rest, so a guest can't plant one.
+fn import_sentinel(name: &str) -> Option<PathBuf> {
+    super::journal::journal_dir(name)
+        .ok()
+        .map(|d| d.join("profile-import"))
+}
+
+/// Arm the silent import: the next profile launch of `name` within
+/// [`IMPORT_WINDOW`] exits at once instead of opening a session.
+fn arm_import(name: &str) -> bool {
+    let Some(path) = import_sentinel(name) else {
+        return false;
+    };
+    let deadline = std::time::SystemTime::now() + IMPORT_WINDOW;
+    let secs = deadline
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    super::journal::with_journal_dir_unlocked(name, || {
+        super::write_nofollow(&path, format!("{secs}\n").as_bytes(), 0o644)
+    })
+    .is_ok()
+}
+
+/// Drop a pending import, if any — explicit opens want a real session.
+fn disarm_import(name: &str) {
+    if let Some(path) = import_sentinel(name)
+        && fs::symlink_metadata(&path).is_ok()
+    {
+        let _ = super::journal::with_journal_dir_unlocked(name, || {
+            fs::remove_file(&path).map_err(Into::into)
+        });
+    }
+}
+
+/// `run --profile-launch` with no command: consume `name`'s armed
+/// import. Unlinking the sentinel succeeds for exactly one process, so
+/// exactly one launch — the import's own window — sees `true` and
+/// exits; a stale sentinel is removed and ignored.
+pub fn take_import(name: &str) -> bool {
+    let Some(path) = import_sentinel(name) else {
+        return false;
+    };
+    if fs::symlink_metadata(&path).is_err() {
+        return false;
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(u64::MAX, |d| d.as_secs());
+    super::journal::with_journal_dir_unlocked(name, || Ok(take_at(&path, now))).unwrap_or(false)
+}
+
+/// The consume step: unlink `path` (the one-shot) and report whether
+/// the deadline it held is still ahead of `now`.
+fn take_at(path: &Path, now: u64) -> bool {
+    let deadline = fs::read_to_string(path)
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok());
+    fs::remove_file(path).is_ok() && deadline.is_some_and(|d| now <= d)
+}
+
+/// `exe [prefix…] run --profile-launch -n NAME -w ~`, quoted for a
+/// shell or bare for a whitespace-tokenized `CommandString`.
 fn run_command_line(name: &str, quoted: bool) -> String {
     let (exe, prefix) = run_invocation();
     let q = |s: &str| {
@@ -67,7 +137,14 @@ fn run_command_line(name: &str, quoted: bool) -> String {
     };
     let mut parts = vec![q(&exe)];
     parts.extend(prefix.iter().map(|a| a.to_string()));
-    parts.extend(["run".into(), "-n".into(), q(name), "-w".into(), q("~")]);
+    parts.extend([
+        "run".into(),
+        PROFILE_LAUNCH_FLAG.into(),
+        "-n".into(),
+        q(name),
+        "-w".into(),
+        q("~"),
+    ]);
     parts.join(" ")
 }
 
@@ -516,11 +593,10 @@ pub fn open_terminal(name: &str) -> anyhow::Result<()> {
     if !write_artifacts(name) {
         anyhow::bail!("couldn't write {name}'s launcher files");
     }
-    // A parked `.real` means an earlier silent import armed the
-    // self-replacing no-op and its window hasn't flushed yet — the
-    // real script is already back in place (so a window running now
-    // launches the distro, which is what an open wants anyway); drop
-    // the park.
+    // An explicit open wants a real session: drop any armed import,
+    // and a `.sh.real` an older release's no-op swap left parked (the
+    // script above was just rewritten with the real command).
+    disarm_import(name);
     if let Some(mut real) = script_file(name) {
         real.set_extension("sh.real");
         crate::distro::unlock(&real);
@@ -610,15 +686,13 @@ fn profile_fresh(have: &plist::Dictionary, want: &plist::Dictionary) -> bool {
 ///   cfprefsd serializes it, and with no live model nothing can flush
 ///   it away — the profile is simply there at Terminal's next launch.
 /// - Terminal running → a `defaults` write would die at Terminal's
-///   next prefs flush (its model never loaded the entry). Instead the
-///   launcher's script is swapped for a self-replacing no-op —
-///   `mv -f "$0.real" "$0"` — the real command parked alongside; the
-///   `.terminal` file opens, Terminal imports *through its model* and
-///   the launched window runs the no-op: it unflags, swaps, reflags
-///   (artifacts rest `uchg`-locked) and exits, so `shellExitAction`
-///   closes the window at once. Any later run of the restored script
-///   behaves normally — the no-op can only fire once, during the
-///   import.
+///   next prefs flush (its model never loaded the entry). Instead an
+///   import sentinel is armed in the journal dir ([`arm_import`]) and
+///   the `.terminal` file opens: Terminal imports *through its model*,
+///   and the window it launches runs `run --profile-launch`, which
+///   consumes the sentinel and exits, so `shellExitAction` closes the
+///   window at once. Unlinking is the one-shot: only that launch wins,
+///   and a sentinel the launch never reached expires.
 pub fn ensure_profile(name: &str) -> bool {
     if let Some((key, dict)) = imported(name) {
         if let plist::Value::Dictionary(want) = terminal_profile_dict(name, &key)
@@ -634,36 +708,14 @@ pub fn ensure_profile(name: &str) -> bool {
         };
         return defaults_write_profile(name, &profile);
     }
-    // Park the real script, arm the self-replacing no-op, and open.
-    let (Some(script), Some(real)) = (
-        script_file(name),
-        script_file(name).map(|p| {
-            let mut r = p.clone();
-            r.set_extension("sh.real");
-            r
-        }),
-    ) else {
-        return false;
-    };
-    if !write_artifacts(name) || !write_script_at(&real, &script_contents(name)) {
-        return false;
-    }
-    // The artifacts rest `uchg`-locked, so the swap unlocks first and
-    // re-locks after — host-side, where chflags is allowed (a guest
-    // has no flag operations through virtiofs, hence the boundary).
-    if !write_script_at(
-        &script,
-        "#!/bin/sh\n/usr/bin/chflags nouchg \"$0\" \"$0.real\" 2>/dev/null\nmv -f \"$0.real\" \"$0\"\n/usr/bin/chflags uchg \"$0\" 2>/dev/null\nexit 0\n",
-    ) {
-        crate::distro::unlock(&real);
-        let _ = fs::remove_file(&real);
+    // Arm the sentinel, then open: the window Terminal launches runs
+    // `run --profile-launch`, which consumes it and exits at once.
+    if !write_artifacts(name) || !arm_import(name) {
         return false;
     }
     if !open_launcher(name) {
-        // The import never happened — put the real command back.
-        let _ = write_script_at(&script, &script_contents(name));
-        crate::distro::unlock(&real);
-        let _ = fs::remove_file(&real);
+        // The import never happened — nothing may consume the sentinel.
+        disarm_import(name);
         return false;
     }
     true
@@ -953,16 +1005,30 @@ mod tests {
     use std::fs;
 
     #[test]
+    fn import_sentinel_is_consumed_once_and_expires() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("profile-import");
+        fs::write(&p, "1000\n").unwrap();
+        assert!(take_at(&p, 999), "fresh: the import window exits");
+        assert!(!take_at(&p, 999), "already consumed: a real session");
+        fs::write(&p, "1000\n").unwrap();
+        assert!(!take_at(&p, 1001), "stale: ignored");
+        assert!(fs::symlink_metadata(&p).is_err(), "and removed");
+        fs::write(&p, "garbage").unwrap();
+        assert!(!take_at(&p, 0), "unreadable deadline: ignored");
+    }
+
+    #[test]
     fn launcher_runs_this_binary_distro_run() {
         let exe = layout::current_exe().unwrap().display().to_string();
         assert_eq!(
             script_contents("d1"),
-            format!("#!/bin/sh\nexec '{exe}' run -n 'd1' -w '~' \"$@\"\n")
+            format!("#!/bin/sh\nexec '{exe}' run --profile-launch -n 'd1' -w '~' \"$@\"\n")
         );
         // The whitespace-tokenized fallback carries no quotes.
         assert_eq!(
             run_command_line("d1", false),
-            format!("{exe} run -n d1 -w ~")
+            format!("{exe} run --profile-launch -n d1 -w ~")
         );
     }
 

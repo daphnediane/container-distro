@@ -95,9 +95,14 @@ all best-effort, never failing the distro operation.
 
 Generation also *imports* the profile — silently: straight into
 `Window Settings` when Terminal isn't running, and when it is, via a
-momentary `open` of a self-replacing no-op command (the window
-flashes open and closes itself as the real command is swapped in —
-that's the import, not a bug). Routine refreshes (`set` of other
+momentary `open` whose window exits at once (it flashes open and
+closes itself — that's the import, not a bug). Before the `open`, an
+import sentinel is armed in the distro's journal dir; the launched
+`run --profile-launch` consumes it and exits instead of starting a
+session. Removing the sentinel is the one-shot, so only that window
+exits early, and an unconsumed sentinel expires after a minute so it
+can't swallow a later session. An explicit `terminal NAME` clears any
+pending one, and a launcher run with a command never consumes it. Routine refreshes (`set` of other
 options) only rewrite the launcher artifacts, so deleting the
 profile in Terminal's settings is honored — nothing *automatically*
 re-adds it. Convergent operations do re-import, by design:

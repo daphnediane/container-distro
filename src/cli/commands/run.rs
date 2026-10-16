@@ -15,6 +15,11 @@ use crate::distro::{self, RunOpts};
 
 #[derive(Debug, Args)]
 pub struct RunArgs {
+    /// Started from one of our terminal profiles (generated launchers
+    /// pass it): a launch with no command consumes a pending silent
+    /// profile import and exits instead of opening a session
+    #[arg(long, hide = true)]
+    pub profile_launch: bool,
     /// Distro (default distro if omitted)
     #[arg(short = 'n', long)]
     pub name: Option<String>,
@@ -45,6 +50,7 @@ pub struct RunArgs {
 /// Replace this process with `container exec` in the distro.
 pub(super) fn run(args: RunArgs) -> Result<()> {
     let RunArgs {
+        profile_launch,
         name,
         user,
         root,
@@ -54,6 +60,15 @@ pub(super) fn run(args: RunArgs) -> Result<()> {
         no_login,
         command,
     } = args;
+    // The window `open` launched to import the profile: its job is
+    // done once Terminal has loaded the settings set.
+    if profile_launch
+        && command.is_empty()
+        && let Some(n) = name.as_deref()
+        && distro::take_import(n)
+    {
+        return Ok(());
+    }
     let mut cmd = distro::run_command(RunOpts {
         name,
         user,

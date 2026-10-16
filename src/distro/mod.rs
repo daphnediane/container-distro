@@ -56,6 +56,7 @@ pub use profiles::{open_terminal, sync_profiles};
 pub use rename::{rename, rename_machine};
 pub use run::{RunOpts, run_command};
 pub use set::set;
+pub(crate) use terminal::take_import;
 
 /// Run a `container` command with inherited stdio; fail on non-zero exit.
 fn run_container(args: &[&str]) -> Result<()> {

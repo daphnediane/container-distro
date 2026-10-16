@@ -79,6 +79,14 @@ docs/design/release.md.
   `container-distro install-all` afterwards (and `uninstall-all`
   before `cargo uninstall`). The binstall tarball ships just the
   binary.
+- **Silent profile imports no longer swap the launcher script.** With
+  Terminal running, the import used to replace `NAME.sh` with a
+  self-restoring no-op; now it arms a one-shot sentinel in the
+  distro's journal dir that the import window's
+  `container distro run --profile-launch` consumes before exiting.
+  Manual `NAME.sh CMD` runs are never swallowed, an unconsumed
+  sentinel expires after a minute, and `terminal NAME` always gets a
+  real session.
 - **Aliases are scripts, not symlinks.** `--install-alias` writes a
   two-line `/bin/sh` script that runs this binary's chosen interface,
   so an alias can target either `cm` or `container distro`. A bare

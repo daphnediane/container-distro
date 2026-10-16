@@ -280,11 +280,17 @@ answer was to take the files out of reach rather than move them:
   the *host* under the user's session, so a guest that could rewrite
   them through a shared home would own the next profile launch.
   `uchg` covers `terminal-profiles/*.terminal`,
-  `terminal-cmds/*.sh[.real]`, the iTerm2 dynamic-profile file, and
+  `terminal-cmds/*.sh`, the iTerm2 dynamic-profile file, and
   the `~/.container-distro` alias symlink (via `chflags -h` —
   `chflags(2)` follows links, so flagging the link naively locks the
-  state dir instead). The silent-import no-op swap unlocks and
-  re-locks inside the script — host-side, where flags are allowed.
+  state dir instead). The silent import no longer rewrites the
+  launcher: it arms a `profile-import` sentinel inside the locked
+  journal dir, which the import window's `run --profile-launch`
+  consumes (unlink — exactly one launch wins) before exiting. A
+  sentinel is only honored before its deadline (one minute), and only
+  by a launch with no command, so the worst a planted one could do is
+  end one session at once — and the locked journal dir keeps a guest
+  from planting it.
 - What a launcher *runs* is the binary that wrote it, canonicalized
   (`layout::self_invocation`) — `<container-distro> run -n NAME`, or
   the plugin copy's own path. Earlier
