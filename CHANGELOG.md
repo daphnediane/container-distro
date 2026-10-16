@@ -8,6 +8,8 @@ entries directly. At release time the `-dev` heading is renamed to
 `## X.Y.Z -- YYYY-MM-DD` and audited against the commit log -- see
 docs/design/release.md.
 
+## 0.9.0-dev
+
 ## 0.8.0 -- 2026-10-15
 
 ### Highlights
