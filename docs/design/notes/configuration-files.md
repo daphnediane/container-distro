@@ -177,7 +177,8 @@ snapshot model keeps `/etc/wsl.conf` a normal guest file.
   `$XDG_CONFIG_HOME/cm/config.toml`): default backend, default
   `--shell-type`, env defaults, extra mounts, port-forwards, resource
   defaults. Pure L0 -- `cm` reads it before building `container` args.
-  Still deferred; see security.md for the guest-writable-config trap.
+  Still deferred ([#45]); see security.md for the
+  guest-writable-config trap.
 - **`user.default` + `oobe.command`** ([#29]) — need a decision on
   when auto-provisioning should be skipped (a distro declaring its
   own account model); the snapshots already land the data.
@@ -199,4 +200,5 @@ snapshot model keeps `/etc/wsl.conf` a normal guest file.
 [#30]: https://github.com/daphnediane/container-distro/issues/30
 [#33]: https://github.com/daphnediane/container-distro/issues/33
 [#34]: https://github.com/daphnediane/container-distro/issues/34
+[#45]: https://github.com/daphnediane/container-distro/issues/45
 [build-custom-distro]: https://learn.microsoft.com/en-us/windows/wsl/build-custom-distro

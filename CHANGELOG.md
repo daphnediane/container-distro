@@ -10,6 +10,15 @@ docs/design/release.md.
 
 ## 0.9.0-dev
 
+### Changed
+
+- **`cm-vs-wsl.md` now catalogs the remaining WSL differences** —
+  idle teardown, `.wslconfig`, VHD formats, `--status` shape,
+  `WSLENV`, networking modes, and live-export semantics — with the
+  open questions tracked as issues: network modes (#43), `--env`
+  exposure and safer secret delivery (#44), host config file (#45).
+  `security.md` documents where `--env` values are visible (T14).
+
 ### Fixed
 
 - **Catalog `.wsl` installs now register the catalog NAME** (#40):

@@ -497,7 +497,7 @@ preference stores a package shouldn't normally reach.
   and `run -n NAME` command are host-generated (distro names are already
   validated), and `ProfileTemplate` styling is not read at all
   ([#34]). The
-  `ContainerDistroDistro` marker plus the ` (cm)` fallback mean a
+  `ContainerDistroDistro` marker plus the " (cm)" fallback mean a
   generated profile can never overwrite or delete a user's own
   same-named one. iTerm2's drop-in is our own file — an unparsable
   one is left alone rather than rewritten. Removal edits the plist
@@ -584,6 +584,35 @@ run --root` or `container cp`, which that user already has.
 - **Re-evaluate if:** the FSKit volume ships (Spotlight/Quick Look
   exposure, `nosuid`/`nodev`, mount ownership presentation), or
   distro-to-distro mounts add a guest-initiated path.
+
+### T14. `--env` values cross argv; the guest environ is the weaker channel
+
+`cm --env K=V` forwards to `container exec --env K=V` / `machine run
+-e K=V`, so the literal value rides `cm`'s *and* the inner `container`
+process's argv — visible to other host users via `ps` for the
+process's lifetime. The bare `--env K` inherit form is materially
+safer: only the name crosses argv and the `container` CLI resolves it
+against the host environment itself. In the guest, values land in the
+exec'd process's environment — readable via `/proc/<pid>/environ` by
+the process's uid and by root, and inherited by every child.
+`/proc/cmdline` (the kernel command line) is unaffected, but
+`/proc/<pid>/cmdline` exposes command *arguments* — secrets should
+never ride `-e`/positional args either.
+
+- **Accepted because:** env passing is the standard exec mechanism and
+  the exposure is the same one `docker exec -e` users already accept;
+  nothing `cm` does is worse than upstream's flags it wraps.
+- **Mitigations that exist:** the inherit form keeps values out of
+  argv; upstream's `--env-file` (not yet surfaced — [#44]) removes argv
+  exposure entirely, though the value still lands in the guest
+  environ. T13 already uses the safer pattern: the distrofs token
+  reaches the guest via inherited env, never argv, and is scrubbed
+  from the server's environment at start.
+- **Residuals:** env is a weak secret channel by nature — in-guest it
+  is uid-/root-readable for the process's whole lifetime and beyond
+  via children. Prefer credential *forwarding* (the T2 ssh-agent
+  pattern — the secret never enters the guest) or file delivery into a
+  `0600` guest path. [#44] tracks `--env-file` plus that audit.
 
 ## Restricted distros
 
@@ -699,6 +728,7 @@ Each open gap adds attack surface; flagging the traps up front.
 [#20]: https://github.com/daphnediane/container-distro/issues/20
 [#27]: https://github.com/daphnediane/container-distro/issues/27
 [#34]: https://github.com/daphnediane/container-distro/issues/34
+[#44]: https://github.com/daphnediane/container-distro/issues/44
 [apple/container#2325]: https://github.com/apple/container/issues/2325
 [configuration-files]: notes/configuration-files.md
 [gui-apps]: notes/gui-apps.md

@@ -59,8 +59,10 @@ path; host paths outside `$HOME` do not exist in a machine's guest.
 
 ## Networking
 
-WSL2 forwards guest ports to Windows localhost. A container machine
-gets its own IP on the `machine` network (shown by `cm -l`); services
+WSL2 forwards guest ports to Windows localhost and offers other
+`networkingMode`s (`mirrored`, bridged on older builds); a container
+machine always gets its own IP on the `machine` network (shown by
+`cm -l`) -- there is no mode knob ([#43]). Services
 in the guest are reachable at that IP only -- nothing is bridged to
 macOS localhost automatically. `cm --forward 3000` (or `--forward
 8080:80`, repeatable, with `-d` to pick the machine) runs a
@@ -83,6 +85,13 @@ isn't possible, `cm` falls back to `machine run` with each argument
 single-quoted. Shells and `--` commands still use `machine run`.
 Piped stdin is forwarded (`cm` always passes `-i`). Distros always
 use `container exec`, so `-e` and `--` are both argv-exact there.
+
+WSL shares selected host environment variables via `WSLENV` (with
+path translation); there is no persistent env-passing equivalent --
+`cm --env KEY[=VALUE]` is per-invocation, and `KEY` alone inherits
+from the host (the `container` CLI resolves it, so the value never
+rides `cm`'s own command line). Where `--env` values are visible, and
+why secrets deserve a better channel, is [#44].
 
 Known upstream issue: `container machine run` can drop the guest's
 very first write to stdout/stderr -- see
@@ -114,7 +123,13 @@ shell.
   stop` (which stops every container, not just machines).
 - `cm --export`/`--import` cover machines and distros; `--import`'s
   install-location argument is accepted and ignored (details:
-  [design/upstream-limitations.md]).
+  [design/upstream-limitations.md]). Tar is the only format: WSL's
+  `--export --vhd`, `--import --vhd`, and `--import-in-place`, and
+  vhdx-based `.wsl` packages, are unsupported. `wsl --install
+  --location <dir>` has no equivalent either -- installs always live
+  under `container`'s app-root. Exporting a *running* machine briefly
+  stops it (crash-consistent disk clone) and restarts it; WSL exports
+  live.
 - `cm` resolves one namespace: a distro and a machine can share a name
   only via an explicit `--force`; `-d` resolves distros first. See
   [machine-vs-distro.md].
@@ -139,7 +154,21 @@ shell.
   distro, so a recreated container keeps it.
 - No GUI app support (WSLg's X11/Wayland) -- see
   [design/notes/gui-apps.md] for what it would take.
-- No equivalents for `--manage` or `--mount` (VHDs).
+- No equivalents for `--manage` or `--mount` (VHDs), `wsl --system`
+  (the system distro), or `--set-version`/`--set-default-version`
+  (VERSION is always `2` -- there's nothing to convert to).
+- No idle teardown: WSL powers off the VM shortly after the last
+  guest process exits (`vmIdleTimeout`, ~60s default); a machine or
+  distro here stays `Running` -- memory included -- until `-t` or
+  `--shutdown`.
+- `cm --status` prints `container system status` (services and
+  runtime state), not WSL's defaults/version summary.
+- No `.wslconfig` equivalent: WSL's host-side VM settings (`memory`,
+  `processors`, `networkingMode`, `localhostForwarding`, …) don't
+  apply -- resource defaults come from `container`, overridden
+  per-install with `--cpus`/`--memory` and later via
+  `container machine set`/`container distro set`. A host config file
+  is investigated in [#45].
 - Distros honor a subset of `wsl.conf` (hostname, mountFsTab,
   systemd/`boot.openrc` init selection, gated `[boot] command`) behind
   `--use-wsl-conf`; machines don't -- see
@@ -161,6 +190,9 @@ shell.
   Machines never get profiles. Details: [container-distro.md].
 
 [#27]: https://github.com/daphnediane/container-distro/issues/27
+[#43]: https://github.com/daphnediane/container-distro/issues/43
+[#44]: https://github.com/daphnediane/container-distro/issues/44
+[#45]: https://github.com/daphnediane/container-distro/issues/45
 [apple/container#1954]: https://github.com/apple/container/issues/1954
 [cm.md]: cm.md
 [container-distro.md]: container-distro.md

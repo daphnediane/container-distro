@@ -301,11 +301,18 @@ forwarding is probably not worth it until requested.
 An sshd-in-guest `ssh -L` works today (the agent is forwarded in) but
 depends on image contents -- not a mechanism to build on.
 
+Beyond forwarding there's the broader mode question: WSL's
+`networkingMode` (NAT/mirrored/bridged) has no knob here at all --
+the guest always gets a dedicated IP. What `container`/VZ could
+expose, and what a `network` plugin or lower rung would need, is
+investigated in [#43].
+
 [#3]: https://github.com/daphnediane/container-distro/issues/3
 [#4]: https://github.com/daphnediane/container-distro/issues/4
 [#5]: https://github.com/daphnediane/container-distro/issues/5
 [#6]: https://github.com/daphnediane/container-distro/issues/6
 [#15]: https://github.com/daphnediane/container-distro/issues/15
+[#43]: https://github.com/daphnediane/container-distro/issues/43
 [#2278]: https://github.com/apple/container/issues/2278
 [apple/container#1148]: https://github.com/apple/container/issues/1148
 [apple/container#1265]: https://github.com/apple/container/issues/1265

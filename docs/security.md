@@ -56,6 +56,14 @@ guest as roughly equivalent to code run on the host as you.
 - **Published ports** bind `127.0.0.1` by default -- keep it that way
   unless you want LAN-reachable services; a `0.0.0.0` bind changes
   exposure for *other* machines too.
+- **Whatever you pass with `--env`.** A `cm --env K=V` value rides
+  `cm`'s and the inner `container` process's argv (briefly visible to
+  other host users via `ps`), then lives in the guest process's
+  environment -- `/proc/<pid>/environ`, readable by that uid and
+  root, and inherited by children. `--env K` alone is safer (the
+  `container` CLI resolves it host-side; only the name crosses argv),
+  but for real secrets prefer a file delivered at `0600` or agent
+  forwarding over env entirely.
 - **Imported rootfses get all of the above** — except the home share,
   which defaults to `none`. `container distro
   import`, `cm --install --from-file`, and catalog `.wsl` installs
@@ -137,8 +145,8 @@ What remains trusted: the VM boundary (the real containment), the
 
 ## Deeper reading
 
-The full security analysis -- each accepted trade-off (T1–T13) with its
+The full security analysis -- each accepted trade-off (T1–T14) with its
 rationale and re-evaluation triggers, the review findings list
-(C1–C12), and the risks that planned features would add -- is in
+(C1–C13), and the risks that planned features would add -- is in
 [design/security.md](design/security.md). Reporting: see
 [CONTRIBUTING.md](../CONTRIBUTING.md#security-issues).
