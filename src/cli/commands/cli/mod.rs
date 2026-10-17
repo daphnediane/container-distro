@@ -96,7 +96,7 @@ pub(super) fn run(args: Args) -> Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         Action::SetDefault(m) => manage::set_default(&m, sel),
-        Action::Terminate(m) => manage::terminate(&m, sel),
+        Action::Terminate(m) => manage::terminate(m.as_deref(), sel),
         Action::Unregister(m) => manage::unregister(&m, sel),
         Action::Migrate(m) => manage::migrate(&m, sel),
         Action::Install(opts) => install::install(&opts),

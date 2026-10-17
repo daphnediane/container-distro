@@ -118,6 +118,15 @@ shell.
 - `cm` resolves one namespace: a distro and a machine can share a name
   only via an explicit `--force`; `-d` resolves distros first. See
   [machine-vs-distro.md].
+- The `*` default is an *effective* default: normally a distro, but it
+  can follow (or lazily point at) a `container` machine when no
+  distros are installed. As in WSL, deleting the default distro moves
+  `*` to the best remaining distro rather than leaving none — the
+  marker converges on the next command that reads it. See
+  [machine-vs-distro.md].
+- `cm -t`/`--terminate` with no name stops the effective default —
+  WSL requires a distro name there. A bare `cm -t` that resolves to a
+  machine errors unless `--machine` makes the target explicit.
 - `cm --update [VERSION]` exists and, like `wsl --update`, updates the
   tooling itself (the release `.pkg`, via Installer.app) -- not
   installed distros, and not `container` (that's Apple's

@@ -231,9 +231,9 @@ pub struct Args {
     #[arg(short = 's', long = "set-default", value_name = "MACHINE")]
     pub set_default: Option<String>,
 
-    /// Stop a running machine
-    #[arg(short = 't', long = "terminate", value_name = "MACHINE")]
-    pub terminate: Option<String>,
+    /// Stop a running machine (the effective default when no name is given)
+    #[arg(short = 't', long = "terminate", value_name = "MACHINE", num_args = 0..=1)]
+    pub terminate: Option<Option<String>>,
 
     /// Stop all running machines
     #[arg(long = "shutdown")]
@@ -556,8 +556,9 @@ pub enum Action {
     },
     /// `container machine set-default`.
     SetDefault(String),
-    /// `container machine stop`.
-    Terminate(String),
+    /// `container machine stop` / `distro stop` — `None` hits the
+    /// effective default.
+    Terminate(Option<String>),
     /// `container machine rm`.
     Unregister(String),
     /// `container distro migrate` — converge NAME to the selected
@@ -988,7 +989,13 @@ mod tests {
     #[test]
     fn terminate_and_set_default() {
         let args = parse(&["cm", "-t", "alpine"]).unwrap();
-        assert_eq!(args.action().unwrap(), Action::Terminate("alpine".into()));
+        assert_eq!(
+            args.action().unwrap(),
+            Action::Terminate(Some("alpine".into()))
+        );
+        // Bare `-t` targets the effective default.
+        let args = parse(&["cm", "-t"]).unwrap();
+        assert_eq!(args.action().unwrap(), Action::Terminate(None));
         let args = parse(&["cm", "-s", "alpine"]).unwrap();
         assert_eq!(args.action().unwrap(), Action::SetDefault("alpine".into()));
     }

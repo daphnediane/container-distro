@@ -29,8 +29,12 @@ pkg or `container-distro install-all`; anything below works as
 exists as both shadows the machine *for operations* (and `cm -l`
 warns). Listings never hide it though: `cm -l` shows both rows,
 suffixing the ambiguous name with `(machine)` / `(distro)`. The
-default is likewise operational: a default distro wins over the
-default machine, and `cm -s <machine>` clears any default distro.
+default is likewise operational: a recorded distro wins over the
+default machine, `cm -s <machine>` records `machine:<name>` and sets
+`container`'s own default, and an unset or stale record converges --
+`machine:` follows `container`'s default machine, and a removed
+default repoints to the best remaining distro (like WSL moving the
+`*`) before it would leave nothing.
 
 Because a shared name shadows, **creating** one is refused:
 `--install`, `--import`, and `--rename` bail when the name is taken in
@@ -136,7 +140,7 @@ materializes a fresh one (see [container-distro.md]).
 | Option                | Description                                                                                                               |
 | --------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | `-s, --set-default`   | Set the default distro or machine                                                                                         |
-| `-t, --terminate`     | Stop a running distro or machine                                                                                          |
+| `-t, --terminate`     | Stop a running distro or machine (the effective default when no name is given)                                            |
 | `--shutdown`          | Stop all running machines and distros; also stops `container` services when `cm` started them and nothing is left running |
 | `--shutdown --system` | Always `container system stop` (stops *all* containers, not just ours)                                                    |
 | `--status`            | `container system status`                                                                                                 |

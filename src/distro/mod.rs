@@ -40,7 +40,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub use adopt::adopt;
 pub(crate) use assets::assets_flavor;
 pub use create::{CreateOptions, create};
-pub use default::{default_name, set_default};
+pub(crate) use default::distro_states;
+pub use default::{
+    DefaultType, DistroState, EffectiveDefault, converge_default, effective_default,
+    record_machine_default, recorded_default, set_default,
+};
 pub use export::export;
 pub use host::default_resources;
 pub use images::release_machine_images;
@@ -49,6 +53,7 @@ pub use journal::distro_names;
 pub use lifecycle::{delete, delete_all, start, stop};
 pub use list::{DistroSummary, inspect, summaries};
 pub(crate) use lock::{is_locked, lock, lock_symlink, unlock, write_nofollow};
+pub(crate) use machine::machine_rootfs;
 pub use machine::{create_machine, export_machine, import_machine};
 pub use migrate::{migrate, migrate_to_machine};
 pub use names::{bail_distro_shadow, bail_machine_shadow};
@@ -95,7 +100,7 @@ pub fn distros() -> Result<Vec<ContainerInfo>> {
 /// The distro a labeled container belongs to — its *logical* name.
 /// `c.id()` is the ephemeral runtime id (`<name>-<suffix>`); the label
 /// value is what the journal, `cm`, and the user know the distro by.
-fn distro_name(c: &ContainerInfo) -> Option<&str> {
+pub(super) fn distro_name(c: &ContainerInfo) -> Option<&str> {
     label_lookup(&c.configuration.labels, LABEL_DISTRO).map(String::as_str)
 }
 
@@ -122,10 +127,25 @@ pub fn find(name: &str) -> Result<ContainerInfo> {
         .with_context(|| format!("no distro named `{name}`"))
 }
 
+/// The distro a plugin command should act on: `-n`'s explicit name,
+/// else the effective default — which must be a distro. When the
+/// default converged to a machine (a `machine:` record, or a machine
+/// we picked) only `cm` can enter it; the plugin names a distro or
+/// errors.
 pub fn resolve(name: Option<String>) -> Result<String> {
-    name.or_else(default_name).context(
-        "no distro given and no default set (use -n NAME or `container distro set-default`)",
-    )
+    if let Some(n) = name {
+        return Ok(n);
+    }
+    match converge_default()? {
+        Some(EffectiveDefault::Distro(d)) => Ok(d),
+        Some(EffectiveDefault::Machine(m)) => bail!(
+            "the default is a container machine{} — `cm` enters it; name a distro with -n",
+            m.map(|n| format!(" `{n}`")).unwrap_or_default(),
+        ),
+        None => bail!(
+            "no distro given and no default set (use -n NAME or `container distro set-default`)"
+        ),
+    }
 }
 
 fn timestamp() -> u64 {

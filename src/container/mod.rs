@@ -200,11 +200,29 @@ pub fn warn_unverified_version() {
     });
 }
 
-/// Host disk space a container's root filesystem uses: the allocated size
-/// of its sparse `rootfs.ext4`, which is what `container machine list`
-/// reports as DISK.
+/// The `source` of a `rootFsOverride` record in a container's
+/// runtime-configuration.json — where the daemon mounts its disk from.
+/// Machines and journaled distros live there instead of the default
+/// `containers/<id>/rootfs.ext4`.
+pub(crate) fn rootfs_override_source(json: &str) -> Option<PathBuf> {
+    serde_json::from_str::<serde_json::Value>(json)
+        .ok()?
+        .pointer("/options/rootFsOverride/source")?
+        .as_str()
+        .map(PathBuf::from)
+}
+
+/// Host disk space a container's root filesystem uses: the allocated
+/// size of its sparse `rootfs.ext4` — or of the file its
+/// `rootFsOverride` points at, which is where machines and journaled
+/// distros actually keep their disk. Falls back to the default path.
 pub fn container_disk_usage(app_root: &Path, id: &str) -> Option<u64> {
-    let meta = std::fs::metadata(app_root.join("containers").join(id).join("rootfs.ext4")).ok()?;
+    let dir = app_root.join("containers").join(id);
+    let path = std::fs::read_to_string(dir.join("runtime-configuration.json"))
+        .ok()
+        .and_then(|s| rootfs_override_source(&s))
+        .unwrap_or_else(|| dir.join("rootfs.ext4"));
+    let meta = std::fs::metadata(&path).ok()?;
     Some(meta.blocks() * 512)
 }
 

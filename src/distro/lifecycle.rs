@@ -9,7 +9,7 @@
 use super::adopt::{ensure_journal, ensure_state};
 use super::converge::{converge, dismantle, materialize};
 use super::create::boot;
-use super::default::{default_name, write_default};
+use super::default::converge_default;
 use super::images::remove_snapshot_images;
 use super::journal::{
     DistroLock, journal_dir, journal_names, journal_present, preserved_dir, preserved_journal,
@@ -152,9 +152,13 @@ pub fn delete(force: bool, names: &[String]) -> Result<()> {
         cleanup_preserved(n);
         remove_snapshot_images(n, None);
         terminal::remove(n);
-        if default_name().as_deref() == Some(n) {
-            write_default(None)?;
-        }
+    }
+    // A deleted distro may have been the recorded default — converge
+    // repoints it to the best remaining target (another distro, or the
+    // `machine:` tier when none are left), like WSL moving the `*`.
+    // A repair failure shouldn't fail a delete that already happened.
+    if let Err(e) = converge_default() {
+        eprintln!("container-distro: couldn't update the default: {e:#}");
     }
     Ok(())
 }

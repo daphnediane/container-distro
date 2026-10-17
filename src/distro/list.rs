@@ -9,7 +9,9 @@
 use super::adopt::ensure_journal;
 use super::converge::{converge, dismantle, materialize};
 use super::create::auto_shares;
-use super::default::default_name;
+use super::default::{
+    DefaultType, EffectiveDefault, distro_states, effective_default, recorded_default,
+};
 use super::host::host_home;
 use super::journal::{
     DistroLock, distro_busy, distro_exists, journal_fs_path, journal_names, preserved_dir,
@@ -94,7 +96,7 @@ impl DistroSummary {
     }
 }
 
-fn summarize(c: &ContainerInfo, default: Option<&str>, app_root: Option<&Path>) -> DistroSummary {
+fn summarize(c: &ContainerInfo, app_root: Option<&Path>) -> DistroSummary {
     let cfg = &c.configuration;
     let home = host_home().unwrap_or_default();
     let spec = DistroSpec::from_container(c, &home).ok();
@@ -117,10 +119,19 @@ fn summarize(c: &ContainerInfo, default: Option<&str>, app_root: Option<&Path>) 
     DistroSummary {
         id: name.to_string(),
         status: c.status.state.clone(),
-        default: default == Some(name),
+        default: false,
         ip_address: c.ipv4().map(str::to_string),
-        cpus: cfg.resources.as_ref().and_then(|r| r.cpus),
-        memory: cfg.resources.as_ref().and_then(|r| r.memory_in_bytes),
+        // Intent level first — a stopped container's spec intent is the
+        // better answer than the materialized resources it kept.
+        cpus: resolved
+            .as_ref()
+            .and_then(|r| r.cpus)
+            .or_else(|| cfg.resources.as_ref().and_then(|r| r.cpus)),
+        memory: resolved
+            .as_ref()
+            .and_then(|r| r.memory.as_deref())
+            .and_then(size_bytes)
+            .or_else(|| cfg.resources.as_ref().and_then(|r| r.memory_in_bytes)),
         disk_size: app_root.and_then(|r| container::container_disk_usage(r, c.id())),
         created_date,
         image: cfg.image.as_ref().map(|i| i.reference.clone()),
@@ -179,7 +190,7 @@ fn share_lists(r: &ResolvedSpec) -> (Vec<String>, Vec<String>) {
 
 /// A `list` row for a journaled (stopped) distro — assembled from its
 /// spec, since there is no container to inspect.
-fn journal_summary(name: &str, default: Option<&str>) -> Option<DistroSummary> {
+fn journal_summary(name: &str) -> Option<DistroSummary> {
     let spec = read_journal(name).ok()?;
     let disk = journal_fs_path(name)
         .ok()
@@ -194,11 +205,14 @@ fn journal_summary(name: &str, default: Option<&str>) -> Option<DistroSummary> {
         } else {
             "stopped".into()
         },
-        default: default == Some(name),
+        default: false,
         cpus: r.cpus,
         memory: r.memory.as_deref().and_then(size_bytes),
         disk_size: disk,
         image: Some(spec.image.clone()),
+        // No container reports a platform while stopped — the journaled
+        // arch is what it materializes as.
+        platform: Some(format!("linux/{}", r.arch)),
         home_mount: Some(r.home_mount.as_str().to_string()),
         mounts: spec.mounts.iter().map(ToString::to_string).collect(),
         automounts: automounts_list,
@@ -275,21 +289,22 @@ fn fill_legacy_sources(rows: &mut [DistroSummary]) {
 }
 
 /// All distros, sorted by name — running or stopped-with-container from
-/// `container list`, stopped ones from their journals.
+/// `container list`, stopped ones from their journals. `default` marks
+/// the *effective* default: the record converges on read, so the `*`
+/// always lands on something real.
 pub fn summaries(running_only: bool) -> Result<Vec<DistroSummary>> {
-    let default = default_name();
     // DISK sizes are read from `container`'s internal storage layout.
     container::warn_unverified_version();
     let app_root = container::app_root();
     let mut rows: Vec<DistroSummary> = distros()?
         .iter()
         .filter(|c| !running_only || c.is_running())
-        .map(|c| summarize(c, default.as_deref(), app_root.as_deref()))
+        .map(|c| summarize(c, app_root.as_deref()))
         .collect();
     if !running_only {
         for name in journal_names()? {
             if !rows.iter().any(|r| r.id == name)
-                && let Some(s) = journal_summary(&name, default.as_deref())
+                && let Some(s) = journal_summary(&name)
             {
                 rows.push(s);
             }
@@ -301,6 +316,21 @@ pub fn summaries(running_only: bool) -> Result<Vec<DistroSummary>> {
             .filter(|s| !rows.iter().any(|r| r.id == s.id))
             .collect();
         rows.extend(orphans);
+    }
+    // A live recorded distro needs no machine lookup; anything else
+    // converges the record first (repointing a stale default, falling
+    // to `machine:` when no distro is left, and so on).
+    let states = distro_states()?;
+    let eff = match recorded_default() {
+        Some(DefaultType::Distro(n)) if states.iter().any(|d| d.name == n && d.selectable) => {
+            Some(EffectiveDefault::Distro(n))
+        }
+        _ => effective_default(&states, &container::list_machines().unwrap_or_default())?,
+    };
+    if let Some(EffectiveDefault::Distro(d)) = &eff {
+        for r in &mut rows {
+            r.default = r.id == *d;
+        }
     }
     fill_legacy_sources(&mut rows);
     rows.sort_by(|a, b| a.id.cmp(&b.id));

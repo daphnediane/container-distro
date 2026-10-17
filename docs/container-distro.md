@@ -388,8 +388,12 @@ reappear; quit Terminal and re-run, or allow it.
 
 ### `set-default [NAME] | --clear`
 
-Set the default distro -- or unset it with `--clear`. The default distro
-overrides the default machine in `cm`.
+Set the default distro -- or unset it with `--clear`. The recorded
+default is converged whenever it's read: a distro default overrides the
+default machine in `cm`, `--clear` (or losing the default distro)
+repoints the record at the best remaining distro or falls back to
+`container`'s default machine, so there's always an effective default
+while anything exists to enter.
 
 ### `export NAME [-o FILE]`
 

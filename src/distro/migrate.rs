@@ -9,7 +9,7 @@
 use super::adopt::{adopt, ensure_journal};
 use super::converge::{converge, dismantle, materialize};
 use super::create::{CreateOptions, boot, check_sources, ensure_running_locked, stamped_origin};
-use super::default::{default_name, no_default, write_default};
+use super::default::{DefaultType, no_effective_default, write_default};
 use super::images::{
     imported_ref_sha, machine_import_ref, remove_snapshot_images, tag_image, untag_image,
 };
@@ -24,7 +24,7 @@ use super::machine::{
     rootfs_override_source, spec_from_machine,
 };
 use super::names::{bail_distro_shadow, bail_if_staged, bail_machine_shadow};
-use super::{distros, find, run_container_quiet};
+use super::{find, run_container_quiet};
 use crate::container::{self, ensure_started, validate_name};
 use crate::distro::spec::OriginSource;
 use crate::distro::terminal;
@@ -163,14 +163,8 @@ fn migrate_to_distro(
             let _ = boot_machine(machine);
         }
     }
-    if opts.set_default
-        || no_default(
-            default_name().as_deref(),
-            &distros()?,
-            &container::list_machines().unwrap_or_default(),
-        )
-    {
-        write_default(Some(name))?;
+    if opts.set_default || no_effective_default(name)? {
+        write_default(&DefaultType::Distro(name.to_string()))?;
     }
     let profiles = spec.resolve().0.terminal_profile;
     terminal::sync(name, profiles);
@@ -350,14 +344,13 @@ pub fn migrate_to_machine(
     }
     if !keep {
         // The distro is already converged (container dismantled);
-        // remove the journal, its images, and the default marker.
+        // remove the journal and its images. The default marker is
+        // left for the converge below — a stale `Distro` record
+        // repoints to what remains.
         remove_journal_dir(distro)?;
         cleanup_preserved(distro);
         remove_snapshot_images(distro, None);
         terminal::remove(distro);
-        if default_name().as_deref() == Some(distro) {
-            write_default(None)?;
-        }
     } else {
         if name == distro {
             eprintln!(
@@ -368,14 +361,12 @@ pub fn migrate_to_machine(
             let _ = ensure_running_locked(distro, &mut lock);
         }
     }
-    if opts.set_default
-        || no_default(
-            default_name().as_deref(),
-            &distros()?,
-            &container::list_machines().unwrap_or_default(),
-        )
-    {
+    // An explicit claim (or being the only usable target) makes the
+    // machine `container`'s default *and* our recorded `Machine` —
+    // unlike a lazy pick, which never touches `container`'s default.
+    if opts.set_default || no_effective_default(&name)? {
         run_container_quiet(&["machine", "set-default", &name])?;
+        write_default(&DefaultType::Machine(name.clone()))?;
     }
     Ok(name)
 }

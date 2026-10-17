@@ -304,13 +304,9 @@ fn machine_state_dir(name: &str) -> Result<PathBuf> {
 
 /// The `source` of a `rootFsOverride` record in a container's
 /// runtime-configuration.json — where the daemon mounts its disk from.
-pub(super) fn rootfs_override_source(json: &str) -> Option<PathBuf> {
-    serde_json::from_str::<serde_json::Value>(json)
-        .ok()?
-        .pointer("/options/rootFsOverride/source")?
-        .as_str()
-        .map(PathBuf::from)
-}
+/// Re-exported for the migrate/converge paths that predate the shared
+/// helper.
+pub(super) use crate::container::rootfs_override_source;
 
 /// The `source` of a `rootfs.json`-shaped mount record.
 fn rootfs_source(json: &str) -> Option<PathBuf> {
@@ -326,7 +322,7 @@ fn rootfs_source(json: &str) -> Option<PathBuf> {
 /// else the path the machine plugin state records. `None` means no
 /// materialized rootfs — unusual, and treated like a never-booted
 /// distro's missing rootfs: the target starts from the image.
-pub(super) fn machine_rootfs(m: &MachineDetail) -> Result<Option<PathBuf>> {
+pub(crate) fn machine_rootfs(m: &MachineDetail) -> Result<Option<PathBuf>> {
     let app =
         container::app_root().context("`container system status` did not report an appRoot")?;
     if let Some(cid) = &m.container_id

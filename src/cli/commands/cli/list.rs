@@ -12,7 +12,7 @@
 //! - `cm -l -v -v` — the same table with extra columns appended
 
 use crate::container::{Machine, MachineDetail};
-use crate::distro::DistroSummary;
+use crate::distro::{self, DistroSummary, EffectiveDefault};
 use crate::util::table::{columns, human_bytes, title_case};
 
 use std::path::PathBuf;
@@ -48,6 +48,14 @@ pub struct Entry {
 
 impl Entry {
     pub fn from_machine(m: &Machine, detail: Option<&MachineDetail>) -> Self {
+        // `machine list` omits resources/disk for a stopped machine;
+        // inspect and the plugin-state rootfs still know them.
+        let disk = m.disk_size.or_else(|| {
+            detail
+                .and_then(|d| distro::machine_rootfs(d).ok().flatten())
+                .and_then(|p| std::fs::metadata(&p).ok())
+                .map(|meta| std::os::unix::fs::MetadataExt::blocks(&meta) * 512)
+        });
         Entry {
             name: m.id.clone(),
             status: m.status.clone(),
@@ -55,9 +63,9 @@ impl Entry {
             kind: "machine",
             conflict: false,
             ip: m.ip_address.clone(),
-            cpus: m.cpus,
-            memory: m.memory,
-            disk: m.disk_size,
+            cpus: m.cpus.or_else(|| detail.and_then(|d| d.cpus)),
+            memory: m.memory.or_else(|| detail.and_then(|d| d.memory)),
+            disk,
             platform: detail
                 .and_then(|d| d.platform.as_ref())
                 .map(|p| p.to_string()),
@@ -180,6 +188,11 @@ pub fn format_verbose(entries: &[Entry], verbosity: u8) -> String {
     }
 
     let dash = || "-".to_string();
+    // Unpinned resources show the host's pick bracketed — `[7]` means
+    // "derived, not set" — except rows with no spec at all (an
+    // interrupted create), which get `-`.
+    let (def_cpus, def_mem) = distro::default_resources();
+    let def_mem = crate::distro::spec::size_bytes(&def_mem).unwrap_or(0);
     let mut rows = vec![
         [
             "KIND", "IP", "CPUS", "MEMORY", "DISK", "PLATFORM", "HOME", "IMAGE",
@@ -188,11 +201,30 @@ pub fn format_verbose(entries: &[Entry], verbosity: u8) -> String {
         .to_vec(),
     ];
     for e in entries {
+        let unpinned = e.kind == "distro" && e.status != "interrupted";
         rows.push(vec![
             e.kind.to_string(),
             e.ip.clone().unwrap_or_else(dash),
-            e.cpus.map_or_else(dash, |c| c.to_string()),
-            e.memory.map_or_else(dash, human_bytes),
+            e.cpus.map_or_else(
+                || {
+                    if unpinned {
+                        format!("[{def_cpus}]")
+                    } else {
+                        dash()
+                    }
+                },
+                |c| c.to_string(),
+            ),
+            e.memory.map_or_else(
+                || {
+                    if unpinned {
+                        format!("[{}]", human_bytes(def_mem))
+                    } else {
+                        dash()
+                    }
+                },
+                human_bytes,
+            ),
             e.disk.map_or_else(dash, human_bytes),
             e.platform.clone().unwrap_or_else(dash),
             e.home.clone().unwrap_or_else(dash),
@@ -237,27 +269,53 @@ pub(super) fn run(
     container::ensure_started()?;
     let machines = container::list_machines()?;
     let distros = backend::distro_summaries(running_only)?;
+    // The `*` marks the *effective* default — a recorded machine pick
+    // shows on that machine even though `machine list` doesn't flag it,
+    // and a converged record never leaves the column wrong.
+    let eff = if backend::distros_enabled() {
+        distro::effective_default(&distro::distro_states()?, &machines)?
+    } else {
+        machines
+            .iter()
+            .find(|m| m.default)
+            .map(|m| EffectiveDefault::Machine(Some(m.id.clone())))
+    };
     for name in backend::clashes(&machines, &distros) {
         eprintln!("cm: `{name}` is both a machine and a distro; `-d {name}` uses the distro");
     }
+    if verbosity >= 2 || arch.is_some() {
+        // Machine disk sizes come from `container`'s internal layout.
+        container::warn_unverified_version();
+    }
     let mut machine_entries = Vec::new();
-    for m in machines {
+    for m in &machines {
         if running_only && !m.is_running() {
             continue;
         }
         // --arch filters on a machine's platform, which only inspect
-        // reports.
+        // reports; a stopped machine's resources come from it too.
         let detail = if verbosity >= 2 || arch.is_some() {
             container::inspect_machine(&m.id).ok()
         } else {
             None
         };
-        machine_entries.push(Entry::from_machine(&m, detail.as_ref()));
+        machine_entries.push(Entry::from_machine(m, detail.as_ref()));
     }
     let mut entries = merge(
         machine_entries,
         distros.iter().map(Entry::from_distro).collect(),
     );
+    let machine_default = machines.iter().find(|m| m.default).map(|m| m.id.as_str());
+    for e in &mut entries {
+        e.default = match &eff {
+            Some(EffectiveDefault::Distro(d)) => e.kind == "distro" && e.name == *d,
+            Some(EffectiveDefault::Machine(Some(m))) => e.kind == "machine" && e.name == *m,
+            Some(EffectiveDefault::Machine(None)) => {
+                e.kind == "machine" && Some(e.name.as_str()) == machine_default
+            }
+            None => false,
+        };
+    }
     if let Some(arch) = arch {
         entries.retain(|e| {
             e.platform

@@ -184,9 +184,24 @@ fn file_default_name(file: &Path) -> String {
     }
 }
 
+/// The name an import derives when `requested_name` is absent — the
+/// WSL order: `name_hint` first, because it is the catalog entry's
+/// NAME and `wsl --install` registers the manifest name (`Ubuntu`, not
+/// the package's `oobe.defaultName` like `Ubuntu-26.04`); then the
+/// package manifest's `oobe.defaultName`, which is what `wsl --install
+/// --from-file` registers; then the file stem (our convenience — WSL
+/// refuses a package that names nothing).
+fn import_default_name(hint: Option<&str>, pkg: &wsl::PackageConf, file: &Path) -> String {
+    hint.map(str::to_string)
+        .or_else(|| pkg.default_name.clone())
+        .unwrap_or_else(|| file_default_name(file))
+}
+
 /// Import a rootfs tar/`.wsl` as a distro, deriving its name in WSL
-/// order when `requested_name` is absent: the package manifest's
-/// `oobe.defaultName`, then `name_hint`, then the file stem.
+/// order when `requested_name` is absent: `name_hint` (the catalog
+/// entry's NAME — `wsl --install` registers the manifest name), then
+/// the package manifest's `oobe.defaultName` (what `wsl --install
+/// --from-file` uses), then the file stem.
 pub fn import_file(
     file: &Path,
     requested_name: Option<String>,
@@ -202,12 +217,7 @@ pub fn import_file(
     // files `import` snapshots — no second pass over the tar.
     let pkg = wsl::package_conf(file).unwrap_or_default();
     let name = requested_name.unwrap_or_else(|| {
-        container::default_machine_name(
-            &pkg.default_name
-                .clone()
-                .or_else(|| name_hint.map(str::to_string))
-                .unwrap_or_else(|| file_default_name(file)),
-        )
+        container::default_machine_name(&import_default_name(name_hint, &pkg, file))
     });
     container::validate_name(&name)?;
     // Fail a refused name before `import` stages an image (the `.wsl`
@@ -292,5 +302,24 @@ mod tests {
             panic!("RLCPlus-9 should resolve to a .wsl download");
         };
         assert_eq!(name, "RLCPlus-9");
+    }
+
+    #[test]
+    fn catalog_name_beats_package_default_name() {
+        let pkg = wsl::PackageConf {
+            default_name: Some("Ubuntu-26.04".into()),
+            wsl_conf: None,
+            distribution_conf: None,
+        };
+        let file = std::path::Path::new("ubuntu-26.04.1-wsl-amd64.wsl");
+        // `wsl --install` registers the manifest name, not oobe's.
+        assert_eq!(import_default_name(Some("Ubuntu"), &pkg, file), "Ubuntu");
+        // `--from-file` has no catalog name — oobe.defaultName wins.
+        let pkg_none = wsl::PackageConf::default();
+        assert_eq!(import_default_name(None, &pkg, file), "Ubuntu-26.04");
+        assert_eq!(
+            import_default_name(None, &pkg_none, file),
+            "ubuntu-26.04.1-wsl-amd64"
+        );
     }
 }

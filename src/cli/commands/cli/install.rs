@@ -156,8 +156,9 @@ pub(super) fn install(opts: &InstallOpts) -> Result<ExitCode> {
 /// tar or `.wsl` package as a distro — machines can't boot a bare
 /// rootfs, so this is always the distro path regardless of `--distro`.
 /// `name_hint` is a catalog entry's NAME when the source was a catalog
-/// download; the naming order is `--name`, the `.wsl` manifest's
-/// `oobe.defaultName`, `name_hint`, then the file stem.
+/// download; the naming order is `--name`, `name_hint` (`wsl --install`
+/// registers the manifest name), the `.wsl` manifest's
+/// `oobe.defaultName` (what `--from-file` uses), then the file stem.
 fn install_from_file(
     opts: &InstallOpts,
     create: &CreateOptions,
@@ -168,8 +169,9 @@ fn install_from_file(
     if !backend::distros_enabled() {
         bail!("--from-file needs distro support (unset CM_BACKEND=machine)");
     }
-    // --name is used verbatim; a derived name (the .wsl manifest's
-    // oobe.defaultName, else the file stem) is sanitized to a valid one.
+    // --name is used verbatim; a derived name (a catalog NAME, the .wsl
+    // manifest's oobe.defaultName, else the file stem) is sanitized to a
+    // valid one.
     // `create` already pins terminal_profile when `--terminal` asked
     // to open the profile — the explicit opt-in `--terminal-profile`
     // would write.

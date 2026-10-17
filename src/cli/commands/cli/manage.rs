@@ -13,12 +13,13 @@ use anyhow::{Result, bail};
 
 use super::args::Backend;
 use super::backend::{self, Target};
-use super::{named_target, passthru};
+use super::{named_target, passthru, target};
 use crate::container;
 use crate::distro::{self, CreateOptions};
 
-/// WSL `-s`: a distro becomes the default; a machine becomes the default
-/// and any default distro is cleared so the machine takes effect.
+/// WSL `-s`: a distro becomes the recorded default; a machine becomes
+/// `container`'s default machine *and* our recorded `Machine` — the
+/// one pick that is allowed to touch `container`'s default.
 pub(super) fn set_default(name: &str, sel: Backend) -> Result<ExitCode> {
     match named_target(name, sel)? {
         Target::Distro(d) => {
@@ -28,26 +29,34 @@ pub(super) fn set_default(name: &str, sel: Backend) -> Result<ExitCode> {
         Target::Machine(_) => {
             let code = passthru(&["machine", "set-default", name])?;
             if code == ExitCode::SUCCESS && backend::distros_enabled() {
-                distro::set_default(None)?;
+                distro::record_machine_default(name);
             }
             Ok(code)
         }
     }
 }
 
-pub(super) fn terminate(name: &str, sel: Backend) -> Result<ExitCode> {
-    match named_target(name, sel)? {
+/// WSL `-t`, plus our convenience: no name stops the effective default.
+pub(super) fn terminate(name: Option<&str>, sel: Backend) -> Result<ExitCode> {
+    match target(name, sel)? {
         Target::Distro(d) => {
             distro::stop(&[d])?;
             Ok(ExitCode::SUCCESS)
         }
-        Target::Machine(_) => passthru(&["machine", "stop", name]),
+        Target::Machine(m) => {
+            let mut args = vec!["machine", "stop"];
+            if let Some(m) = m.as_deref() {
+                args.push(m);
+            }
+            passthru(&args)
+        }
     }
 }
 
 pub(super) fn unregister(name: &str, sel: Backend) -> Result<ExitCode> {
     match named_target(name, sel)? {
         Target::Distro(d) => {
+            // `delete` converges the default record itself.
             distro::delete(true, &[d])?;
             Ok(ExitCode::SUCCESS)
         }
@@ -57,6 +66,13 @@ pub(super) fn unregister(name: &str, sel: Backend) -> Result<ExitCode> {
                 // `machine rm` doesn't know about the `local/machine-*`
                 // tags `import` added — release them.
                 distro::release_machine_images(name);
+                // A removed machine may have been the recorded or the
+                // machine default — converge repoints it.
+                if backend::distros_enabled()
+                    && let Err(e) = distro::converge_default()
+                {
+                    eprintln!("cm: couldn't update the default: {e:#}");
+                }
             }
             Ok(rc)
         }

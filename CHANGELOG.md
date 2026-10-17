@@ -10,6 +10,31 @@ docs/design/release.md.
 
 ## 0.9.0-dev
 
+### Fixed
+
+- **Catalog `.wsl` installs now register the catalog NAME** (#40):
+  `cm --install` on a catalog `.wsl` entry (e.g. Ubuntu) named the
+  distro after the package's `oobe.defaultName` (`ubuntu-26-04`)
+  instead of the entry's friendly name — matching `wsl --install`,
+  which registers the manifest name. Direct `--from-file`/`import`
+  keeps the package-provided name first, like `wsl --install
+  --from-file`.
+- **A removed default no longer leaves no default** (#41): the
+  `default-distro` marker now converges on read — a stale `Distro`
+  record repoints to the best remaining distro (like WSL moving the
+  `*`), a `machine:<name>` pick stands while its machine is the
+  effective pick, and `machine:` follows `container`'s default
+  machine — so bare `cm`, `-d`, `-t`, and `container distro` commands
+  always land on something real while anything exists. `cm -t` with
+  no name now stops the effective default.
+- **`cm -l -v -v` shows resources for stopped entries** (#42):
+  stopped distros report their journaled platform and the host's
+  resource pick bracketed (`[7]`/`[32G]`, "derived, not set"); running
+  distros report DISK via their `rootFsOverride` (their disk isn't at
+  `containers/<id>/rootfs.ext4`); stopped machines report
+  cpus/memory/platform from `machine inspect` and DISK from their
+  plugin-state rootfs.
+
 ## 0.8.0 -- 2026-10-15
 
 ### Highlights

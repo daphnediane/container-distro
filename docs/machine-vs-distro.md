@@ -70,8 +70,8 @@ configuration never survives a restart.
 name is refused everywhere unless `--force` opts in. Listings never
 hide a collision: `cm -l` shows both rows suffixed `(machine)`/
 `(distro)`. A default distro wins over the default machine; `cm -s`
-on a machine clears a default distro. `--distro`/`--machine` are
-explicit selectors; `CM_BACKEND=machine` makes `cm` ignore distros
+on a machine records the machine as default. `--distro`/`--machine`
+are explicit selectors; `CM_BACKEND=machine` makes `cm` ignore distros
 entirely. Details: [cm.md].
 
 ## Converting between them

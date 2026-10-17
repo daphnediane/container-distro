@@ -9,13 +9,13 @@
 use super::adopt::{ensure_journal, ensure_state};
 use super::assets::{journal_assets_dir, refresh_mounted_assets};
 use super::converge::{converge, dismantle, materialize};
-use super::default::{default_name, no_default, write_default};
+use super::default::{DefaultType, no_effective_default, write_default};
 use super::host::{default_resources, host_home, host_user};
 use super::journal::{
     DistroLock, distro_exists, journal_dir, read_journal, refresh_conf_snapshots, write_journal,
 };
 use super::names::{bail_if_staged, bail_machine_shadow};
-use super::{distros, find, iso_now, run_container, run_container_quiet};
+use super::{find, iso_now, run_container, run_container_quiet};
 use crate::container::{self, ContainerInfo, default_machine_name, ensure_started, validate_name};
 use crate::distro::spec::{
     Arch, Automount, ConfList, DistroOrigin, DistroSpec, HomeMount, HostUser, INIT_DIR, Intent,
@@ -538,18 +538,13 @@ pub(super) fn create_from_spec(spec: &DistroSpec, opts: &CreateOptions) -> Resul
         }
         return Err(e);
     }
-    // On request, or (like `container machine create`) when nothing is the
-    // default. Otherwise leave it alone: under `cm`'s unified namespace a
-    // distro default overrides the default machine. If machines can't be
-    // listed, a distro is the only usable target anyway.
-    let set_default = opts.set_default
-        || no_default(
-            default_name().as_deref(),
-            &distros()?,
-            &container::list_machines().unwrap_or_default(),
-        );
+    // On request, or (like `container machine create`) when nothing
+    // else can be the effective default — converge keeps the record
+    // pointed at something real, so `no_effective_default` is only
+    // true for a genuinely empty world.
+    let set_default = opts.set_default || no_effective_default(&spec.name)?;
     if set_default {
-        write_default(Some(&spec.name))?;
+        write_default(&DefaultType::Distro(spec.name.clone()))?;
     }
     let profiles = spec.resolve().0.terminal_profile;
     terminal::sync(&spec.name, profiles);

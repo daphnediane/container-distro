@@ -8,7 +8,7 @@
 
 use super::adopt::ensure_journal;
 use super::converge::converge;
-use super::default::{default_name, write_default};
+use super::default::{DefaultType, recorded_default, write_default};
 use super::images::{
     imported_ref_sha, machine_import_ref, release_machine_images, snapshot_repo, tag_image,
     untag_image,
@@ -111,8 +111,8 @@ pub fn rename(old: &str, new: &str, force: bool) -> Result<()> {
         return Err(e);
     }
     remove_journal_dir(old)?;
-    if default_name().as_deref() == Some(old) {
-        write_default(Some(new))?;
+    if recorded_default() == Some(DefaultType::Distro(old.to_string())) {
+        write_default(&DefaultType::Distro(new.to_string()))?;
     }
     terminal::rename(old, new, spec.resolve().0.terminal_profile);
     drop(lock);
@@ -274,6 +274,11 @@ pub fn rename_machine(old: &str, new: &str, force: bool) -> Result<()> {
     }
     if was_default {
         let _ = run_container_quiet(&["machine", "set-default", new]);
+        // A `machine:<old>` pick is stale now — repoint it at `new`.
+        // (`machine:` follows the moved default on its own.)
+        if recorded_default() == Some(DefaultType::Machine(old.to_string())) {
+            let _ = write_default(&DefaultType::Machine(new.to_string()));
+        }
     }
     Ok(())
 }

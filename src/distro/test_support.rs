@@ -6,22 +6,9 @@
 
 //! Fixtures shared by the tests of several submodules.
 
-use crate::container::{ContainerInfo, MachineDetail};
-use crate::distro::spec::{
-    DistroSpec, HomeMount, HostUser, Intent, LABEL_DISTRO, Preset, WslConfMode,
-};
-use crate::naming::label_key;
+use crate::container::MachineDetail;
+use crate::distro::spec::{DistroSpec, HomeMount, HostUser, Intent, Preset, WslConfMode};
 use std::fs;
-
-/// A distro container: `name` is its logical name — the `distro`
-/// label — while `id` is the ephemeral runtime id.
-pub(super) fn distro_id(id: &str, name: &str) -> ContainerInfo {
-    serde_json::from_str(&format!(
-        r#"{{"configuration":{{"id":"{id}","labels":{{"{}":"{name}"}}}}}}"#,
-        label_key(LABEL_DISTRO)
-    ))
-    .unwrap()
-}
 
 // ---- guest-side script tests: real `container run` invocations ----
 

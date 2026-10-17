@@ -49,8 +49,10 @@ any of them.
 - `-l` → WSL-style name list; `-l -v` → exact `NAME STATE VERSION`
   table (VERSION is always `2`); `-l -v -v` → extra columns from
   `machine inspect`; `-q`, `--running`
-- `-s <m>` → `machine set-default`; `-t <m>` → `machine stop`;
-  `--unregister <m>` → `machine rm`
+- `-s <m>` → distro: `Distro(<m>)` record; machine: `machine set-default`
+  + `machine:<m>` record. `-t [m]` → `distro stop`/`machine stop` —
+  bare `-t` hits the effective default; `--unregister <m>` →
+  `distro::delete`/`machine rm`, then the default record converges
 - `--shutdown` stops running machines; `--shutdown --system` also runs
   `container system stop`
 - `--install [DISTRO|IMAGE]` (`--name`, `--no-launch`, `--cpus`,
@@ -163,8 +165,14 @@ explicit `--sudo` does). `set` accepts `--network`, `--ssh`/`--no-ssh`,
 
 `cm` treats machines and distros as one namespace (`src/cli/commands/cli/backend.rs`),
 linking the library rather than exec'ing the plugin: `-d NAME` resolves a
-distro first, then a machine; a default distro overrides the default
-machine; `-l` merges both — same-named pairs stay as two rows annotated
+distro first, then a machine; with no name the effective default wins —
+the `default-distro` record (`Distro(name)` / `machine:<name>` /
+`machine:`) converges on read (`distro::default::effective_default`,
+flock'd read→repair→write): a stale `Distro` repoints to the best
+remaining distro or falls to `machine:`; `machine:` follows
+`container`'s default machine, else repoints to a distro, else lazily
+records `machine:<pick>` — a lazy pick never runs `machine set-default`
+(only `cm -s` does); `-l` merges both — same-named pairs stay as two rows annotated
 `(machine)`/`(distro)` (KIND column at `-v -v`); shadowing applies only
 to operational resolution; `--install --distro`
 / `--share` / `--publish` create distros. `CM_BACKEND=machine` disables
