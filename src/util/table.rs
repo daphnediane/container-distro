@@ -75,8 +75,8 @@ pub fn title_case(s: &str) -> String {
 /// column is not padded.
 #[must_use]
 pub fn columns(rows: &[Vec<String>], gap: usize) -> Vec<String> {
-    let ncols = rows.iter().map(Vec::len).max().unwrap_or(0);
-    let widths: Vec<usize> = (0..ncols)
+    let column_count = rows.iter().map(Vec::len).max().unwrap_or(0);
+    let widths: Vec<usize> = (0..column_count)
         .map(|c| {
             rows.iter()
                 .filter_map(|r| r.get(c))

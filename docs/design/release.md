@@ -55,7 +55,7 @@ The mechanical bits are driven by [cargo-release] (`cargo install
    `THIRD-PARTY-NOTICES.yaml` freshness check (regenerate with
    `cargo bundle-licenses -f yaml -o THIRD-PARTY-NOTICES.yaml` if
    stale), and a vendored-catalog freshness check (refresh
-   `vendor/microsoft/` with `scripts/update-microsoft-catalog.sh`
+   `vendor/microsoft/` with `scripts/refresh-wsl-catalog.sh`
    when upstream's `DistributionInfo.json` has moved). Then confirm
    [work] lists only still-open work — including pruning links to
    issues that closed this cycle — and the user-facing docs reflect

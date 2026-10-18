@@ -18,6 +18,8 @@ docs/design/release.md.
   open questions tracked as issues: network modes (#43), `--env`
   exposure and safer secret delivery (#44), host config file (#45).
   `security.md` documents where `--env` values are visible (T14).
+  It also notes `wsl --install --legacy` — which reads the catalog's
+  old Store-appx `Distributions` array — has no `cm` equivalent.
 
 ### Fixed
 

@@ -215,11 +215,11 @@ image reference (or `--from-image`) derives the name from the image
 instead (`alpine:latest` → `alpine-latest`).
 
 The catalog is compiled in and merged from two files: a pinned,
-verbatim copy of Microsoft's `DistributionInfo.json` — the manifest
+verbatim copy of Microsoft's `DistributionInfo.json` — the catalog
 behind `wsl --list --online`, MIT-licensed in `vendor/microsoft/` —
 and a small overlay (`src/catalog/catalog.json`) that adds entries Microsoft
 doesn't publish (Alpine, Rocky, Oracle, UBI) and fills extension
-fields on entries it does. The schema is Microsoft's plus our
+fields on entries it does. The schema is Microsoft WSL's plus our
 `Image`/`HomeMount` extensions. Each `ModernDistributions` vendor
 group holds entries with a `Name`, `FriendlyName`, an optional `Image`
 (an OCI reference) and per-arch `Amd64Url` / `Arm64Url` `.wsl`

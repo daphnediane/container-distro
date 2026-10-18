@@ -216,11 +216,11 @@ fn cmp_version(a: &str, b: &str) -> Ordering {
             Some((c, p)) => (c, Some(p)),
             None => (strip_v(v), None),
         };
-        let mut nums = [0u64; 3];
+        let mut numbers = [0u64; 3];
         for (n, part) in core.split('.').take(3).enumerate() {
-            nums[n] = part.parse().unwrap_or(0);
+            numbers[n] = part.parse().unwrap_or(0);
         }
-        (nums, pre)
+        (numbers, pre)
     }
     let (an, ap) = split(a);
     let (bn, bp) = split(b);

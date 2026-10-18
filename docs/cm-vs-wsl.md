@@ -152,6 +152,12 @@ shell.
   under Rosetta -- amd64-only entries like SLES become installable)
   and filters `-l`/`-l -o` to that arch. The arch is recorded with the
   distro, so a recreated container keeps it.
+- `wsl --install --legacy` — which installs from the catalog's legacy
+  `Distributions` array (the old Store appx entries, `StoreAppId`/
+  package URLs) — has no `cm` equivalent; `cm` reads only
+  `ModernDistributions`. A Store-package install has no meaning on
+  macOS anyway, and every maintained distro carries a modern `.wsl`
+  entry.
 - No GUI app support (WSLg's X11/Wayland) -- see
   [design/notes/gui-apps.md] for what it would take.
 - No equivalents for `--manage` or `--mount` (VHDs), `wsl --system`

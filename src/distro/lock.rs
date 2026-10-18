@@ -26,7 +26,7 @@ pub(super) fn set_locked(path: &Path, locked: bool) -> Result<()> {
     let c = CString::new(path.as_os_str().as_bytes())?;
     // `lchflags`, not `chflags`: a symlink planted at `path` gets its
     // own flags changed, never its target's — following it would let
-    // a guest-planted link unlock any file the host user can chflag.
+    // a guest-planted link unlock any file the host user can `chflags`.
     // SAFETY: `c` is a valid NUL-terminated path; lchflags only reads it.
     let rc = unsafe { libc::lchflags(c.as_ptr(), if locked { libc::UF_IMMUTABLE } else { 0 }) };
     if rc == 0 {

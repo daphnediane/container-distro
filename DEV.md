@@ -42,8 +42,8 @@ clippy, tests, an `sh -n` syntax pass on `assets/*`, `cargo audit`,
 `cargo deny --workspace check` (license policy in `deny.toml`), a
 THIRD-PARTY-NOTICES.yaml freshness check (regenerate with
 `cargo bundle-licenses -f yaml -o THIRD-PARTY-NOTICES.yaml`), and a
-freshness check on the vendored Microsoft catalog (refresh
-`vendor/microsoft/` with `scripts/update-microsoft-catalog.sh`).
+freshness check on Microsoft's WSL catalog (refresh
+`vendor/microsoft/` with `scripts/refresh-wsl-catalog.sh`).
 
 Man pages and shell completions are generated at runtime from the
 clap definitions — never edit generated output; change the
@@ -55,22 +55,22 @@ reference doc (`docs/cm.md` or `docs/container-distro.md`).
 One published crate shipping one binary, `container-distro`, over a
 shared library; `cm` is an alias script for `container-distro cli`:
 
-| Path                        | Contents                                                            |
-| --------------------------- | ------------------------------------------------------------------- |
-| `src/`                      | `container_distro` library: `naming` plus the modules below         |
-| `src/container/`            | `container` CLI wrappers, its JSON types, the install offer         |
-| `src/catalog/`              | installable catalog, `.wsl` packages, verified downloads            |
-| `src/setup/`                | layout, plugin registration, man/completions, self-update, sudo     |
-| `src/util/`                 | table rendering, OCI layout writer, TCP forwarder                   |
-| `src/distro/`               | distro operations, one submodule each; `spec/` and `terminal`       |
-| `src/cli/commands/`         | `container-distro` subcommands, one file per larger subcommand      |
-| `src/cli/commands/cli/`     | the `cli` subcommand: `cm`'s WSL-compatible interface               |
-| `src/bin/`                  | the `container-distro` binary's one-line `main` (`cm` is an alias)  |
-| `assets/`                   | distro init scripts (`sbin.distro*/`)                               |
-| `scripts/`                  | maintainer scripts (below)                                          |
-| `packaging/`                | pkg resources: Distribution.xml, uninstaller/updater, signing conf  |
-| `docs/`                     | user guides and `docs/design/` architecture docs                    |
-| `scratch/`                  | gitignored scratch space (pkg builds, pinned old releases)          |
+| Path                    | Contents                                                           |
+| ----------------------- | ------------------------------------------------------------------ |
+| `src/`                  | `container_distro` library: `naming` plus the modules below        |
+| `src/container/`        | `container` CLI wrappers, its JSON types, the install offer        |
+| `src/catalog/`          | installable catalog, `.wsl` packages, verified downloads           |
+| `src/setup/`            | layout, plugin registration, man/completions, self-update, sudo    |
+| `src/util/`             | table rendering, OCI layout writer, TCP forwarder                  |
+| `src/distro/`           | distro operations, one submodule each; `spec/` and `terminal`      |
+| `src/cli/commands/`     | `container-distro` subcommands, one file per larger subcommand     |
+| `src/cli/commands/cli/` | the `cli` subcommand: `cm`'s WSL-compatible interface              |
+| `src/bin/`              | the `container-distro` binary's one-line `main` (`cm` is an alias) |
+| `assets/`               | distro init scripts (`sbin.distro*/`)                              |
+| `scripts/`              | maintainer scripts (below)                                         |
+| `packaging/`            | pkg resources: Distribution.xml, uninstaller/updater, signing conf |
+| `docs/`                 | user guides and `docs/design/` architecture docs                   |
+| `scratch/`              | gitignored scratch space (pkg builds, pinned old releases)         |
 
 ## Scripts
 

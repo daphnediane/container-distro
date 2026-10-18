@@ -432,14 +432,14 @@ impl FromStr for WslConfMode {
     /// them. A base keyword (`all`/`none`) must lead; `+`/`-` prefixed
     /// names select `Default`, bare names `Only` — the two can't mix.
     fn from_str(s: &str) -> Result<Self> {
-        let toks: Vec<&str> = s
+        let tokens: Vec<&str> = s
             .split(',')
             .map(str::trim)
             .filter(|t| !t.is_empty())
             .collect();
-        match toks.first() {
+        match tokens.first() {
             Some(&"none") => {
-                if toks.len() > 1 {
+                if tokens.len() > 1 {
                     bail!("`none` can't combine with other tokens in `{s}`")
                 }
                 Ok(WslConfMode::Only {
@@ -448,7 +448,7 @@ impl FromStr for WslConfMode {
             }
             Some(&"all") => {
                 let mut deny = BTreeSet::new();
-                for t in &toks[1..] {
+                for t in &tokens[1..] {
                     match t.strip_prefix('-').or_else(|| t.strip_prefix('+')) {
                         Some(n) if n == "all" || n == "none" => {
                             bail!("`{t}` can't repeat the base keyword in `{s}`")
@@ -472,9 +472,9 @@ impl FromStr for WslConfMode {
                 }
                 Ok(WslConfMode::AllExcept { deny })
             }
-            _ if toks.iter().any(|t| t.starts_with(['+', '-'])) => {
+            _ if tokens.iter().any(|t| t.starts_with(['+', '-'])) => {
                 let (mut allow, mut deny) = (BTreeSet::new(), BTreeSet::new());
-                for t in toks {
+                for t in tokens {
                     match t.strip_prefix('+').or_else(|| t.strip_prefix('-')) {
                         Some(n) if t.starts_with('+') => {
                             deny.remove(n);
@@ -491,7 +491,7 @@ impl FromStr for WslConfMode {
             }
             _ => {
                 let mut allow = BTreeSet::new();
-                for t in toks {
+                for t in tokens {
                     match t {
                         "all" | "none" => bail!("`{t}` must be the first token in `{s}`"),
                         n => {

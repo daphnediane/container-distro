@@ -95,7 +95,7 @@ stability, not ours.
 - `weston --backend=vnc` / wayvnc → Screen Sharing or any VNC client.
 - `weston --backend=x11` nested inside XQuartz -- same end result.
 
-All packageable from distro repos with no new host deps, but the UX is a
+All can be packaged from distro repos with no new host deps, but the UX is a
 worse version of WSLg, not WSLg.
 
 ### D. Audio (optional add-on)

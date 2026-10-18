@@ -39,7 +39,7 @@ if ! diff -q THIRD-PARTY-NOTICES.yaml "$tmp" >/dev/null; then
     exit 1
 fi
 
-step "Microsoft catalog freshness"
+step "WSL catalog freshness"
 scripts/check-catalog-freshness.sh
 
 printf '\nrelease gate: all checks passed\n'

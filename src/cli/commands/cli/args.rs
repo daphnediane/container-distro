@@ -942,7 +942,7 @@ mod tests {
     }
 
     #[test]
-    fn list_subflags() {
+    fn list_action_flags() {
         let args = parse(&["cm", "-l"]).unwrap();
         assert_eq!(
             args.action().unwrap(),

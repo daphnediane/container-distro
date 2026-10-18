@@ -1,8 +1,8 @@
 #!/bin/sh
-# Catalog freshness gate (#31): verify the vendored Microsoft manifest
+# Catalog freshness gate (#31): verify that Microsoft's WSL catalog
 # in vendor/microsoft/ is (a) byte-identical to the upstream file at the
 # pinned commit and (b) still the latest upstream revision. Drift fails
-# the release gate — refresh with scripts/update-microsoft-catalog.sh.
+# the release gate — refresh with scripts/refresh-wsl-catalog.sh.
 # Needs curl, jq, and network access to GitHub.
 set -eu
 cd "$(dirname "$0")/.."
@@ -29,7 +29,7 @@ step="vendored file matches upstream@$pinned"
 curl -fsSL "$raw/$pinned/$path" -o "$tmp/upstream.json"
 if ! diff -q "$VENDOR/DistributionInfo.json" "$tmp/upstream.json" >/dev/null; then
     echo "FAIL: $VENDOR/DistributionInfo.json differs from upstream@$pinned" >&2
-    echo "      restore it with scripts/update-microsoft-catalog.sh" >&2
+    echo "      restore it with scripts/refresh-wsl-catalog.sh" >&2
     exit 1
 fi
 curl -fsSL "$raw/$pinned/LICENSE" -o "$tmp/LICENSE"
@@ -54,5 +54,5 @@ if diff -q "$VENDOR/DistributionInfo.json" "$tmp/latest.json" >/dev/null; then
     exit 0
 fi
 echo "FAIL: upstream manifest updated ($pinned -> $latest)" >&2
-echo "      run scripts/update-microsoft-catalog.sh and review the diff" >&2
+echo "      run scripts/refresh-wsl-catalog.sh and review the diff" >&2
 exit 1

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Refresh vendor/microsoft/ to the latest upstream manifest (#31):
+# Refresh vendor/microsoft/ to the latest upstream catalog (#31):
 # resolve the newest commit touching distributions/DistributionInfo.json,
 # vendor that exact revision + LICENSE, and pin it in UPSTREAM.
 # Needs curl, jq, and network access to GitHub.

@@ -1,5 +1,7 @@
 # Security model and analysis
 
+<!-- cspell:ignore UPBK2H6LZM -->
+
 Written pre-1.0 (2026-10-03) as a checkpoint: what
 `cm`/`container-distro` trusts, which trade-offs are deliberate, and
 what to re-evaluate before calling anything stable. Section 2 lists each
@@ -535,7 +537,7 @@ run --root` or `container cp`, which that user already has.
   socket bound by Apple's runtime helper in
   `<Darwin user temp>/container-distro/s/` — outside `$HOME`, so no
   virtiofs share can plant a symlink there (T6's shape). macOS has no
-  public `connectat`, so `connect(2)` follows symlinks; the defence is
+  public `connectat`, so `connect(2)` follows symlinks; the defense is
   layered instead, and lives in the standalone `distrofs` client: the
   socket's directory chain and leaf are verified before connect, and —
   what makes the check-then-connect race irrelevant — after

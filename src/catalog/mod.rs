@@ -27,10 +27,10 @@ pub use install::{Resolved, import_file, install, install_resolved, resolve};
 /// Merged over [`UPSTREAM`] for the built-in catalog.
 const OVERLAY: &str = include_str!("catalog.json");
 
-/// The pinned, vendored copy of Microsoft's `DistributionInfo.json`
-/// (`vendor/microsoft/`, with its MIT `LICENSE` and the upstream
-/// commit in `UPSTREAM`). Verbatim — edit via
-/// `scripts/update-microsoft-catalog.sh`, not by hand.
+/// The pinned, vendored copy of Microsoft's WSL distro catalog,
+/// `DistributionInfo.json` from `microsoft/WSL` (`vendor/microsoft/`,
+/// with its MIT `LICENSE` and the upstream commit in `UPSTREAM`).
+/// Verbatim — edit via `scripts/refresh-wsl-catalog.sh`, not by hand.
 const UPSTREAM: &str = include_str!("../../vendor/microsoft/DistributionInfo.json");
 
 /// A `.wsl` rootfs download: a URL plus the SHA-256 the download is
@@ -56,8 +56,8 @@ impl Download {
     }
 }
 
-/// One installable distribution, Microsoft's `ModernDistributions`
-/// entry shape plus our `Image` extension.
+/// One installable distribution, the WSL catalog's
+/// `ModernDistributions` entry shape plus our `Image` extension.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Entry {
@@ -76,7 +76,7 @@ pub struct Entry {
     /// the verified-download path is preferred where both exist.
     #[serde(default)]
     pub image: Option<String>,
-    /// `.wsl` rootfs downloads per arch, Microsoft's shape.
+    /// `.wsl` rootfs downloads per arch, the WSL catalog's shape.
     #[serde(default)]
     pub amd64_url: Option<Download>,
     #[serde(default)]
@@ -153,8 +153,8 @@ struct CatalogFile {
     default: Option<String>,
     #[serde(default)]
     modern_distributions: serde_json::Map<String, serde_json::Value>,
-    // Microsoft's legacy `Distributions` array (Store appx packages)
-    // is intentionally ignored.
+    // The WSL catalog's legacy `Distributions` array (Store appx
+    // packages) is intentionally ignored.
 }
 
 fn parse(text: &str, source: &str) -> Result<Catalog> {
@@ -191,7 +191,7 @@ fn parse(text: &str, source: &str) -> Result<Catalog> {
 
 /// Merge `overlay` over `base` for the built-in catalog. An overlay
 /// entry matching a base name (case-insensitive) only fills fields
-/// the base entry lacks — Microsoft's URL/SHA/friendly-name fields
+/// the base entry lacks — upstream's URL/SHA/friendly-name fields
 /// always win, so a stale overlay can't silently downgrade a
 /// download — plus its `Default` flag; a non-matching entry appends.
 /// The overlay's top-level `Default` wins when it names an entry.
@@ -229,7 +229,7 @@ fn merge(base: Catalog, overlay: Catalog) -> Catalog {
 }
 
 /// The catalog to use: `path`'s JSON, or the built-in merge of the
-/// vendored Microsoft manifest and our overlay.
+/// vendored WSL catalog and our overlay.
 pub fn load(path: Option<&Path>) -> Result<Catalog> {
     match path {
         Some(p) => {
@@ -238,7 +238,7 @@ pub fn load(path: Option<&Path>) -> Result<Catalog> {
             parse(&text, &p.display().to_string())
         }
         None => {
-            let base = parse(UPSTREAM, "vendored Microsoft manifest")?;
+            let base = parse(UPSTREAM, "vendored WSL catalog")?;
             let overlay = parse(OVERLAY, "built-in overlay")?;
             Ok(merge(base, overlay))
         }
@@ -526,10 +526,11 @@ mod tests {
     }
 
     #[test]
-    fn microsofts_manifest_shape_parses() {
+    fn wsl_catalog_shape_parses() {
         // A trimmed DistributionInfo.json: ModernDistributions grouped
         // by vendor, top-level Default, plus a legacy Distributions
         // array we ignore.
+        // cspell:ignore 9MSVKQC78PK6
         let text = r#"{
           "ModernDistributions": {
             "Ubuntu": [{"Name":"Ubuntu","FriendlyName":"Ubuntu","Default":true,

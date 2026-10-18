@@ -255,10 +255,10 @@ mod tests {
         );
     }
 
-    /// `set --preset` re-derives what the user didn't pin; the pins
+    /// `set --preset` recomputes what the user didn't pin; the pins
     /// survive.
     #[test]
-    fn set_preset_rederives_unpinned() {
+    fn set_preset_recomputes_unpinned() {
         let s = pinned_spec();
         let (new, _) = SpecChanges {
             preset: Some(Preset::Restricted),

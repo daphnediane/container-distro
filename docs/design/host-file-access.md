@@ -1,5 +1,7 @@
 # Host access to guest filesystems (`distrofs`)
 
+<!-- cspell:ignore srwxr unsbx UPBK2H6LZM -->
+
 How macOS gets a `\\wsl$`-style view *into* a distro's filesystem:
 a small file server injected into the guest, reached over a
 `--publish-socket` relay, and surfaced in Finder by an FSKit module.

@@ -750,7 +750,7 @@ pub fn size_bytes(s: &str) -> Option<u64> {
         .trim()
         .find(|c: char| c.is_ascii_alphabetic())
         .map_or((s.trim(), ""), |i| s.trim().split_at(i));
-    let mult = match unit {
+    let multiplier = match unit {
         "" | "B" => 1,
         "K" | "KiB" => 1 << 10,
         "M" | "MiB" => 1 << 20,
@@ -758,7 +758,7 @@ pub fn size_bytes(s: &str) -> Option<u64> {
         "T" | "TiB" => 1 << 40,
         _ => return None,
     };
-    num.parse::<u64>().ok()?.checked_mul(mult)
+    num.parse::<u64>().ok()?.checked_mul(multiplier)
 }
 
 /// Whether two memory values name the same size — by bytes when both

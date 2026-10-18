@@ -695,7 +695,7 @@ mod tests {
     }
 
     #[test]
-    fn migrate_out_refuses_a_pinned_agent_optout() {
+    fn migrate_out_refuses_a_pinned_agent_opt_out() {
         // A machine forwards SSH_AUTH_SOCK at every boot — `--machine`
         // is the opt-in, so an unpinned ssh-off distro only warns. The
         // one refusal is a distro with `--no-ssh` explicitly recorded.

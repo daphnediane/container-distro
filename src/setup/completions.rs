@@ -81,7 +81,7 @@ pub fn default_share_dir() -> Result<PathBuf> {
 }
 
 /// Write `files` (`(shell, script)` for `bin`) under `share`, creating
-/// the shell subdirs. Returns the written paths.
+/// the shell subdirectories. Returns the written paths.
 pub fn write_files(share: &Path, bin: &str, files: &[(Shell, String)]) -> Result<Vec<PathBuf>> {
     let mut written = Vec::with_capacity(files.len());
     for (shell, script) in files {

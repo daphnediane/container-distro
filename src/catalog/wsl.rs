@@ -152,7 +152,7 @@ impl Fetched {
 }
 
 /// Fetch `url` (a `.wsl` rootfs) and verify it against `sha256` (hex;
-/// a `0x` prefix, as in Microsoft's manifest, is stripped).
+/// a `0x` prefix, as in Microsoft's WSL catalog, is stripped).
 ///
 /// Verified files are kept in a content-addressed cache
 /// (`<sha256>.wsl` under the Darwin per-user cache dir — see
@@ -524,7 +524,7 @@ mod tests {
     use super::*;
     use std::io::Write;
 
-    fn tar_with_confs(
+    fn tar_with_conf_files(
         distro_conf: Option<&str>,
         wsl_conf: Option<&str>,
     ) -> tempfile::NamedTempFile {
@@ -552,7 +552,7 @@ mod tests {
     }
 
     fn tar_with_conf(conf: Option<&str>) -> tempfile::NamedTempFile {
-        tar_with_confs(conf, None)
+        tar_with_conf_files(conf, None)
     }
 
     #[test]
@@ -572,7 +572,7 @@ mod tests {
 
     #[test]
     fn both_conf_files_extracted() {
-        let f = tar_with_confs(
+        let f = tar_with_conf_files(
             Some("[oobe]\ndefaultName = Gentoo\n"),
             Some("[boot]\nsystemd = true\n\n[automount]\nenabled = false\n"),
         );
@@ -630,7 +630,7 @@ mod tests {
     #[test]
     fn conf_capped_at_64k() {
         let big = "x".repeat(200 * 1024);
-        let f = tar_with_confs(None, Some(&format!("[boot]\n{big}")));
+        let f = tar_with_conf_files(None, Some(&format!("[boot]\n{big}")));
         let conf = package_conf(f.path()).unwrap();
         assert_eq!(
             conf.wsl_conf.as_deref().unwrap().len() as u64,
@@ -656,7 +656,7 @@ mod tests {
             Some("daphne".to_string())
         );
         assert_eq!(ini_value(ini, "boot", "missing"), None);
-        assert_eq!(ini_value(ini, "nosection", "systemd"), None);
+        assert_eq!(ini_value(ini, "no_section", "systemd"), None);
         assert_eq!(ini_value("systemd=true\n", "boot", "systemd"), None);
     }
 

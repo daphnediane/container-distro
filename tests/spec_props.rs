@@ -23,13 +23,13 @@ fn path_segment() -> impl Strategy<Value = String> {
 }
 
 /// An absolute-path-ish string (`/` + segments) or a relative one.
-fn pathish() -> impl Strategy<Value = String> {
+fn path_like() -> impl Strategy<Value = String> {
     (
         prop::bool::ANY,
         prop::collection::vec(path_segment(), 0..=4),
     )
-        .prop_map(|(absolute, segs)| {
-            let joined = segs.join("/");
+        .prop_map(|(absolute, segments)| {
+            let joined = segments.join("/");
             if absolute {
                 format!("/{joined}")
             } else {
@@ -39,11 +39,11 @@ fn pathish() -> impl Strategy<Value = String> {
 }
 
 /// `SRC[:DST[:mode]]`-shaped input: near-valid mounts with weird parts.
-fn mountish() -> impl Strategy<Value = String> {
+fn mount_like() -> impl Strategy<Value = String> {
     (
-        pathish(),
+        path_like(),
         prop::option::of((
-            pathish(),
+            path_like(),
             prop::option::of(prop::sample::select(&["ro", "rw", "RO", "junk", "", "ro "])),
         )),
     )
@@ -55,7 +55,7 @@ fn mountish() -> impl Strategy<Value = String> {
 }
 
 /// An IP-ish string: dotted quads, v6-ish, or plain junk.
-fn ipish() -> impl Strategy<Value = String> {
+fn ip_like() -> impl Strategy<Value = String> {
     prop_oneof![
         (0u16..=511, 0u16..=511, 0u16..=511, 0u16..=511)
             .prop_map(|(a, b, c, d)| format!("{a}.{b}.{c}.{d}")),
@@ -69,11 +69,11 @@ fn ipish() -> impl Strategy<Value = String> {
 
 /// `[IP:]HOST:GUEST[/PROTO]`-shaped input: fields joined by `:` with an
 /// optional `/proto` tail.
-fn publishish() -> impl Strategy<Value = String> {
+fn publish_like() -> impl Strategy<Value = String> {
     (
         prop::collection::vec(
             prop_oneof![
-                ipish(),
+                ip_like(),
                 (0u32..100_000).prop_map(|n| n.to_string()),
                 Just(String::new()),
             ],
@@ -108,7 +108,7 @@ proptest! {
     /// Near-valid mounts: on success both paths are absolute and the
     /// `Display` output re-parses to the same spec.
     #[test]
-    fn mount_spec_structured(s in mountish()) {
+    fn mount_spec_structured(s in mount_like()) {
         if let Ok(m) = MountSpec::from_str(&s) {
             prop_assert!(m.source.starts_with('/'));
             prop_assert!(m.target.starts_with('/'));
@@ -119,7 +119,7 @@ proptest! {
     /// Near-valid publishes: on success the ports are nonzero, the
     /// protocol is tcp/udp, the IP parses, and `Display` round-trips.
     #[test]
-    fn publish_spec_structured(s in publishish()) {
+    fn publish_spec_structured(s in publish_like()) {
         if let Ok(p) = PublishSpec::from_str(&s) {
             prop_assert!(p.host_port > 0 && p.guest_port > 0);
             prop_assert!(p.proto == "tcp" || p.proto == "udp");

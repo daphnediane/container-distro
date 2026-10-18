@@ -88,10 +88,10 @@ pub(super) fn with_preserved_unlocked<T>(f: impl FnOnce() -> Result<T>) -> Resul
     let dir = preserved_dir()?;
     unlock(&dir);
     let r = f();
-    let relock = set_locked(&dir, true);
+    let relock_result = set_locked(&dir, true);
     match r {
         Err(e) => Err(e),
-        Ok(v) => relock.map(|_| v),
+        Ok(v) => relock_result.map(|_| v),
     }
 }
 
@@ -101,10 +101,10 @@ pub(super) fn with_journal_root_unlocked<T>(f: impl FnOnce() -> Result<T>) -> Re
     let dir = journal_root()?;
     unlock(&dir);
     let r = f();
-    let relock = set_locked(&dir, true);
+    let relock_result = set_locked(&dir, true);
     match r {
         Err(e) => Err(e),
-        Ok(v) => relock.map(|_| v),
+        Ok(v) => relock_result.map(|_| v),
     }
 }
 
@@ -114,10 +114,10 @@ pub(super) fn with_journal_dir_unlocked<T>(name: &str, f: impl FnOnce() -> Resul
     let dir = journal_dir(name)?;
     unlock(&dir);
     let r = f();
-    let relock = set_locked(&dir, true);
+    let relock_result = set_locked(&dir, true);
     match r {
         Err(e) => Err(e),
-        Ok(v) => relock.map(|_| v),
+        Ok(v) => relock_result.map(|_| v),
     }
 }
 
@@ -482,7 +482,7 @@ mod tests {
                 res => break res,
             }
         };
-        assert!(probe.is_ok(), "relock probe failed: {probe:?}");
+        assert!(probe.is_ok(), "re-lock probe failed: {probe:?}");
         unlock(&spec_p);
     }
 }

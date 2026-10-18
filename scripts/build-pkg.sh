@@ -125,7 +125,7 @@ mkdir -p "$PAYLOAD/bin" "$PAYLOAD/share/doc/container-distro"
 cp "$R/container-distro" packaging/uninstall-container-distro.sh \
     packaging/update-container-distro.sh "$PAYLOAD/bin/"
 cp LICENSE THIRD-PARTY-NOTICES.yaml "$PAYLOAD/share/doc/container-distro/"
-# The vendored Microsoft manifest's license — not a crate, so
+# Microsoft WSL's license — not a crate, so
 # THIRD-PARTY-NOTICES.yaml doesn't cover it (#31).
 cp vendor/microsoft/LICENSE "$PAYLOAD/share/doc/container-distro/LICENSE-microsoft-wsl"
 # Everything else in the payload — man pages, completions, the `cm`

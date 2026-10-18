@@ -17,7 +17,7 @@ use proptest::string::string_regex;
 use std::str::FromStr;
 
 /// `A[:B]`-shaped input: numeric-ish fields joined by `:`.
-fn mappingish() -> impl Strategy<Value = String> {
+fn mapping_like() -> impl Strategy<Value = String> {
     prop::collection::vec(
         prop_oneof![
             (0u32..100_000).prop_map(|n| n.to_string()),
@@ -40,7 +40,7 @@ proptest! {
 
     /// Near-valid mappings: on success both ports are nonzero.
     #[test]
-    fn port_mapping_structured(s in mappingish()) {
+    fn port_mapping_structured(s in mapping_like()) {
         if let Ok(m) = PortMapping::from_str(&s) {
             prop_assert!(m.host > 0 && m.guest > 0);
         }
