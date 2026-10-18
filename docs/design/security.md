@@ -525,7 +525,7 @@ preference stores a package shouldn't normally reach.
 writes a distro's whole root filesystem through `distrofs`, a server
 started on demand as **guest root** and reached through a
 `--publish-socket` relay that every distro with `files` on carries
-([host-file-access]). Today's `fs get` hands the host user any guest
+([host-file-access]). As designed, `fs get` hands the host user any guest
 file, `/etc/shadow` included — the same reach as `container distro
 run --root` or `container cp`, which that user already has.
 
@@ -607,7 +607,7 @@ never ride `-e`/positional args either.
 - **Mitigations that exist:** the inherit form keeps values out of
   argv; upstream's `--env-file` (not yet surfaced — [#44]) removes argv
   exposure entirely, though the value still lands in the guest
-  environ. T13 already uses the safer pattern: the distrofs token
+  environ. The T13 design uses the safer pattern: the distrofs token
   reaches the guest via inherited env, never argv, and is scrubbed
   from the server's environment at start.
 - **Residuals:** env is a weak secret channel by nature — in-guest it
@@ -630,21 +630,48 @@ Numbered C1–C12 from the 2026-10-03 review; later findings continue
 the sequence. Status reflects the fix
 commits that follow this document.
 
-| #   | Severity   | Issue                                                                                                                                                  | Status                                                                                                                                                                                                                                                                   |
-| --- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| C1  | Medium     | `install-plugin` symlinks `bin/distro` → a user-writable binary; other users would exec it with their privileges                                       | **Fixed** -- binary is copied, not linked                                                                                                                                                                                                                                |
-| C2  | Medium     | `id`/`sysctl` spawned via `PATH` -- hijack → code exec as user                                                                                         | **Fixed** -- libc `getpwuid_r`/`getuid`/`getgid`/`sysctlbyname`; `container` prefers `/usr/local/bin/container`                                                                                                                                                          |
-| C3  | Medium     | `CONTAINER_USER`/`UID`/`GID`/`HOME` interpolated unvalidated into root-run shell code (`create-user.sh` sudoers path traversal, passwd-line injection) | **Fixed** -- charset checks in `create-user.sh` and `host_user()`                                                                                                                                                                                                        |
-| C4  | Medium     | `-d`/`-s`/`-t`/`--unregister` values passed unvalidated → flag smuggling into inner `container` CLI (`cm -t=-f` → `machine stop -f`)                   | **Fixed** -- `validate_name`/`validate_user` on all passthru args                                                                                                                                                                                                        |
-| C5  | Medium     | `distro export -o <dir>` hits upstream [apple/container#2325] -- `export` deletes an existing directory                                                | **Fixed** -- existing dirs rejected in `distro::export`                                                                                                                                                                                                                  |
-| C6  | Low        | Distro silently shadows a machine of the same name on `-d` (warning only in `cm -l`)                                                                   | **Fixed** -- resolution-time warning, both backends annotated in listings/info; creating a same-named pair is now refused everywhere (`create`/`import`/`catalog install`/`migrate`/`rename`, `cm --install/--import/--rename`), with `--force` as the deliberate opt-in |
-| C7  | Low        | `init -u` re-provisions on every boot: sudoers re-added, owner can't lock down their distro                                                            | **Fixed** -- per-user `/etc/.distro.user.*` sentinel; admin edits preserved                                                                                                                                                                                              |
-| C8  | Low        | Idle-PID1 loop doesn't reap zombies                                                                                                                    | **Fixed** -- bare `wait` reaps orphans reparented to PID 1                                                                                                                                                                                                               |
-| C9  | Low        | Forwarder: unbounded thread per connection, no timeouts                                                                                                | **Fixed** -- 64-conn semaphore cap; backlog queues excess (no idle timeout by design)                                                                                                                                                                                    |
-| C10 | Low        | `--automount` mounts every `/Volumes/*` rw (DMGs, USB, network shares); lowercase/`→`- collisions produce duplicate targets                            | **Partial** -- case preserved, target collisions deduped + warned, `--automount ro` available; rw-all-`/Volumes` remains an accepted opt-in                                                                                                                              |
-| C11 | Info       | `uninstall` check-then-delete TOCTOU; snapshot images cleaned by name prefix not label                                                                 | **Fixed** -- uninstall removes only files it installed; imported images carry a `distro` label cleanup matches                                                                                                                                                           |
-| C12 | Info (bug) | `resolve_shell` probe breaks under `machine run` re-eval → always falls back to `/bin/sh`                                                              | **Fixed** -- probe passed as one pre-joined string                                                                                                                                                                                                                       |
-| C13 | Medium     | Lock/write helpers followed symlinks: `chflags` unlocked a planted link's target; launcher/iTerm2 writes went through planted links                    | **Fixed** -- `lchflags`; launcher, iTerm2 and asset writes/chmods go through `O_NOFOLLOW`; tests target temp files, not `/etc/passwd`                                                                                                                                    |
+| #   | Severity   | Issue                                                                                                                                                  | Status      |
+| --- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------- |
+| C1  | Medium     | `install-plugin` symlinks `bin/distro` -> a user-writable binary; other users would exec it with their privileges                                      | **Fixed**   |
+| C2  | Medium     | `id`/`sysctl` spawned via `PATH` -- hijack -> code exec as user                                                                                        | **Fixed**   |
+| C3  | Medium     | `CONTAINER_USER`/`UID`/`GID`/`HOME` interpolated unvalidated into root-run shell code (`create-user.sh` sudoers path traversal, passwd-line injection) | **Fixed**   |
+| C4  | Medium     | `-d`/`-s`/`-t`/`--unregister` values passed unvalidated -> flag smuggling into the inner `container` CLI (`cm -t=-f` -> `machine stop -f`)             | **Fixed**   |
+| C5  | Medium     | `distro export -o <dir>` hits upstream [apple/container#2325] -- `export` deletes an existing directory                                                | **Fixed**   |
+| C6  | Low        | Distro silently shadows a machine of the same name on `-d` (warning only in `cm -l`)                                                                   | **Fixed**   |
+| C7  | Low        | `init -u` re-provisions on every boot: sudoers re-added, owner can't lock down their distro                                                            | **Fixed**   |
+| C8  | Low        | Idle-PID1 loop doesn't reap zombies                                                                                                                    | **Fixed**   |
+| C9  | Low        | Forwarder: unbounded thread per connection, no timeouts                                                                                                | **Fixed**   |
+| C10 | Low        | `--automount` mounts every `/Volumes/*` rw (DMGs, USB, network shares); lowercase/`->`-name collisions duplicate targets                               | **Partial** |
+| C11 | Info       | `uninstall` check-then-delete TOCTOU; snapshot images cleaned by name prefix not label                                                                 | **Fixed**   |
+| C12 | Info (bug) | `resolve_shell` probe breaks under `machine run` re-eval -> falls back to `/bin/sh`                                                                    | **Fixed**   |
+| C13 | Medium     | Lock/write helpers followed symlinks: `chflags` unlocked a planted link's target; launcher/iTerm2 writes went through planted links                    | **Fixed**   |
+
+Resolutions:
+
+- **C1:** binary is copied, not linked.
+- **C2:** libc `getpwuid_r`/`getuid`/`getgid`/`sysctlbyname`;
+  `container` prefers `/usr/local/bin/container`.
+- **C3:** charset checks in `create-user.sh` and `host_user()`.
+- **C4:** `validate_name`/`validate_user` on all passthru args.
+- **C5:** existing dirs rejected in `distro::export`.
+- **C6:** resolution-time warning, both backends annotated in
+  listings/info; same-name pairs refused on `create`/`import`/
+  `catalog install`/`migrate`/`rename` and `cm
+  --install`/`--import`/`--rename`, with `--force` as the deliberate
+  opt-in.
+- **C7:** per-user `/etc/.distro.user.*` sentinel; admin edits
+  preserved.
+- **C8:** bare `wait` reaps orphans reparented to PID 1.
+- **C9:** 64-conn semaphore cap; backlog queues excess (no idle
+  timeout by design).
+- **C10:** case preserved, target collisions deduped + warned,
+  `--automount ro` available; rw-all-`/Volumes` remains an accepted
+  opt-in.
+- **C11:** uninstall removes only files it installed; imported
+  images carry a `distro` label cleanup matches.
+- **C12:** probe passed as one pre-joined string.
+- **C13:** `lchflags`; launcher, iTerm2 and asset writes/chmods go
+  through `O_NOFOLLOW`; tests target temp files, not `/etc/passwd`.
 
 ## Risks introduced by gap-closing work
 

@@ -150,16 +150,16 @@ fake `wsl.exe`.
 
 Checked against a running `alpine` machine (`container` 1.5.x):
 
-| Requirement                        | Status today                                                                                                                                   |
-| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| Non-TTY exec with `--` passthrough | works -- exit codes propagate, stderr clean                                                                                                    |
-| stdin → guest                      | **needs `-i`**; without it guest stdin is closed -- see [exec-stdio]                                                                           |
-| stdout reliability                 | **racy** -- first writes dropped on either stream; see [exec-stdio]                                                                            |
-| argv fidelity                      | **not preserved** -- `machine run` shell-evals joined argv ([apple/container#1954]); single-quoted `bash -c '…'` survives the extra eval round |
-| `-l -v` WSL-format output          | **present** -- `cm -l -v` prints the exact `NAME STATE VERSION` table (`VERSION` = `2`)                                                        |
-| UTF-16LE list output               | absent -- only relevant on the Windows side anyway                                                                                             |
-| `-d`, `-s`, `-t`, `--unregister`   | all present and compatible                                                                                                                     |
-| `--list --online`                  | **present** -- `cm -l -o` prints the curated catalog (`NAME FRIENDLY NAME` table)                                                              |
+| Requirement                        | Status today                                                                                                                                     |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Non-TTY exec with `--` passthrough | works -- exit codes propagate, stderr clean                                                                                                      |
+| stdin -> guest                     | **needs `-i`**; without it guest stdin is closed -- see [exec-stdio]                                                                             |
+| stdout reliability                 | **racy** -- first writes dropped on either stream; see [exec-stdio]                                                                              |
+| argv fidelity                      | **not preserved** -- `machine run` shell-evals joined argv ([apple/container#1954]); single-quoted `bash -c '...'` survives the extra eval round |
+| `-l -v` WSL-format output          | **present** -- `cm -l -v` prints the exact `NAME STATE VERSION` table (`VERSION` = `2`)                                                          |
+| UTF-16LE list output               | absent -- only relevant on the Windows side anyway                                                                                               |
+| `-d`, `-s`, `-t`, `--unregister`   | all present and compatible                                                                                                                       |
+| `--list --online`                  | **present** -- `cm -l -o` prints the curated catalog (`NAME FRIENDLY NAME` table)                                                                |
 
 Details in [upstream-limitations] -- the headline for this use case:
 stdout attaches late and the **first write on either stream is

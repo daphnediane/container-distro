@@ -46,14 +46,14 @@ Key facts:
 
 ## Rung by rung: how low can `cm` go?
 
-| Level        | Interface                                                 | Language needed                                      | Still needs `container` installed? | API stability                                                                |
-| ------------ | --------------------------------------------------------- | ---------------------------------------------------- | ---------------------------------- | ---------------------------------------------------------------------------- |
-| L0 (current) | `container` CLI subprocess                                | Rust only                                            | yes                                | CLI backward compat within major versions                                    |
-| L1           | XPC to apiserver / machine plugin                         | any (XPC is a C API)                                 | yes                                | only `container-apiserver` XPC documented stable; plugin routes are internal |
-| L2           | `MachineAPIClient` / `ContainerAPIClient` Swift libraries | Swift (C shim for Rust)                              | yes                                | source-stable-ish, but exact-pin churn                                       |
-| L2.5         | third-party plugin (`libexec/container-plugins/`)         | any (CLI) / Swift or C ABI (daemon)                  | yes                                | plugin contract is internal but stable-shaped; used by Apple itself          |
-| L3           | `containerization` package directly                       | Swift (C shim for Rust)                              | **no**                             | pre-1.0; minor-version source stability only                                 |
-| L4           | Virtualization.framework / vmnet directly                 | Rust possible (`objc2-virtualization`) or Swift/ObjC | **no**                             | Apple framework -- stable, but huge scope                                    |
+| Level        | Interface                                           | Language needed                             | Still needs `container` installed? | API stability                                                            |
+| ------------ | --------------------------------------------------- | ------------------------------------------- | ---------------------------------- | ------------------------------------------------------------------------ |
+| L0 (current) | `container` CLI subprocess                          | Rust only                                   | yes                                | CLI backward compat within major versions                                |
+| L1           | XPC to apiserver / machine plugin                   | any (XPC is a C API)                        | yes                                | only `container-apiserver` XPC documented stable; plugin routes internal |
+| L2           | `MachineAPIClient` / `ContainerAPIClient` libraries | Swift (C shim for Rust)                     | yes                                | source-stable-ish, but exact-pin churn                                   |
+| L2.5         | third-party plugin (`libexec/container-plugins/`)   | any (CLI) / Swift or C ABI (daemon)         | yes                                | plugin contract internal but stable-shaped; used by Apple itself         |
+| L3           | `containerization` package directly                 | Swift (C shim for Rust)                     | **no**                             | pre-1.0; minor-version source stability only                             |
+| L4           | Virtualization.framework / vmnet directly           | Rust (`objc2-virtualization`) or Swift/ObjC | **no**                             | Apple framework -- stable, but huge scope                                |
 
 ## The plugin route (L2.5)
 

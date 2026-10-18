@@ -6,7 +6,7 @@
 Guest `distrofs` server over `--publish-socket`, FSKit `Distro
 Files.app` front-end; phased plan in [host-file-access].
 
-- [x] Phase 1: protocol, guest server, host client, `files` spec
+- [ ] Phase 1: protocol, guest server, host client, `files` spec
   field, `container distro fs` CLI, T13
 - [ ] Phase 2: FSKit spike, app + module + agent, signing
 - [ ] Phase 3: inotify events -> `DataCacheHandler` invalidation

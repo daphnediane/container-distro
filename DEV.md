@@ -77,11 +77,11 @@ shared library; `cm` is an alias script for `container-distro cli`:
 | Script                                | Purpose                                                                 |
 | ------------------------------------- | ----------------------------------------------------------------------- |
 | `scripts/install-local.sh`            | Maintainer reinstall: `cargo install --path .` + plugin + man pages     |
-| `scripts/dev-clean.sh`                | Remove all installed artifacts (pkg, cargo, manual) — `-n` previews     |
+| `scripts/dev-clean.sh`                | Remove all installed artifacts (pkg, cargo, manual) -- `-n` previews    |
 | `scripts/build-pkg.sh`                | Build the .pkg + binstall tarball + CycloneDX SBOM under `scratch/pkg/` |
 | `scripts/build-pkg-signed.sh`         | Signed+notarized build; sources `packaging/signing.local.conf`          |
-| `scripts/upload-release-artifacts.sh` | `vX.Y.Z` — upload the signed artifacts over the CI draft release        |
-| `scripts/check-legacy-adoption.sh`    | ≤0.4.2 → journaled upgrade check against the real state dir             |
+| `scripts/upload-release-artifacts.sh` | `vX.Y.Z` -- upload the signed artifacts over the CI draft release       |
+| `scripts/check-legacy-adoption.sh`    | <=0.4.2 -> journaled upgrade check against the real state dir           |
 | `scripts/make-fake-releases.sh`       | Fake GitHub-releases tree for `--update` testing (below)                |
 | `scripts/release-gate.sh`             | The step-1 release gate in one command                                  |
 

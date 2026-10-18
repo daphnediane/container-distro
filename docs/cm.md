@@ -391,14 +391,14 @@ prefer real port publishing (`--publish` at install, or
 
 ## Man page and `wsl` alias
 
-| Option                          | Description                                                                                                                                                         |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--install-man[=DIR]`           | Install `cm(1)` (generated from the CLI definition); bare, targets `share/man/man1` of the binary's install prefix -- pass `=DIR` when `cm` isn't under a `bin` dir |
-| `--uninstall-man[=DIR]`         | Remove `cm(1)` again -- only files still looking like our generated pages                                                                                           |
-| `--install-completions[=DIR]`   | Install bash/zsh/fish completions (generated from the CLI definition); bare, targets `share/` of the binary's install prefix                                        |
-| `--uninstall-completions[=DIR]` | Remove the completions again -- only files still looking like generated scripts                                                                                     |
-| `--install-alias NAME\|PATH`    | Write an alias script `NAME`/`PATH` running `cm` (e.g. `wsl`), plus `NAME(1)` → `cm.1` when the man page is installed                                               |
-| `--uninstall-alias NAME\|PATH`  | Remove an alias -- only one of our alias scripts (or a legacy symlink to this binary), and its man-page link                                                        |
+| Option | Description |
+| ------ | ----------- |
+| `--install-man[=DIR]` | Install `cm(1)` (generated from the CLI definition); bare targets `share/man/man1` of the install prefix -- `=DIR` when `cm` isn't under `bin/` |
+| `--uninstall-man[=DIR]` | Remove `cm(1)` again -- only files still looking like our generated pages |
+| `--install-completions[=DIR]` | Install bash/zsh/fish completions (generated from the CLI definition); bare targets `share/` of the install prefix |
+| `--uninstall-completions[=DIR]` | Remove the completions again -- only files still looking like generated scripts |
+| `--install-alias NAME\|PATH` | Write an alias script `NAME`/`PATH` running `cm` (e.g. `wsl`); adds `NAME(1)` -> `cm.1` when the man page is installed |
+| `--uninstall-alias NAME\|PATH` | Remove an alias -- only one of our alias scripts (or a legacy symlink), and its man-page link |
 
 See [install.md] for where the defaults land. `--install-alias` is
 idempotent: re-running it after `cm --install-man` adds just the missing
@@ -420,13 +420,13 @@ it is `--verbose`.
 
 ## Environment
 
-| Variable                        | Effect                                                                                                                 |
-| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `CM_BACKEND`                    | `machine` → ignore distros                                                                                             |
-| `CONTAINER_CLI`                 | `container` binary override — a non-default path/name needs `--dev` (default: `/usr/local/bin/container`, then `PATH`) |
-| `CONTAINER_DISTRO_RELEASES_URL` | Release-API override for `--update` — honored only with `--dev` (see DEV.md fixtures)                                  |
-| `SSH_AUTH_SOCK`                 | Forwarded into guests by the machine plugin / distro init                                                              |
-| `HOME`                          | Source of the shared home mount and the cwd mapping                                                                    |
+| Variable                        | Effect                                                                                                                  |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `CM_BACKEND`                    | `machine` -> ignore distros                                                                                             |
+| `CONTAINER_CLI`                 | `container` binary override -- a non-default path/name needs `--dev` (default: `/usr/local/bin/container`, then `PATH`) |
+| `CONTAINER_DISTRO_RELEASES_URL` | Release-API override for `--update` -- honored only with `--dev` (see DEV.md fixtures)                                  |
+| `SSH_AUTH_SOCK`                 | Forwarded into guests by the machine plugin / distro init                                                               |
+| `HOME`                          | Source of the shared home mount and the cwd mapping                                                                     |
 
 `--dev` is the opt-in for the test seams in that table — it exists so a
 variable planted in a shell profile can't redirect a privileged

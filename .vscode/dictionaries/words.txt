@@ -168,7 +168,9 @@ RDONLY
 RDWR
 recompiles
 redirector
+reformatters
 reimplementation
+relanded
 relatime
 relcheck
 relock

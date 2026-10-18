@@ -12,8 +12,7 @@ Written against `container` 1.5.0 (containerization 0.47.0) on
 macOS 27 / Xcode 27. Facts marked *verified* were checked by reading
 upstream source or by experiment; everything else is design intent.
 
-**Tracking:** [#27]. **Status:** Phase 1 shipped (`container distro
-fs`, security.md T13); Phase 2 (FSKit) next.
+**Tracking:** [#27].
 
 ## TL;DR
 
@@ -57,12 +56,22 @@ own VM rather than a namespace in one shared VM (which matters for
 
 ## What upstream gives us
 
-| Primitive                        | What it does                                                                                                                                                                                                                                                                                                      | Usable for us?                                                              |
-| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| `container copy` / `cp`          | One-shot file or tar transfer. The runtime helper asks `vminitd` (guest PID 1) to read/write under `/run/container/<id>/rootfs`, resolved with `openat2(RESOLVE_IN_ROOT\|RESOLVE_NO_MAGICLINKS)`; data rides a dedicated vsock connection. Running containers only; runs as guest root; single files land `0644`. | Fine for a `cp` command; no listing, no partial reads — can't back a mount. |
-| `--publish-socket host:guest`    | Guest listens, host connects. The runtime helper binds `host`; for each host connection it dials a guest vsock port and `vminitd` connects to `/run/container/<id>/rootfs/<guest>`. Host socket is created at start and removed at stop.                                                                          | **Yes — the transport.**                                                    |
-| `--volume <socket>:<guest>`      | A socket-typed volume source is relayed *into* the guest (`RuntimeService.swift`, the `mount.isSocket()` branch → `UnixSocketConfiguration(direction: .into)`).                                                                                                                                                   | Future: guest→host broker for distro-to-distro mounts.                      |
-| `ContainerClient.dial(id:port:)` | Host dials a guest vsock port. XPC-only (internal API), no CLI.                                                                                                                                                                                                                                                   | No — would tie us to private API.                                           |
+| Primitive                        | What it does                                                                             | Usable for us?                                                              |
+| -------------------------------- | ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `container copy` / `cp`          | One-shot file/tar transfer: `vminitd` reads/writes under `rootfs` over a dedicated vsock | Fine for a `cp` command; no listing, no partial reads -- can't back a mount |
+| `--publish-socket host:guest`    | Guest listens, host connects; per-connection vsock relay into `rootfs/<guest>`           | **Yes -- the transport.**                                                   |
+| `--volume <socket>:<guest>`      | A socket-typed volume source relayed *into* the guest                                    | Future guest->host broker for distro-to-distro mounts                       |
+| `ContainerClient.dial(id:port:)` | Host dials a guest vsock port; XPC-only, no CLI                                          | No -- private API                                                           |
+
+The mechanics: `cp` has the runtime helper ask `vminitd` (guest
+PID 1) to read/write under `/run/container/<id>/rootfs`, resolved
+with `openat2(RESOLVE_IN_ROOT|RESOLVE_NO_MAGICLINKS)` -- running
+containers only, guest root, single files land `0644`. For
+`--publish-socket` the helper binds `host` and `vminitd` connects
+to `/run/container/<id>/rootfs/<guest>` for each host connection;
+the host socket is created at start and removed at stop. The
+socket-volume path is `RuntimeService.swift`'s `mount.isSocket()`
+branch -> `UnixSocketConfiguration(direction: .into)`.
 
 *Verified by experiment* (`debian:latest`, `--network none`):
 
@@ -362,14 +371,14 @@ Recorded as **T13** in security.md (Phase 1); the substance:
 
 ## Phasing
 
-| Phase        | Scope                                                                                                                                                      | Exit criteria                                                                                                                                                                 |
-| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 0            | This document                                                                                                                                              | committed                                                                                                                                                                     |
-| 1 (done)     | shared `proto` + guest `distrofs` + host client; `files` spec field + `--publish-socket`; asset delivery; `container distro fs ls/stat/get/put/check`; T13 | `fs ls /` and a get/put round-trip on a running distro, including `--network none` and an amd64 distro; unit tests for framing, handshake, symlink rewriting, name validation |
-| 2            | FSKit spike, then app + appex + agent + C ABI; signing                                                                                                     | Finder browses and edits a distro; spike answers the open questions below                                                                                                     |
-| 3            | inotify events + `DataCacheHandler`                                                                                                                        | host sees guest-side edits without remount                                                                                                                                    |
-| 4            | `.pkg` payload, `cm --mount`, docs                                                                                                                         | release-gate passes with the app in the payload                                                                                                                               |
-| 5 (optional) | machines and not-yet-restarted distros via `container exec -i … distrofs serve --stdio`                                                                    | `fs ls` works on a machine (binary pushed with `container copy`)                                                                                                              |
+| Phase        | Scope                                                                                                             | Exit criteria                                                                      |
+| ------------ | ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| 0            | this document                                                                                                     | committed                                                                          |
+| 1            | shared `proto`, guest `distrofs`, host client; `files` spec + `--publish-socket`; asset delivery; `fs` verbs; T13 | get/put round-trip on a running distro (incl. `--network none`, amd64); unit tests |
+| 2            | FSKit spike, then app + appex + agent + C ABI; signing                                                            | Finder browses and edits a distro; spike answers the open questions below          |
+| 3            | inotify events + `DataCacheHandler`                                                                               | host sees guest-side edits without remount                                         |
+| 4            | `.pkg` payload, `cm --mount`, docs                                                                                | release-gate passes with the app in the payload                                    |
+| 5 (optional) | machines and not-yet-restarted distros via `container exec -i ... distrofs serve --stdio`                         | `fs ls` works on a machine (binary pushed with `container copy`)                   |
 
 ## Future extension: distro-to-distro mounts (`/mnt/wsl`)
 
@@ -418,17 +427,17 @@ almost entirely. Both are post-FSKit.
 
 ## Alternatives considered
 
-| Alternative                                                           | Why not (as the primary design)                                                                                                                                                                                        |
-| --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Wrap `container copy`                                                 | Running-only, root-only, one-shot; no listing or random access. Still a fine basis for a future `cm --cp`.                                                                                                             |
-| Read `rootfs.ext4` offline (pure-Rust ext4 reader)                    | Read-only, misses never-booted distros, reads upstream internals. Possibly useful for stopped distros later.                                                                                                           |
-| Loopback NFSv3 translator + `mount_nfs`                               | Pure Rust and quick, but AUTH_SYS on a loopback TCP port lets any local user mount it. Superseded by FSKit; would only return as a fallback for pre-26 macOS, which we don't support.                                  |
-| SMB / WebDAV / SFTP servers on the guest's vmnet IP                   | Reachable by every other guest on the subnet; absent under `--network none`; heavy per-distro packages.                                                                                                                |
-| File Provider extension (how Dropbox, Google Drive and OneDrive work) | Sync-and-materialize model under `~/Library/CloudStorage`; weak POSIX semantics (ownership, modes, symlinks, hard links) — fine for documents, wrong for a live Linux root.                                            |
-| macFUSE / FUSE-T + sshfs                                              | Third-party install and, for macFUSE, a kext or its own FSKit backend; FSKit directly is the first-party path.                                                                                                         |
-| 9P2000.L or SFTP as the wire protocol                                 | No change notifications (which macOS 27's cache API can use); 9P gives no guest-side reuse since the guest kernel lacks 9P anyway; SFTP's POSIX coverage is thin. A custom protocol is small because we own both ends. |
-| `ContainerClient.dial` vsock                                          | Internal XPC API, no CLI; would need Swift and track upstream internals.                                                                                                                                               |
-| Server started at boot by `init`                                      | A root daemon in every distro all the time, and interplay with systemd/openrc; on demand costs a ~100 ms exec per session.                                                                                             |
+| Alternative                                          | Why not (as the primary design)                                                                                                                         |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Wrap `container copy`                                | Running-only, root-only, one-shot; no listing or random access. Still a fine basis for a future `cm --cp`                                               |
+| Read `rootfs.ext4` offline (pure-Rust ext4 reader)   | Read-only, misses never-booted distros, reads upstream internals; maybe for stopped distros later                                                       |
+| Loopback NFSv3 translator + `mount_nfs`              | Quick and pure Rust, but AUTH_SYS on loopback TCP lets any local user mount it; superseded by FSKit (pre-26 macOS is unsupported anyway)                |
+| SMB / WebDAV / SFTP servers on the guest's vmnet IP  | Reachable by every guest on the subnet; absent under `--network none`; heavy per-distro packages                                                        |
+| File Provider extension (the Dropbox/OneDrive model) | Sync-and-materialize under `~/Library/CloudStorage`; weak POSIX semantics -- fine for documents, wrong for a live Linux root                            |
+| macFUSE / FUSE-T + sshfs                             | Third-party install (for macFUSE, a kext or its own FSKit backend); FSKit directly is the first-party path                                              |
+| 9P2000.L or SFTP as the wire protocol                | No change notifications; no guest-side reuse (the guest kernel lacks 9P); SFTP's POSIX coverage is thin. A custom protocol is small -- we own both ends |
+| `ContainerClient.dial` vsock                         | Internal XPC API, no CLI; would need Swift and track upstream internals                                                                                 |
+| Server started at boot by `init`                     | A root daemon in every distro all the time, plus systemd/openrc interplay; on demand costs ~100 ms exec per session                                     |
 
 ## Open questions (Phase 2 spike)
 
@@ -440,22 +449,5 @@ almost entirely. Both are post-FSKit.
   confirm no extra temporary-exception entitlement is needed.
 - A socket on a container-namespace tmpfs vs. the rootfs (see
   "not yet verified").
-
-Answered in Phase 1:
-
-- The runtime helper is Developer ID–signed by Apple's
-  Containerization team (`UPBK2H6LZM`, identifier
-  `com.apple.container.container-runtime-linux`) on the 1.5.0
-  installer; the peer check pins exactly that — container-distro
-  passes the requirement string to `distrofs --peer-requirement`
-  (`RUNTIME_REQUIREMENT` in `src/distrofs.rs`), and the distrofs
-  client enforces it against the connected peer's audit token.
-- While no server listens, the relay accepts the host connection and
-  then closes it (the client sees EOF during the handshake), so the
-  client retries for up to 10 s; trust failures (directory, leaf, peer
-  signature) are never retried.
-- Throughput: a 200 MiB `fs get` takes ~1.1 s end to end with release
-  builds (session start included) at 1 MiB `Read`s — not the
-  bottleneck for browsing; revisit for FSKit read-ahead.
 
 [#27]: https://github.com/daphnediane/container-distro/issues/27

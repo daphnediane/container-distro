@@ -47,13 +47,13 @@ Honoring covers a fixed set of named features, resolved per distro
 through the standard intent chain (`explicit` mode → `preset ∩ source`
 → empty default) and journaled as `wsl-conf`:
 
-| Feature     | `/etc/wsl.conf` keys honored                                                                                       |
-| ----------- | ------------------------------------------------------------------------------------------------------------------ |
-| `hostname`  | `[network] hostname` → `/etc/hostname` + `hostname(1)`                                                             |
-| `fstab`     | `[automount] mountFsTab` → `mount -a` unless `false`                                                               |
-| `init`      | `[boot] systemd` and `boot.openrc` → pick the guest's PID 1                                                        |
-| `command`   | `[boot] command` → `sh -c` as root, once per boot, before init                                                     |
-| `automount` | `[automount] enabled=false` → lower automount/home-mount to `none` at archive import (host-side, create-time only) |
+| Feature     | `/etc/wsl.conf` keys honored                                                                                        |
+| ----------- | ------------------------------------------------------------------------------------------------------------------- |
+| `hostname`  | `[network] hostname` -> `/etc/hostname` + `hostname(1)`                                                             |
+| `fstab`     | `[automount] mountFsTab` -> `mount -a` unless `false`                                                               |
+| `init`      | `[boot] systemd` and `boot.openrc` -> pick the guest's PID 1                                                        |
+| `command`   | `[boot] command` -> `sh -c` as root, once per boot, before init                                                     |
+| `automount` | `[automount] enabled=false` -> lower automount/home-mount to `none` at archive import (host-side, create-time only) |
 
 Flags: `--use-wsl-conf[=FEATURE,...|all|none]` allows (a bare flag
 means `all`), `--ignore-wsl-conf=FEATURE,...|all|none` denies, and
@@ -63,12 +63,12 @@ means `all`), `--ignore-wsl-conf=FEATURE,...|all|none` denies, and
 What the flags store is a **mode expression**, not the resolved list —
 the journaled `wsl-conf` intent serializes as:
 
-| Stored string         | Mode        | Resolves to                          | On feature growth                        |
-| --------------------- | ----------- | ------------------------------------ | ---------------------------------------- |
-| `fstab,hostname`      | `Only`      | exactly those features               | frozen                                   |
-| `none`                | `Only{}`    | nothing                              | frozen                                   |
-| `all`, `all,-command` | `AllExcept` | every feature except the `-` denials | living — new features join automatically |
-| `+hostname,-command`  | `Default`   | `(tier set ∪ allow) − deny`          | living, and follows `set --preset` moves |
+| Stored string         | Mode        | Resolves to                          | On feature growth                         |
+| --------------------- | ----------- | ------------------------------------ | ----------------------------------------- |
+| `fstab,hostname`      | `Only`      | exactly those features               | frozen                                    |
+| `none`                | `Only{}`    | nothing                              | frozen                                    |
+| `all`, `all,-command` | `AllExcept` | every feature except the `-` denials | living -- new features join automatically |
+| `+hostname,-command`  | `Default`   | `(tier set + allow) - deny`          | living, and follows `set --preset` moves  |
 
 How the flags pick the mode: an `all`/`none` keyword switches it —
 `--use all` or `--ignore none` → `AllExcept`, `--use none` or
@@ -134,31 +134,31 @@ exposure is an odd file in the journal, nothing more.
 
 `/etc/wsl.conf`:
 
-| Key                                                   | Verdict                                                                                                                    |
-| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `boot.systemd`                                        | honored (`init`)                                                                                                           |
-| `boot.openrc` (**extension**)                         | honored (`init`)                                                                                                           |
-| `boot.command`                                        | gated (`command`)                                                                                                          |
-| `boot.protectBinfmt`, `boot.initTimeout`              | not honored                                                                                                                |
-| `automount.mountFsTab`                                | honored (`fstab`)                                                                                                          |
-| `automount.enabled`                                   | honored lower-only (`automount`)                                                                                           |
-| `automount.root/options/ldconfig/cgroups`             | not honored                                                                                                                |
-| `network.hostname`                                    | honored (`hostname`)                                                                                                       |
-| `network.generateHosts`, `network.generateResolvConf` | not honored — vminitd synthesizes both before our init runs                                                                |
-| `interop.*`                                           | deferred — needs a `\\wsl$`-equivalent ([#27]); tracked separately                                                         |
-| `user.default`                                        | deferred — interacts with auto-provisioning (when should our user setup be skipped?); snapshots already capture it ([#29]) |
-| `gpu.*`, `time.*`                                     | not honored — no GPU passthrough; the VM clock is host-synced                                                              |
+| Key                                                   | Verdict                                                                                                                     |
+| ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `boot.systemd`                                        | honored (`init`)                                                                                                            |
+| `boot.openrc` (**extension**)                         | honored (`init`)                                                                                                            |
+| `boot.command`                                        | gated (`command`)                                                                                                           |
+| `boot.protectBinfmt`, `boot.initTimeout`              | not honored                                                                                                                 |
+| `automount.mountFsTab`                                | honored (`fstab`)                                                                                                           |
+| `automount.enabled`                                   | honored lower-only (`automount`)                                                                                            |
+| `automount.root/options/ldconfig/cgroups`             | not honored                                                                                                                 |
+| `network.hostname`                                    | honored (`hostname`)                                                                                                        |
+| `network.generateHosts`, `network.generateResolvConf` | not honored -- vminitd synthesizes both before our init runs                                                                |
+| `interop.*`                                           | deferred -- needs a `\\wsl$`-equivalent ([#27]); tracked separately                                                         |
+| `user.default`                                        | deferred -- interacts with auto-provisioning (when should our user setup be skipped?); snapshots already capture it ([#29]) |
+| `gpu.*`, `time.*`                                     | not honored -- no GPU passthrough; the VM clock is host-synced                                                              |
 
 `/etc/wsl-distribution.conf`:
 
-| Key                               | Verdict                                                                   |
-| --------------------------------- | ------------------------------------------------------------------------- |
-| `oobe.defaultName`                | honored — distro-name suggestion at `.wsl` import                         |
-| `oobe.defaultUid`                 | not honored — we provision the host account                               |
-| `oobe.command`                    | **not run** — deferred (account setup doesn't map; see security) ([#29])  |
-| `windowsterminal.enabled`         | honored — gates generated Terminal/iTerm2 profiles (default true) ([#30]) |
-| `windowsterminal.ProfileTemplate` | **not read** — deferred (WT-fragment styling doesn't map 1:1) ([#34])     |
-| `shortcut.*`                      | deferred — macOS launcher entries ([#33])                                 |
+| Key                               | Verdict                                                                    |
+| --------------------------------- | -------------------------------------------------------------------------- |
+| `oobe.defaultName`                | honored -- distro-name suggestion at `.wsl` import                         |
+| `oobe.defaultUid`                 | not honored -- we provision the host account                               |
+| `oobe.command`                    | **not run** -- deferred (account setup doesn't map; see security) ([#29])  |
+| `windowsterminal.enabled`         | honored -- gates generated Terminal/iTerm2 profiles (default true) ([#30]) |
+| `windowsterminal.ProfileTemplate` | **not read** -- deferred (WT-fragment styling doesn't map 1:1) ([#34])     |
+| `shortcut.*`                      | deferred -- macOS launcher entries ([#33])                                 |
 
 ### Rejected alternative: host-side file/directory mount
 

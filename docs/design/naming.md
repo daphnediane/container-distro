@@ -24,23 +24,46 @@ project domain, `io.github.<user>.<project>` is the usual choice.
 
 ## Where names persist
 
-| What                     | Where                                                                                                                                                                               | Derived from                                                                                                                                                              |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Distro marker label      | `<LABEL_PREFIX>.distro=<name>` on each distro container — the _logical_ name; the container's own id is ephemeral (see below)                                                       | `LABEL_PREFIX`                                                                                                                                                            |
-| Home-mount label         | `<LABEL_PREFIX>.home-mount=rw\|ro\|none`                                                                                                                                            | `LABEL_PREFIX`                                                                                                                                                            |
-| Admin label              | `<LABEL_PREFIX>.admin=true\|false\|never` (sudo/doas grant policy)                                                                                                                  | `LABEL_PREFIX`                                                                                                                                                            |
-| User label               | `<LABEL_PREFIX>.user=<name>:<uid>:<gid>`                                                                                                                                            | `LABEL_PREFIX`                                                                                                                                                            |
-| Automount label          | `<LABEL_PREFIX>.automount=rw\|ro\|none` -- how the distro auto-manages `/Volumes` mounts                                                                                            | `LABEL_PREFIX`                                                                                                                                                            |
-| State directory          | `~/Library/Application Support/<APP_NAME>/` (`default-distro`, `journalized` marker, legacy shared `sbin.distro*/` assets — all `uchg`-locked; see T6)                              | `APP_NAME`                                                                                                                                                                |
-| Journal directory        | `~/Library/Application Support/<APP_NAME>/distros/<name>/` (`spec.json` — the flock target — `rootfs.ext4`, and the distro's own `sbin.distro/` init assets; all `uchg`-locked)     | `APP_NAME`                                                                                                                                                                |
-| Plugin metadata          | `<prefix>/libexec/container-plugins/distro/` (`config.toml` with `author`, `abstract`; uninstall also cleans the `sbin.distro*/` assets pre-per-distro installs wrote there)        | `APP_NAME`                                                                                                                                                                |
-| Plugin / subcommand name | `container distro`, `bin/distro`                                                                                                                                                    | `plugin::PLUGIN_NAME`                                                                                                                                                     |
-| Packaged helpers         | `<prefix>/libexec/<APP_NAME>/` beside an install's `bin/` (the guest `distrofs` build; the plugin copy's prefix is its `distro/` dir) — located by `layout` from the running binary | `APP_NAME`                                                                                                                                                                |
-| File-access sockets      | `<Darwin user temp>/<APP_NAME>/s/<hash>.sock` (host end of each distro's relay); guest end `/var/lib/container-distro/distrofs.sock`                                                | `APP_NAME` (host), hard-coded `distrofs::proto` (guest)                                                                                                                   |
-| Snapshot / import images | `local/distro-<name>:imported-<sha256>` — a per-distro tag on the shared `local/rootfs:<sha256>` image; image labels `<LABEL_PREFIX>.imported-from=<tar                             | url>` and `<LABEL_PREFIX>.rootfs-sha256=<sha>` (pre-#32: `imported-<timestamp>` refs labeled `<LABEL_PREFIX>.distro=<name>`; plus pre-0.2 `:<timestamp>` `set` snapshots) | `LABEL_PREFIX` (labels), hard-coded `ops` (names) |
-| Machine import images    | `local/machine-<name>:imported-<sha256>` — the same pattern from `cm --import`; the shared `local/rootfs:<sha256>` tag dedupes across distros and machines                          | `LABEL_PREFIX` (labels), hard-coded `ops` (names)                                                                                                                         |
-| Export scratch label     | `<LABEL_PREFIX>.export-scratch=<machine>` on the short-lived scratch container `cm --export` creates for a machine export                                                           | `LABEL_PREFIX`                                                                                                                                                            |
-| In-guest files           | `/sbin.distro` mount, `/etc/.distro.initialized`, `/etc/.distro.user.<name>`, `/etc/.distro.admin.<name>`, `/etc/sudoers.d/<name>`, `/etc/doas.d/<name>.conf`                       | hard-coded in `spec`/assets                                                                                                                                               |
+| What                     | Where                                                                                                                     | Derived from                                     |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| Distro marker label      | `<LABEL_PREFIX>.distro=<name>` -- the distro's _logical_ name (the runtime container id is ephemeral; see below)          | `LABEL_PREFIX`                                   |
+| Home-mount label         | `<LABEL_PREFIX>.home-mount=rw\|ro\|none`                                                                                  | `LABEL_PREFIX`                                   |
+| Admin label              | `<LABEL_PREFIX>.admin=true\|false\|never` (sudo/doas grant policy)                                                        | `LABEL_PREFIX`                                   |
+| User label               | `<LABEL_PREFIX>.user=<name>:<uid>:<gid>`                                                                                  | `LABEL_PREFIX`                                   |
+| Automount label          | `<LABEL_PREFIX>.automount=rw\|ro\|none` -- how the distro auto-manages `/Volumes` mounts                                  | `LABEL_PREFIX`                                   |
+| State directory          | `~/Library/Application Support/<APP_NAME>/`                                                                               | `APP_NAME`                                       |
+| Journal directory        | `~/Library/Application Support/<APP_NAME>/distros/<name>/`                                                                | `APP_NAME`                                       |
+| Plugin metadata          | `<prefix>/libexec/container-plugins/distro/`                                                                              | `APP_NAME`                                       |
+| Plugin / subcommand name | `container distro`, `bin/distro`                                                                                          | `plugin::PLUGIN_NAME`                            |
+| Packaged helpers         | `<prefix>/libexec/<APP_NAME>/` beside an install's `bin/`                                                                 | `APP_NAME`                                       |
+| Leftover distrofs files  | `<prefix>/bin/distrofs`, `<prefix>/libexec/<APP_NAME>/distrofs-server-<arch>`                                             | `APP_NAME`, hard-coded `distrofs`                |
+| Distro import tag        | `local/distro-<name>:imported-<sha256>`                                                                                   | hard-coded `ops`                                 |
+| Machine import tag       | `local/machine-<name>:imported-<sha256>` (from `cm --import`)                                                             | hard-coded `ops`                                 |
+| Import image labels      | `<LABEL_PREFIX>.imported-from=<tar\|url>`, `<LABEL_PREFIX>.rootfs-sha256=<sha>`                                           | `LABEL_PREFIX`                                   |
+| Legacy snapshot refs     | `imported-<timestamp>` imports, `:<timestamp>` `set` snapshots                                                            | `LABEL_PREFIX` (label), hard-coded `ops` (names) |
+| Export scratch label     | `<LABEL_PREFIX>.export-scratch=<machine>` on the short-lived scratch container `cm --export` creates for a machine export | `LABEL_PREFIX`                                   |
+| In-guest mount           | `/sbin.distro`                                                                                                            | hard-coded in `spec`/assets                      |
+| In-guest sentinels       | `/etc/.distro.initialized`, `/etc/.distro.user.<name>`, `/etc/.distro.admin.<name>`                                       | hard-coded in `spec`/assets                      |
+| In-guest auth files      | `/etc/sudoers.d/<name>`, `/etc/doas.d/<name>.conf`                                                                        | hard-coded in `spec`/assets                      |
+
+The state directory holds `default-distro`, the `journalized` marker,
+and the legacy shared `sbin.distro*/` assets, all `uchg`-locked (see
+T6). Each journal directory holds `spec.json` — the flock target —
+`rootfs.ext4`, and the distro's own `sbin.distro/` init assets, also
+`uchg`-locked. The plugin `config.toml` carries `author` and `abstract`
+metadata; uninstall also cleans the `sbin.distro*/` assets that
+pre-per-distro installs wrote there. Packaged helpers are located by
+`layout` from the running binary; installs made while `container distro
+fs` was on main may also hold a `distrofs` client beside `bin/` and a
+`distrofs-server-<arch>` build under `libexec/<APP_NAME>/`, which
+uninstall removes (the plugin copy's prefix is its `distro/` dir).
+
+The `imported-<sha256>` tags are per-distro and per-machine tags on a
+single shared `local/rootfs:<sha256>` image, so identical rootfs
+imports deduplicate across distros and machines. The legacy refs
+predate that scheme: pre-#32 imports used `imported-<timestamp>` refs
+labeled `<LABEL_PREFIX>.distro=<name>`, and pre-0.2 `set` snapshots
+used `:<timestamp>` refs.
 
 The plugin subcommand (`container distro`) and the in-guest paths are
 user-facing and baked into existing containers. Renaming them is a

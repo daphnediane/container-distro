@@ -74,20 +74,22 @@ guest as roughly equivalent to code run on the host as you.
 
 ## Scoping down
 
-| Option                          | Effect                                                                                                                                                                          |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--home-mount ro` or `none`     | Shrink or remove the host share (machines: `container machine set home-mount=` + restart)                                                                                       |
-| `-v SRC:DST:ro,nosuid,nodev...` | Mount options on any share -- `ro` is host-enforced; `nosuid`/`nodev`/`noexec`/`noatime` etc. are guest-side mount flags (defense in depth -- guest root can remount them away) |
-| `--no-ssh`                      | No SSH-agent forwarding                                                                                                                                                         |
-| `--no-sudo`                     | Skip the sudo/doas grant -- future grants only; can't remove files already in a rootfs                                                                                          |
-| `--network none`                | No interface, DNS, or outbound (loopback only)                                                                                                                                  |
-| `--no-files`                    | Record intent against the host file-access relay (planned `container distro fs`)                                                                                                |
-| `--restricted` (`--untrusted`)  | All of the above at once -- see below                                                                                                                                           |
-| `--trusted`                     | The mirror preset: rw home, rw `/Volumes` automount, agent on                                                                                                                   |
+| Option | Effect |
+| ------ | ------ |
+| `--home-mount ro` or `none` | Shrink or remove the host share (machines: `container machine set home-mount=` + restart) |
+| `-v SRC:DST:ro,nosuid,...` | Mount options on a share -- `ro` is host-enforced; the rest are guest-side (below) |
+| `--no-ssh` | No SSH-agent forwarding |
+| `--no-sudo` | Skip the sudo/doas grant -- future grants only; can't remove files already in a rootfs |
+| `--network none` | No interface, DNS, or outbound (loopback only) |
+| `--no-files` | Record intent against the host file-access relay (planned `container distro fs`) |
+| `--restricted` (`--untrusted`) | All of the above at once -- see below |
+| `--trusted` | The mirror preset: rw home, rw `/Volumes` automount, agent on |
 
 `--automount` shares get `nosuid,nodev` automatically — `/Volumes` is
 data, so guest-created setuid binaries and device nodes there never
-function.
+function. The other mount flags (`nosuid`, `nodev`, `noexec`,
+`noatime`, ...) are guest-side — defense in depth, since guest root
+can remount them away.
 
 The other direction: `--trusted` is the mirror preset — rw home,
 `/Volumes` automounted rw, SSH agent forwarded — for images you'd
