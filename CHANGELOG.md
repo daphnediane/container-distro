@@ -45,6 +45,10 @@ docs/design/release.md.
   `containers/<id>/rootfs.ext4`); stopped machines report
   cpus/memory/platform from `machine inspect` and DISK from their
   plugin-state rootfs.
+- **TLS stack drops the distrusted emSign roots**: bumped
+  `rustls-webpki` to 0.103.16 and `webpki-root-certs` to 1.0.11 for
+  RUSTSEC-2026-0382/0383 — the removed root let paths through eMudhra
+  intermediates whose misgenerated private keys are now public.
 
 ## 0.8.0 -- 2026-10-15
 
