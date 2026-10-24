@@ -18,8 +18,14 @@
 #   PKG_SIGN_IDENTITY  signs the .pkg (default: "Developer ID Installer")
 #   NOTARY_PROFILE     notarytool keychain profile — when set, the signed
 #                      pkg is notarized and stapled
+#   GPG_KEY_ID         optional — an armored `gpg --detach-sign` .asc for
+#                      the tarball, next to its detached code signature
 # None are required: without them the outputs are unsigned, and the
-# docs' `sudo installer -pkg` / right-click-Open steps apply.
+# docs' `sudo installer -pkg` / right-click-Open steps apply. A signed
+# build also signs the tarball — a detached code signature (.sig) under
+# the same Developer ID Application identity as the binaries, verifiable
+# with `codesign --verify --detached=` (the tarball name is fixed by the
+# binstall metadata, so absent signature files mark the unsigned build).
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -211,15 +217,34 @@ step "cargo-binstall tarball"
 # { name }-{ target }-v{ version }.tar.gz with a matching inner dir —
 # the layout [package.metadata.binstall] in Cargo.toml advertises.
 TDIR="container-distro-$TARGET-v$version"
-rm -rf "$OUT/$TDIR" "$OUT/$TDIR.tar.gz"
+rm -rf "$OUT/$TDIR" "$OUT/$TDIR.tar.gz" \
+    "$OUT/$TDIR.tar.gz.sig" "$OUT/$TDIR.tar.gz.asc"
 mkdir -p "$OUT/$TDIR"
 cp "$R/container-distro" LICENSE THIRD-PARTY-NOTICES.yaml "$OUT/$TDIR/"
 cp vendor/microsoft/LICENSE "$OUT/$TDIR/LICENSE-microsoft-wsl"
 tar -czf "$OUT/$TDIR.tar.gz" -C "$OUT" "$TDIR"
 rm -rf "$OUT/$TDIR"
+# Signed builds give the tarball a detached code signature too — same
+# Developer ID Application identity as the binaries, timestamped like
+# they are. GPG_KEY_ID adds an armored `gpg --detach-sign` .asc on top
+# (a passphrase prompt via pinentry is expected on a cold agent).
+if [ -n "$APP_IDENTITY" ]; then
+    codesign --force --sign "$APP_IDENTITY" --timestamp \
+        --detached "$OUT/$TDIR.tar.gz.sig" "$OUT/$TDIR.tar.gz"
+fi
+if [ -n "${GPG_KEY_ID:-}" ]; then
+    command -v gpg >/dev/null || {
+        echo "GPG_KEY_ID is set but gpg isn't installed" >&2
+        exit 1
+    }
+    gpg --yes --armor --local-user "$GPG_KEY_ID" \
+        --output "$OUT/$TDIR.tar.gz.asc" --detach-sign "$OUT/$TDIR.tar.gz"
+fi
 
 step "summary"
 pkgutil --payload-files "$COMPONENT_DIR/$COMPONENT" | sed 's/^/  /'
 SUMFILES="$OUT/$PKGNAME.pkg $OUT/$TDIR.tar.gz"
+[ -f "$OUT/$TDIR.tar.gz.sig" ] && SUMFILES="$SUMFILES $OUT/$TDIR.tar.gz.sig"
+[ -f "$OUT/$TDIR.tar.gz.asc" ] && SUMFILES="$SUMFILES $OUT/$TDIR.tar.gz.asc"
 [ -f "$OUT/$SBOM.json" ] && SUMFILES="$SUMFILES $OUT/$SBOM.json"
 shasum -a 256 $SUMFILES | sed 's/^/  /'

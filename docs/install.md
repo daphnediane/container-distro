@@ -1,16 +1,18 @@
 # Building and installing
 
 The easiest path needs no toolchain at all: each [release] ships a
-macOS installer package:
+signed, notarized macOS installer package -- download
+`container-distro-<version>.pkg` and double-click it, or:
 
 ```bash
 sudo installer -pkg container-distro-<version>.pkg -target /
 ```
 
-(or double-click in Finder -- the release build is notarized; if you
-grabbed the `container-distro-<version>-unsigned.pkg` CI build,
-Gatekeeper needs right-click → Open or the same `installer` command;
-[packaging] covers the signing story). It lands under `/usr/local`: `bin/cm` and
+A published release normally only carries the signed build. CI and
+draft prereleases may still have
+`container-distro-<version>-unsigned.pkg`, which Gatekeeper installs
+with right-click → Open or the same `installer` command; [packaging]
+covers the signing story. It lands under `/usr/local`: `bin/cm` and
 `bin/container-distro`, the `container distro` plugin registration
 (`libexec/container-plugins/distro/`), man pages, bash/zsh/fish
 completions, `bin/uninstall-container-distro.sh`,
@@ -24,6 +26,33 @@ The release also carries a `cargo-binstall`-compatible tarball, so
 `cargo binstall container-distro` fetches prebuilt binaries instead of
 compiling (then run the same post-steps under [Install](#install)
 below -- binstall only drops the binaries into `$CARGO_HOME/bin`).
+
+## Verifying the download
+
+Signed builds sign the pkg, the binaries, and the tarball -- the
+tarball gets a detached code signature (`<file>.tar.gz.sig`) and a GPG
+signature (`<file>.tar.gz.asc`):
+
+```bash
+pkgutil --check-signature container-distro-<version>.pkg
+codesign --verify --detached=<file>.tar.gz.sig <file>.tar.gz
+gpg --verify <file>.tar.gz.asc <file>.tar.gz
+codesign -dv /usr/local/bin/container-distro   # after install
+```
+
+Expected signers:
+
+- `.pkg`: `Developer ID Installer: Daphne Pfister (YN9EG6U9PY)`;
+  detached `.sig` + binaries: `Developer ID Application: Daphne
+  Pfister (YN9EG6U9PY)`. The certificates chain to the Apple Root CA
+  (`codesign -dvvv --detached=` lists them under `Authority=`); the
+  signer name + team ID `YN9EG6U9PY` are the stable check.
+- `.asc`: GPG `29F8 7CBD 7DF6 A40E 2A44 7111 6F4D 7952 6D9B AEDF`
+  (Daphne Pfister <daphnediane@mac.com>). Fetch the public key with
+  `curl https://github.com/daphnediane.gpg | gpg --import` or `gpg
+  --keyserver keys.openpgp.org --recv-keys
+  29F87CBD7DF6A40E2A4471116F4D79526D9BAEDF` -- or import the copy in
+  [packaging/release-pubkey.asc](../packaging/release-pubkey.asc).
 
 ## Prerequisites
 
@@ -55,17 +84,17 @@ cargo test --workspace
 
 The repository is a single crate:
 
-| Path                        | Contents                                                            |
-| --------------------------- | ------------------------------------------------------------------- |
-| `src/`                      | `container_distro` library: `naming` plus the modules below         |
-| `src/container/`            | `container` CLI wrappers, its JSON types, the install offer         |
-| `src/catalog/`              | installable catalog, `.wsl` packages, verified downloads            |
-| `src/setup/`                | layout, plugin registration, man/completions, self-update, sudo     |
-| `src/util/`                 | table rendering, OCI layout writer, TCP forwarder                   |
-| `src/distro/`               | distro operations, one submodule each; `spec/` and `terminal`       |
-| `src/cli/commands/`         | `container-distro` subcommands, one file per larger subcommand      |
-| `src/cli/commands/cli/`     | the `cli` subcommand: `cm`'s WSL-compatible interface               |
-| `src/bin/`                  | the `container-distro` binary's one-line `main` (`cm` is an alias)  |
+| Path                    | Contents                                                           |
+| ----------------------- | ------------------------------------------------------------------ |
+| `src/`                  | `container_distro` library: `naming` plus the modules below        |
+| `src/container/`        | `container` CLI wrappers, its JSON types, the install offer        |
+| `src/catalog/`          | installable catalog, `.wsl` packages, verified downloads           |
+| `src/setup/`            | layout, plugin registration, man/completions, self-update, sudo    |
+| `src/util/`             | table rendering, OCI layout writer, TCP forwarder                  |
+| `src/distro/`           | distro operations, one submodule each; `spec/` and `terminal`      |
+| `src/cli/commands/`     | `container-distro` subcommands, one file per larger subcommand     |
+| `src/cli/commands/cli/` | the `cli` subcommand: `cm`'s WSL-compatible interface              |
+| `src/bin/`              | the `container-distro` binary's one-line `main` (`cm` is an alias) |
 
 ## Install
 

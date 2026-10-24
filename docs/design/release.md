@@ -133,8 +133,11 @@ The mechanical bits are driven by [cargo-release] (`cargo install
    replace it before publishing:
 
    ```bash
-   scripts/build-pkg-signed.sh                 # signs + notarizes/staples
-   scripts/upload-release-artifacts.sh vX.Y.Z  # replaces the unsigned asset
+   scripts/build-pkg-signed.sh                 # signs + notarizes/staples;
+                                               # tarball gets .sig (+.asc)
+   scripts/upload-release-artifacts.sh vX.Y.Z  # verifies them and swaps
+                                               # the signed pkg in for the
+                                               # unsigned asset
    ```
 
    Review the draft and publish it -- in the web

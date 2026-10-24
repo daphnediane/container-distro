@@ -178,7 +178,21 @@ uploads the result over the draft release:
 | ------------ | ------------------------------------------------------------ | --------------------------------------------- |
 | binaries     | `Developer ID Application` (hardened runtime, `--timestamp`) | `codesign`                                    |
 | `.pkg`       | `Developer ID Installer`                                     | `productbuild --sign`                         |
+| tarball      | `Developer ID Application` detached signature (`.sig`)       | `codesign --detached --timestamp`             |
+| tarball      | `GPG_KEY_ID` armored signature (`.asc`, optional)            | `gpg --detach-sign`                           |
 | notarization | `NOTARY_PROFILE` keychain profile                            | `notarytool submit --wait` + `stapler staple` |
+
+The tarball's `.sig` is a detached code signature of the archive
+itself -- `codesign` signs arbitrary files when `--detached` is used --
+so it verifies with `codesign --verify --detached=<file>.sig <file>`
+against the same Apple-PKI chain as the binaries inside; the `.asc`
+(GPG, configured via `GPG_KEY_ID` in `signing.local.conf`) covers the
+crowd that expects a PGP signature on a tarball. Both are listed as
+detached sidecars rather than renamed assets because the
+`{name}-{target}-v{version}.tar.gz` name is fixed by the binstall
+metadata. The README's Verifying downloads section lists the expected
+identities; `upload-release-artifacts.sh` verifies the `.sig` (and
+`.asc` when present) before uploading them over the draft release.
 
 Setup (a paid Developer Program membership is required; an "Apple
 Development" cert from a free account is *not* usable — Gatekeeper

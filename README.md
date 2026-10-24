@@ -37,15 +37,14 @@ parts:
 The release `.pkg` is the easiest install -- signed, no toolchain,
 and it lays down everything: the binary, the `cm` alias, the plugin registration,
 man pages, completions, and the update/uninstall scripts. Download
-`container-distro-<version>.pkg` from the [latest release], then:
+`container-distro-<version>.pkg` from the [latest release] and
+double-click it (`sudo installer -pkg` from a shell does the same --
+[docs/install.md](docs/install.md) has the details). Prereleases might
+have an `-unsigned` build, either wait for the signed release or you
+might need to right-click → Open to install.
 
-```bash
-sudo installer -pkg container-distro-<version>.pkg -target /
-```
-
-(or double-click the pkg -- an `-unsigned` CI build needs
-right-click → Open). `cargo install` and `cargo binstall` work too,
-followed by `install-all` for everything around the binary:
+`cargo install` and `cargo binstall` work too, followed by
+`install-all` for everything around the binary:
 
 ```bash
 cargo install --locked container-distro
@@ -71,6 +70,37 @@ cm --install-alias wsl          # alias `cm` as `wsl`
 
 If `container` services aren't running, `cm` runs
 `container system start` first -- matching WSL's transparent start.
+
+## Verifying downloads
+
+Signed builds sign the pkg, the binaries, and the tarball -- the
+tarball gets a detached code signature (`.tar.gz.sig`) and, when the
+maintainer's GPG key is configured, a `gpg --detach-sign` signature
+(`.tar.gz.asc`):
+
+| Artifact                     | Check                                            |
+| ---------------------------- | ------------------------------------------------ |
+| `.pkg`                       | `pkgutil --check-signature <file>.pkg`           |
+| `*.tar.gz` (code signature)  | `codesign --verify --detached=<file>.sig <file>` |
+| `*.tar.gz` (GPG)             | `gpg --verify <file>.asc <file>`                 |
+| extracted `container-distro` | `codesign -dv <path>`                            |
+
+Expected signers:
+
+- `.pkg`: `Developer ID Installer: Daphne Pfister (YN9EG6U9PY)`;
+  detached `.sig` + binaries: `Developer ID Application: Daphne
+  Pfister (YN9EG6U9PY)`. The certificates chain to the Apple Root CA
+  (`codesign -dvvv --detached=` lists them under `Authority=`); the
+  signer name + team ID `YN9EG6U9PY` are the stable check.
+- `.asc`: GPG `29F8 7CBD 7DF6 A40E 2A44 7111 6F4D 7952 6D9B AEDF`
+  (Daphne Pfister <daphnediane@mac.com>). Fetch the public key with
+  `curl https://github.com/daphnediane.gpg | gpg --import` or `gpg
+  --keyserver keys.openpgp.org --recv-keys
+  29F87CBD7DF6A40E2A4471116F4D79526D9BAEDF` -- or import the copy in
+  [packaging/release-pubkey.asc](packaging/release-pubkey.asc).
+
+`cm --update` runs the pkg checks itself (digest, Developer ID, same
+team) before installing.
 
 ## Upgrading
 

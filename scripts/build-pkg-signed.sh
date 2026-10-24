@@ -1,8 +1,9 @@
 #!/bin/sh
 # Maintainer signed+notarized build: sources the gitignored
 # packaging/signing.local.conf (see signing.conf.example) for the cert
-# identities + notary profile, then runs build-pkg.sh --sign. Upload
-# the result over the draft release with
+# identities + notary profile, then runs build-pkg.sh --sign. Setting
+# GPG_KEY_ID there additionally signs the binstall tarball with gpg.
+# Upload the result over the draft release with
 # scripts/upload-release-artifacts.sh (docs/design/release.md step 6).
 # Extra args pass through (--skip-build etc).
 set -eu
@@ -24,7 +25,9 @@ if [ -n "$missing" ]; then
     echo "unset in $CONF:$missing — update it (see packaging/signing.conf.example)" >&2
     exit 1
 fi
-export CODESIGN_IDENTITY PKG_SIGN_IDENTITY NOTARY_PROFILE
+# GPG_KEY_ID is optional — when set, build-pkg.sh emits the tarball's
+# .asc next to the code-signature .sig.
+export CODESIGN_IDENTITY PKG_SIGN_IDENTITY NOTARY_PROFILE GPG_KEY_ID
 
 # Official artifacts always carry the SBOM + embedded dep tree —
 # build-pkg.sh treats the plugins as optional, the signed path doesn't.

@@ -74,16 +74,16 @@ shared library; `cm` is an alias script for `container-distro cli`:
 
 ## Scripts
 
-| Script                                | Purpose                                                                 |
-| ------------------------------------- | ----------------------------------------------------------------------- |
-| `scripts/install-local.sh`            | Maintainer reinstall: `cargo install --path .` + plugin + man pages     |
-| `scripts/dev-clean.sh`                | Remove all installed artifacts (pkg, cargo, manual) -- `-n` previews    |
-| `scripts/build-pkg.sh`                | Build the .pkg + binstall tarball + CycloneDX SBOM under `scratch/pkg/` |
-| `scripts/build-pkg-signed.sh`         | Signed+notarized build; sources `packaging/signing.local.conf`          |
-| `scripts/upload-release-artifacts.sh` | `vX.Y.Z` -- upload the signed artifacts over the CI draft release       |
-| `scripts/check-legacy-adoption.sh`    | <=0.4.2 -> journaled upgrade check against the real state dir           |
-| `scripts/make-fake-releases.sh`       | Fake GitHub-releases tree for `--update` testing (below)                |
-| `scripts/release-gate.sh`             | The step-1 release gate in one command                                  |
+| Script                                | Purpose                                                                                    |
+| ------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `scripts/install-local.sh`            | Maintainer reinstall: `cargo install --path .` + plugin + man pages                        |
+| `scripts/dev-clean.sh`                | Remove all installed artifacts (pkg, cargo, manual) -- `-n` previews                       |
+| `scripts/build-pkg.sh`                | Build the .pkg + binstall tarball (+ its signatures) + CycloneDX SBOM under `scratch/pkg/` |
+| `scripts/build-pkg-signed.sh`         | Signed+notarized build; sources `packaging/signing.local.conf`                             |
+| `scripts/upload-release-artifacts.sh` | `vX.Y.Z` -- upload the signed artifacts over the CI draft release                          |
+| `scripts/check-legacy-adoption.sh`    | <=0.4.2 -> journaled upgrade check against the real state dir                              |
+| `scripts/make-fake-releases.sh`       | Fake GitHub-releases tree for `--update` testing (below)                                   |
+| `scripts/release-gate.sh`             | The step-1 release gate in one command                                                     |
 
 ## Packaging
 
@@ -99,10 +99,14 @@ skipped with a warning for ad-hoc builds; the official release path
 requires them. Signing is
 auto-detected from the keychain (`--sign` requires it, `--no-sign`
 forces the `-unsigned` artifact); `NOTARY_PROFILE` opts into
-notarize+staple. The signed path is `scripts/build-pkg-signed.sh`
+notarize+staple. Signed builds also emit a detached code signature for
+the tarball (`*.tar.gz.sig` — `codesign --verify --detached=<sig>
+<file>`), plus a GPG `.asc` when `GPG_KEY_ID` is set. The signed path
+is `scripts/build-pkg-signed.sh`
 (reading the gitignored `packaging/signing.local.conf` — see
 `signing.conf.example`), then `scripts/upload-release-artifacts.sh
-vX.Y.Z` swaps the CI-built unsigned asset on the draft release.
+vX.Y.Z` verifies the signatures and swaps the CI-built unsigned asset
+on the draft release for the signed one.
 
 The design — including the options considered and rejected — lives in
 [docs/design/packaging.md](docs/design/packaging.md).

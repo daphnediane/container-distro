@@ -10,6 +10,18 @@ docs/design/release.md.
 
 ## 0.9.0-dev
 
+### Added
+
+- **Signed release builds now sign the `cargo-binstall` tarball too**:
+  `build-pkg.sh --sign` emits a detached code signature
+  (`*.tar.gz.sig` — `codesign --verify --detached=<sig> <tarball>`,
+  same Developer ID Application identity as the binaries), and
+  `GPG_KEY_ID` in `packaging/signing.local.conf` adds a `gpg
+  --detach-sign` `.asc` on top. `upload-release-artifacts.sh` verifies
+  the signatures and uploads them with the signed pkg; the README's
+  new *Verifying downloads* section lists the expected signers
+  (Developer ID certs, team ID, GPG fingerprint).
+
 ### Changed
 
 - **`cm-vs-wsl.md` now catalogs the remaining WSL differences** —
