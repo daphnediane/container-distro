@@ -10,7 +10,7 @@ use super::create::ensure_running;
 use super::host::host_home;
 use super::journal::read_journal;
 use super::resolve;
-use crate::container::{self, container_cmd, ensure_started};
+use crate::container::{self, GuestEnv, container_cmd, ensure_started};
 use crate::distro::spec::{INIT_DIR, ResolvedSpec};
 use anyhow::Result;
 use std::env;
@@ -32,7 +32,7 @@ pub struct RunOpts {
     pub user: Option<String>,
     pub root: bool,
     pub workdir: Option<String>,
-    pub env: Vec<String>,
+    pub env: GuestEnv,
     pub shell: bool,
     pub no_login: bool,
     pub command: Vec<String>,
@@ -110,9 +110,7 @@ pub fn run_command(o: RunOpts) -> Result<Command> {
     if let Ok(term) = env::var("TERM") {
         cmd.arg("--env").arg(format!("TERM={term}"));
     }
-    for e in &o.env {
-        cmd.args(["--env", e]);
-    }
+    o.env.push_args(&mut cmd, "--env");
     cmd.arg(info.id());
     let init = format!("{INIT_DIR}/init");
     if o.command.is_empty() {

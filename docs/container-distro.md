@@ -209,9 +209,16 @@ Uses `container exec`, so argv is exact -- nothing is re-split.
 | `--root`        | Run as root                                                                       |
 | `-w, --workdir` | Guest working dir (default: cwd if it's under a shared path, else the guest home) |
 | `-e, --env`     | `KEY=VALUE` (or `KEY` to inherit), repeatable                                     |
+| `--env-file`    | File of `KEY=VALUE` lines, repeatable                                             |
 | `--shell`       | Run the command line through the user's shell (`$SHELL -c`)                       |
 | `--no-login`    | Interactive shell is non-login                                                    |
 | `CMD...`        | Command (default: a login shell)                                                  |
+
+`--env KEY` and `--env-file` are resolved by the `container` CLI, so
+values never appear on a command line; a literal `--env KEY=VALUE`
+does, and `run` warns when it looks like a credential. See
+[cm.md](cm.md#passing-secrets) for the Keychain recipe and the guest-side
+caveats.
 
 ### `list` (alias `ls`)
 

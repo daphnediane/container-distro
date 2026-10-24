@@ -148,7 +148,15 @@ pub(super) fn install(opts: &InstallOpts) -> Result<ExitCode> {
     if opts.no_launch {
         return Ok(ExitCode::SUCCESS);
     }
-    let mut cmd = container::run_command(Some(&name), None, None, &[], None, &[], ArgvMode::Shell);
+    let mut cmd = container::run_command(
+        Some(&name),
+        None,
+        None,
+        &container::GuestEnv::default(),
+        None,
+        &[],
+        ArgvMode::Shell,
+    );
     Err(anyhow::Error::from(cmd.exec()).context("failed to exec `container machine run`"))
 }
 

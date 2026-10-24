@@ -88,10 +88,11 @@ use `container exec`, so `-e` and `--` are both argv-exact there.
 
 WSL shares selected host environment variables via `WSLENV` (with
 path translation); there is no persistent env-passing equivalent --
-`cm --env KEY[=VALUE]` is per-invocation, and `KEY` alone inherits
-from the host (the `container` CLI resolves it, so the value never
-rides `cm`'s own command line). Where `--env` values are visible, and
-why secrets deserve a better channel, is [#44].
+`cm --env KEY[=VALUE]` and `--env-file FILE` are per-invocation; `KEY`
+alone and file contents are resolved by the `container` CLI, so those
+values never ride `cm`'s own command line. Where `--env` values are
+visible, and why secrets deserve a better channel, is covered in
+[cm.md](cm.md#passing-secrets) and [security.md](security.md).
 
 Known upstream issue: `container machine run` can drop the guest's
 very first write to stdout/stderr -- see
@@ -197,7 +198,6 @@ shell.
 
 [#27]: https://github.com/daphnediane/container-distro/issues/27
 [#43]: https://github.com/daphnediane/container-distro/issues/43
-[#44]: https://github.com/daphnediane/container-distro/issues/44
 [#45]: https://github.com/daphnediane/container-distro/issues/45
 [apple/container#1954]: https://github.com/apple/container/issues/1954
 [cm.md]: cm.md

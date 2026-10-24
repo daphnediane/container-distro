@@ -4,6 +4,7 @@
  * See LICENSE file for full license text
  */
 
+mod guest_env;
 pub(crate) mod install;
 mod machine;
 #[cfg(test)]
@@ -19,6 +20,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+pub use guest_env::{GuestEnv, looks_secret};
 pub use machine::{
     ArgvMode, guest_passwd_home, inspect_machine, inspect_machine_or_default, list_machines,
     machine_exec_command, machine_workdir, resolve_shell, run_command, shell_quote,

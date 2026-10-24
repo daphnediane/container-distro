@@ -592,29 +592,42 @@ run --root` or `container cp`, which that user already has.
 `cm --env K=V` forwards to `container exec --env K=V` / `machine run
 -e K=V`, so the literal value rides `cm`'s *and* the inner `container`
 process's argv — visible to other host users via `ps` for the
-process's lifetime. The bare `--env K` inherit form is materially
-safer: only the name crosses argv and the `container` CLI resolves it
-against the host environment itself. In the guest, values land in the
-exec'd process's environment — readable via `/proc/<pid>/environ` by
-the process's uid and by root, and inherited by every child.
-`/proc/cmdline` (the kernel command line) is unaffected, but
-`/proc/<pid>/cmdline` exposes command *arguments* — secrets should
-never ride `-e`/positional args either.
+process's lifetime (macOS shows every user's *arguments*; a process's
+*environment* is shown only to its own uid and root, so `ps -E`
+revealing an inherited `FOO=…` on the `container` process is the
+shell's environment leaking no further than it already does). The
+bare `--env K` inherit form and `--env-file FILE` are materially
+safer: only a name or a path crosses argv, and the `container` CLI
+resolves both itself (`Parser.allEnv` — host-side, in the CLI
+process, shipped to the API server over XPC; `--env-file` is read via
+`FileHandle`, so FIFOs and `<(…)` process substitution work). In the
+guest, values land in the exec'd process's environment — readable via
+`/proc/<pid>/environ` by the process's uid and by root, and inherited
+by every child. `/proc/cmdline` (the kernel command line) is
+unaffected, but `/proc/<pid>/cmdline` exposes command *arguments* —
+secrets should never ride `-e`/positional args either.
 
 - **Accepted because:** env passing is the standard exec mechanism and
   the exposure is the same one `docker exec -e` users already accept;
   nothing `cm` does is worse than upstream's flags it wraps.
-- **Mitigations that exist:** the inherit form keeps values out of
-  argv; upstream's `--env-file` (not yet surfaced — [#44]) removes argv
-  exposure entirely, though the value still lands in the guest
-  environ. The T13 design uses the safer pattern: the distrofs token
-  reaches the guest via inherited env, never argv, and is scrubbed
-  from the server's environment at start.
+- **Mitigations that exist:** the inherit form and `--env-file`
+  (surfaced on `cm` and `container distro run` — [#44]) keep values
+  off every argv, though they still land in the guest environ. A
+  literal `--env K=V` whose name or value looks like a credential
+  (`container::looks_secret`: `PASSWORD`/`TOKEN`/`SECRET`/`KEY`-style
+  name tokens minus reference suffixes like `_ID`/`_FILE`/`_PATH`,
+  PEM blocks, well-known token prefixes) draws a one-line stderr
+  warning naming the variable — never the value — and the two
+  alternatives. The T13 design uses the safer pattern: the distrofs
+  token reaches the guest via inherited env, never argv, and is
+  scrubbed from the server's environment at start.
 - **Residuals:** env is a weak secret channel by nature — in-guest it
   is uid-/root-readable for the process's whole lifetime and beyond
-  via children. Prefer credential *forwarding* (the T2 ssh-agent
-  pattern — the secret never enters the guest) or file delivery into a
-  `0600` guest path. [#44] tracks `--env-file` plus that audit.
+  via children. The warning is a heuristic nudge, not a guard: a
+  secret under an innocuous name passes silently. Prefer credential
+  *forwarding* (the T2 ssh-agent pattern — the secret never enters
+  the guest) or file delivery into a `0600` guest path; neither has a
+  `cm` affordance yet beyond `--env-file <(…)` for the delivery half.
 
 ## Restricted distros
 

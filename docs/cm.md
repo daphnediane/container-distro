@@ -69,12 +69,14 @@ even when a same-named distro exists.
 | `-- <cmd>`           | Run the remaining command line via the guest shell            |
 | bare positional args | Same as `--`: run through the guest shell                     |
 | `--env KEY=VALUE`    | Set an env var in the guest (`KEY` alone inherits the host's) |
+| `--env-file FILE`    | Read `KEY=VALUE` lines from FILE (repeatable)                 |
 | `--terminal`         | Open the distro in a Terminal.app window instead              |
 
 `--terminal` opens the distro's `.terminal` launcher — Terminal
 imports the profile (first time only) and runs the distro in a new
 window, so it's distro-only and the run-shaping flags don't apply
-(`--user`, `--cd`, `--shell-type`, `--env`, `-e`, a command line).
+(`--user`, `--cd`, `--shell-type`, `--env`, `--env-file`, `-e`, a
+command line).
 On `--install`/`--import` it replaces the console launch entirely.
 Asking to open is an opt-in — it pins `--terminal-profile` on the
 distro's journal. The first run asks macOS's permission for the app
@@ -84,6 +86,33 @@ fails with `-1743`.
 
 `--shell-type none` requires a command (it's the exec mode implied by
 `-e`); `--shell-type standard`/`login` choose the interactive shell.
+
+### Passing secrets
+
+A literal `--env KEY=VALUE` puts the value on `cm`'s command line
+and on the `container` process it becomes — visible to every user on
+the host via `ps` while it runs. `cm` warns when the name or value
+looks like a credential (`PASSWORD`, `*_TOKEN`, `*_SECRET*`, PEM
+blocks, `ghp_`/`sk-`-style token prefixes; `TERM=xterm` stays quiet).
+Two forms keep values off argv entirely, because the `container` CLI
+resolves them itself:
+
+- `--env KEY` (no `=`) inherits `KEY` from your shell — only the name
+  crosses the command line.
+- `--env-file FILE` reads `KEY=VALUE` lines from a file (`#` comments
+  and blank lines ignored; a bare `KEY` line inherits). FIFOs work,
+  so a secret can come from the Keychain without touching disk:
+
+  ```sh
+  cm -d dev --env-file <(printf 'API_TOKEN=%s\n' \
+      "$(security find-generic-password -s my-api -w)") -- ./deploy
+  ```
+
+Either way the value still lands in the guest process's environment
+(`/proc/<pid>/environ`, readable by that uid and by guest root, and
+inherited by children). For long-lived credentials prefer forwarding
+over delivery — the SSH agent socket is already in every guest — or a
+`0600` file in the guest. See [security.md](security.md).
 
 ### Shell vs. exec semantics (WSL rules)
 

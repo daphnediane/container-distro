@@ -15,7 +15,7 @@ use anyhow::{Context, Result, bail};
 use super::args::{Args, ShellType};
 use super::backend::Target;
 use super::target;
-use crate::container::{self, ArgvMode};
+use crate::container::{self, ArgvMode, GuestEnv};
 use crate::distro::{self, RunOpts};
 
 /// Replace this process with the machine's or distro's command, for TTY
@@ -32,16 +32,25 @@ pub(super) fn run_in_target(args: &Args) -> Result<ExitCode> {
     if let Some(u) = args.user.as_deref() {
         container::validate_user(u)?;
     }
+    let env = guest_env(args);
+    env.warn_secrets("cm");
     match target(args.distribution.as_deref(), args.backend())? {
-        Target::Machine(m) => run_in_machine(args, m.as_deref()),
-        Target::Distro(d) => run_in_distro(args, d),
+        Target::Machine(m) => run_in_machine(args, &env, m.as_deref()),
+        Target::Distro(d) => run_in_distro(args, env, d),
     }
 }
 
-fn run_in_machine(args: &Args, machine: Option<&str>) -> Result<ExitCode> {
+fn guest_env(args: &Args) -> GuestEnv {
+    GuestEnv {
+        vars: args.env.clone(),
+        files: args.env_file.clone(),
+    }
+}
+
+fn run_in_machine(args: &Args, env: &GuestEnv, machine: Option<&str>) -> Result<ExitCode> {
     if argv_mode(args) == ArgvMode::Exact
         && !args.command.is_empty()
-        && let Some(mut cmd) = machine_exec(args, machine)?
+        && let Some(mut cmd) = machine_exec(args, env, machine)?
     {
         return Err(anyhow::Error::from(cmd.exec()).context("failed to exec `container exec`"));
     }
@@ -55,7 +64,7 @@ fn run_in_machine(args: &Args, machine: Option<&str>) -> Result<ExitCode> {
         machine,
         args.user.as_deref(),
         args.cd.as_deref(),
-        &args.env,
+        env,
         executable.as_deref(),
         &args.command,
         argv_mode(args),
@@ -67,7 +76,11 @@ fn run_in_machine(args: &Args, machine: Option<&str>) -> Result<ExitCode> {
 /// `container exec`, avoiding `machine run`'s shell re-evaluation. Returns
 /// `None` to fall back to `machine run` (with per-argument quoting) when
 /// the inspect data lacks a container ID or user.
-fn machine_exec(args: &Args, machine: Option<&str>) -> Result<Option<std::process::Command>> {
+fn machine_exec(
+    args: &Args,
+    env: &GuestEnv,
+    machine: Option<&str>,
+) -> Result<Option<std::process::Command>> {
     let Ok(mut detail) = container::inspect_machine_or_default(machine) else {
         return Ok(None);
     };
@@ -76,7 +89,7 @@ fn machine_exec(args: &Args, machine: Option<&str>) -> Result<Option<std::proces
             Some(&detail.id),
             None,
             None,
-            &[],
+            &GuestEnv::default(),
             None,
             &["true".to_string()],
             ArgvMode::Shell,
@@ -95,7 +108,7 @@ fn machine_exec(args: &Args, machine: Option<&str>) -> Result<Option<std::proces
         &detail,
         args.user.as_deref(),
         args.cd.as_deref(),
-        &args.env,
+        env,
         &args.command,
         std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),
         cwd.as_deref(),
@@ -105,13 +118,13 @@ fn machine_exec(args: &Args, machine: Option<&str>) -> Result<Option<std::proces
 
 /// Distros run through `container exec`, which is argv-exact already; the
 /// WSL shell semantics of a bare / `--` command line map to `--shell`.
-fn run_in_distro(args: &Args, name: String) -> Result<ExitCode> {
+fn run_in_distro(args: &Args, env: GuestEnv, name: String) -> Result<ExitCode> {
     let mut cmd = distro::run_command(RunOpts {
         name: Some(name),
         user: args.user.clone(),
         root: false,
         workdir: args.cd.clone(),
-        env: args.env.clone(),
+        env,
         shell: argv_mode(args) == ArgvMode::Shell && !args.command.is_empty(),
         no_login: args.shell_type == Some(ShellType::Standard),
         command: args.command.clone(),

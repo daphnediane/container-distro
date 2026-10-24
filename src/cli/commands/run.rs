@@ -11,6 +11,7 @@ use std::os::unix::process::CommandExt;
 use anyhow::Result;
 use clap::Args;
 
+use crate::container::GuestEnv;
 use crate::distro::{self, RunOpts};
 
 #[derive(Debug, Args)]
@@ -36,6 +37,11 @@ pub struct RunArgs {
     /// Environment variable KEY=VALUE (or KEY to inherit)
     #[arg(short, long)]
     pub env: Vec<String>,
+    /// Read environment variables from FILE (KEY=VALUE lines; `#`
+    /// comments and blank lines ignored; a bare KEY inherits). Values
+    /// never appear on any command line
+    #[arg(long, value_name = "FILE")]
+    pub env_file: Vec<String>,
     /// Run the command line through the user's shell (`$SHELL -c`)
     #[arg(long)]
     pub shell: bool,
@@ -56,10 +62,16 @@ pub(super) fn run(args: RunArgs) -> Result<()> {
         root,
         workdir,
         env,
+        env_file,
         shell,
         no_login,
         command,
     } = args;
+    let env = GuestEnv {
+        vars: env,
+        files: env_file,
+    };
+    env.warn_secrets("container-distro");
     // The window `open` launched to import the profile: its job is
     // done once Terminal has loaded the settings set.
     if profile_launch

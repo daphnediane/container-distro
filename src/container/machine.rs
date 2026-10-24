@@ -6,6 +6,7 @@
 
 //! `container machine` helpers: listing, inspecting, and running commands in machines.
 
+use super::guest_env::GuestEnv;
 use super::types::{Machine, MachineDetail};
 use super::{container_cmd, json_output};
 use anyhow::{Context, Result};
@@ -69,7 +70,7 @@ pub fn machine_exec_command(
     detail: &MachineDetail,
     user: Option<&str>,
     cd: Option<&str>,
-    env_vars: &[String],
+    env_vars: &GuestEnv,
     command: &[String],
     tty: bool,
     cwd: Option<&Path>,
@@ -137,9 +138,7 @@ pub fn machine_exec_command(
     if let Ok(term) = env::var("TERM") {
         cmd.arg("--env").arg(format!("TERM={term}"));
     }
-    for e in env_vars {
-        cmd.args(["--env", e]);
-    }
+    env_vars.push_args(&mut cmd, "--env");
     cmd.arg(cid).args(command);
     Some(cmd)
 }
@@ -212,7 +211,7 @@ pub fn run_command(
     machine: Option<&str>,
     user: Option<&str>,
     cd: Option<&str>,
-    env_vars: &[String],
+    env_vars: &GuestEnv,
     executable: Option<&str>,
     command: &[String],
     mode: ArgvMode,
@@ -228,9 +227,7 @@ pub fn run_command(
     if let Some(d) = cd {
         cmd.args(["-w", d]);
     }
-    for e in env_vars {
-        cmd.args(["-e", e]);
-    }
+    env_vars.push_args(&mut cmd, "-e");
     if let Some(exe) = executable {
         cmd.arg("--").arg(shell_quote(exe));
     } else if !command.is_empty() {
@@ -257,7 +254,7 @@ fn shell_probe_command(machine: Option<&str>, user: Option<&str>) -> Command {
         machine,
         user,
         None,
-        &[],
+        &GuestEnv::default(),
         None,
         &[SHELL_PROBE.to_string()],
         ArgvMode::Shell,
@@ -303,11 +300,15 @@ mod tests {
     fn machine_exec_is_argv_exact() {
         let d = detail();
         let command = ["printf".to_string(), ":%s:".to_string(), "a b".to_string()];
+        let env = GuestEnv {
+            vars: vec!["FOO=bar".into()],
+            files: vec!["/tmp/secrets.env".into()],
+        };
         let cmd = machine_exec_command(
             &d,
             None,
             None,
-            &["FOO=bar".to_string()],
+            &env,
             &command,
             false,
             Some(Path::new("/tmp")),
@@ -318,7 +319,7 @@ mod tests {
         let joined = args.join(" ");
         assert!(joined.starts_with("exec -i --user 1027:20 --env HOME=/home/daphnediane"));
         assert!(joined.contains("--workdir /home/daphnediane"));
-        assert!(joined.contains("--env FOO=bar"));
+        assert!(joined.contains("--env-file /tmp/secrets.env --env FOO=bar"));
         assert_eq!(
             &args[args.len() - 4..],
             ["alpine-730439", "printf", ":%s:", "a b"]
@@ -330,7 +331,17 @@ mod tests {
         let mut d = detail();
         d.container_id = None;
         assert!(
-            machine_exec_command(&d, None, None, &[], &["ls".into()], false, None, None).is_none()
+            machine_exec_command(
+                &d,
+                None,
+                None,
+                &GuestEnv::default(),
+                &["ls".into()],
+                false,
+                None,
+                None
+            )
+            .is_none()
         );
     }
 
@@ -340,7 +351,10 @@ mod tests {
             Some("dev"),
             Some("root"),
             Some("/tmp"),
-            &["FOO=bar".to_string()],
+            &GuestEnv {
+                vars: vec!["FOO=bar".into()],
+                files: vec!["x.env".into()],
+            },
             None,
             &["ls".to_string(), "-la".to_string()],
             ArgvMode::Shell,
@@ -352,22 +366,52 @@ mod tests {
         assert_eq!(
             args,
             [
-                "machine", "run", "-i", "-n", "dev", "-u", "root", "-w", "/tmp", "-e", "FOO=bar",
-                "--", "ls", "-la"
+                "machine",
+                "run",
+                "-i",
+                "-n",
+                "dev",
+                "-u",
+                "root",
+                "-w",
+                "/tmp",
+                "--env-file",
+                "x.env",
+                "-e",
+                "FOO=bar",
+                "--",
+                "ls",
+                "-la"
             ]
         );
     }
 
     #[test]
     fn run_command_bare_shell() {
-        let cmd = run_command(None, None, None, &[], None, &[], ArgvMode::Shell);
+        let cmd = run_command(
+            None,
+            None,
+            None,
+            &GuestEnv::default(),
+            None,
+            &[],
+            ArgvMode::Shell,
+        );
         assert_eq!(args_of(&cmd), ["machine", "run", "-i"]);
     }
 
     #[test]
     fn run_command_exact_quotes_each_arg() {
         let command = ["printf".to_string(), ":%s:".to_string(), "a b".to_string()];
-        let cmd = run_command(None, None, None, &[], None, &command, ArgvMode::Exact);
+        let cmd = run_command(
+            None,
+            None,
+            None,
+            &GuestEnv::default(),
+            None,
+            &command,
+            ArgvMode::Exact,
+        );
         assert_eq!(
             args_of(&cmd),
             ["machine", "run", "-i", "--", "'printf'", "':%s:'", "'a b'"]

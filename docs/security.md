@@ -57,13 +57,14 @@ guest as roughly equivalent to code run on the host as you.
   unless you want LAN-reachable services; a `0.0.0.0` bind changes
   exposure for *other* machines too.
 - **Whatever you pass with `--env`.** A `cm --env K=V` value rides
-  `cm`'s and the inner `container` process's argv (briefly visible to
-  other host users via `ps`), then lives in the guest process's
+  `cm`'s and the inner `container` process's argv (visible to other
+  host users via `ps` while it runs -- `cm` warns when the entry
+  looks like a credential), then lives in the guest process's
   environment -- `/proc/<pid>/environ`, readable by that uid and
-  root, and inherited by children. `--env K` alone is safer (the
-  `container` CLI resolves it host-side; only the name crosses argv),
-  but for real secrets prefer a file delivered at `0600` or agent
-  forwarding over env entirely.
+  root, and inherited by children. `--env K` alone and `--env-file`
+  keep values off every argv (the `container` CLI resolves both
+  host-side), but for real secrets prefer a file delivered at `0600`
+  or agent forwarding over env entirely. See [cm.md](cm.md#passing-secrets).
 - **Imported rootfses get all of the above** — except the home share,
   which defaults to `none`. `container distro
   import`, `cm --install --from-file`, and catalog `.wsl` installs

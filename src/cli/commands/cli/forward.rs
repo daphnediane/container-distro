@@ -32,7 +32,7 @@ fn machine_ip(machine: Option<&str>) -> Result<(String, IpAddr)> {
             Some(&m.id),
             None,
             None,
-            &[],
+            &container::GuestEnv::default(),
             None,
             &["true".to_string()],
             ArgvMode::Shell,

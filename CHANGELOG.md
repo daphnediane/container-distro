@@ -21,6 +21,18 @@ docs/design/release.md.
   the signatures and uploads them with the signed pkg; the README's
   new *Verifying downloads* section lists the expected signers
   (Developer ID certs, team ID, GPG fingerprint).
+- **`cm --env-file FILE` and `container distro run --env-file FILE`**
+  (#44): pass through upstream's env-file support (`KEY=VALUE` lines,
+  `#` comments, bare `KEY` inherits; repeatable). The `container` CLI
+  reads the file itself, so values never appear on any command line —
+  and FIFOs work, so `--env-file <(printf 'TOKEN=%s\n' "$(security
+  find-generic-password -s svc -w)")` pulls a secret straight from
+  the Keychain. A literal `--env KEY=VALUE` whose name or value looks
+  like a credential (`PASSWORD`, `*_TOKEN`, PEM blocks, `ghp_`/`sk-`
+  prefixes...) now draws a one-line warning naming the variable, with
+  the argv-free alternatives; `docs/cm.md` has a *Passing secrets*
+  section and `security.md` T14 records exactly where `--env` values
+  are visible.
 
 ### Changed
 

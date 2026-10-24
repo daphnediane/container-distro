@@ -215,7 +215,7 @@ pub fn import_machine(name: &str, file: &Path, arch: Option<Arch>, force: bool) 
             Some(name),
             None,
             None,
-            &[],
+            &container::GuestEnv::default(),
             None,
             &["true".to_string()],
             ArgvMode::Shell,

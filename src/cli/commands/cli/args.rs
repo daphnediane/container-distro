@@ -171,6 +171,12 @@ pub struct Args {
     #[arg(long = "env", value_name = "KEY=VALUE")]
     pub env: Vec<String>,
 
+    /// Read environment variables from FILE (key=value lines; `#`
+    /// comments and blank lines ignored; a bare key inherits). Values
+    /// never appear on any command line
+    #[arg(long = "env-file", value_name = "FILE")]
+    pub env_file: Vec<String>,
+
     /// List container machines
     #[arg(short = 'l', long = "list")]
     pub list: bool,
@@ -851,6 +857,9 @@ impl Args {
         if !self.env.is_empty() {
             bad.push("--env");
         }
+        if !self.env_file.is_empty() {
+            bad.push("--env-file");
+        }
         if !self.command.is_empty() {
             bad.push("a command line");
         }
@@ -868,10 +877,11 @@ impl Args {
             && (self.user.is_some()
                 || self.cd.is_some()
                 || self.shell_type.is_some()
-                || !self.env.is_empty())
+                || !self.env.is_empty()
+                || !self.env_file.is_empty())
         {
             bail!(
-                "--terminal launches the distro's profile; --user, --cd, --shell-type, and --env don't apply"
+                "--terminal launches the distro's profile; --user, --cd, --shell-type, --env, and --env-file don't apply"
             );
         }
         if self.command.is_empty() {
