@@ -42,4 +42,7 @@ fi
 step "WSL catalog freshness"
 scripts/check-catalog-freshness.sh
 
+step "container version currency"
+scripts/check-container-version.sh
+
 printf '\nrelease gate: all checks passed\n'

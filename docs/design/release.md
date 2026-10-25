@@ -64,12 +64,14 @@ The mechanical bits are driven by [cargo-release] (`cargo install
    each gets fixed in this release, re-milestoned/deferred, or
    consciously shipped around -- don't tag with release-scoped work
    silently open. (Today that's `1.0` gating the 1.0 release; interim
-   minors have no milestone and skip this.) If `container`'s minor version
-   changed since the
-   last release, first re-verify the appRoot internals we depend on
-   ([Version gating]) and extend `VERIFIED_CONTAINER_MINOR` plus the
-   install-offer pin (`PINNED_CONTAINER_VERSION`, `PKG_SHA256`) once
-   verified.
+   minors have no milestone and skip this.) The gate's
+   container-version check compares the *latest upstream*
+   `apple/container` release against `VERIFIED_CONTAINER_MINOR` and
+   `PINNED_CONTAINER_VERSION` — not just the installed version, so a
+   release that dropped mid-cycle can't slip through. If it fails,
+   re-verify the appRoot internals we depend on ([Version gating])
+   and extend `VERIFIED_CONTAINER_MINOR` plus the install-offer pin
+   (`PINNED_CONTAINER_VERSION`, `PKG_SHA256`) once verified.
 
    Then run the **legacy adoption check**,
    `scripts/check-legacy-adoption.sh`, against the real state dir and
