@@ -11,7 +11,7 @@ rules, signing, patch-release flow on `release/X.Y` — lives in
 
 1. Confirm `Cargo.toml` is at `X.Y.Z-dev` and the tree is on `main` (for a patch release, `release/X.Y` — see release.md § Patch releases).
 2. Run `scripts/release-gate.sh`, then `scripts/check-legacy-adoption.sh` (needs `container` running). Confirm `docs/work/` lists only still-open work (prune links to issues closed this cycle) and user-facing docs match what shipped. Sweep the release's GitHub milestone for open issues (`gh issue list --milestone <name> --state open`) — fix, re-milestone, or consciously defer each before tagging (only `1.0` exists today; interim minors skip this).
-3. In `CHANGELOG.md` rename `## X.Y.Z-dev` to `## X.Y.Z -- YYYY-MM-DD`, then audit `git log --oneline v<prev>..HEAD` — add entries for anything that landed without one, and note which `[#N]` issues the cycle resolves for step 7.
+3. In `CHANGELOG.md` rename `## X.Y.Z-dev` to `## X.Y.Z -- YYYY-MM-DD`, then audit `git log --oneline v<prev>..HEAD` — add entries for anything that landed without one, note which `[#N]` issues the cycle resolves for step 7, and open with a `### Highlights` block when the release has headline changes or a headline reason to ship.
 4. Commit per `.devin/rules/comment-file.md` (`cargo release` needs a clean tree), then:
 
    ```bash

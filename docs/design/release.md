@@ -233,13 +233,16 @@ git branch release/X.Y vX.Y.0
 
 `CHANGELOG.md` (repo root) records user-facing changes per release,
 newest first -- `## X.Y.Z -- YYYY-MM-DD` sections grouped Added /
-Changed / Fixed. The top section is the running draft for the
-in-flight release, titled `## X.Y.Z-dev` after the dev version in
-`Cargo.toml`: entries land there as work completes -- a finished
-`docs/work/` item's file is deleted and recorded in the dev section in
-the same commit, and user-facing work that was never a work item gets
-an entry directly. At release time the `-dev` heading is renamed to
-`## X.Y.Z -- YYYY-MM-DD` and the section is audited against the commit
+Changed / Fixed. When the cycle has headline changes -- or a headline
+reason to ship, like a security bump driving the release -- the
+section opens with a `### Highlights` block naming them. The top
+section is the running draft for the in-flight release, titled
+`## X.Y.Z-dev` after the dev version in `Cargo.toml`: entries land
+there as work completes -- a finished `docs/work/` item's file is
+deleted and recorded in the dev section in the same commit, and
+user-facing work that was never a work item gets an entry directly. At
+release time the `-dev` heading is renamed to `## X.Y.Z -- YYYY-MM-DD`
+and the section is audited against the commit
 log for anything missed, so the changelog stays the permanent record
 and `docs/work/` stays a list of work that remains.
 

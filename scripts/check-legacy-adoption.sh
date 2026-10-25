@@ -23,7 +23,8 @@
 #   OLD_ROOT     its cargo-install root (default scratch/old-$OLD_VERSION;
 #                recreate with `cargo install --locked
 #                container-distro@$OLD_VERSION --root $OLD_ROOT`)
-#   NEW_DIR      dir holding the new cm/container-distro (target/debug)
+#   NEW_DIR      dir holding the new container-distro (target/debug);
+#                `cm` runs as `container-distro cli`
 #   IMAGE        image for the test distros (alpine:latest)
 #   PREFIX       distro-name prefix (relcheck)
 set -eu
@@ -37,7 +38,7 @@ OLD_ROOT=${OLD_ROOT:-scratch/old-$OLD_VERSION}
 OLDCD=$OLD_ROOT/bin/container-distro
 NEW_DIR=${NEW_DIR:-target/debug}
 NEWCD=$NEW_DIR/container-distro
-NEWCM=$NEW_DIR/cm
+NEWCM() { "$NEWCD" cli "$@"; }   # `cm` is an alias for `container-distro cli`
 IMAGE=${IMAGE:-alpine:latest}
 PREFIX=${PREFIX:-relcheck}
 
@@ -83,7 +84,7 @@ step "preflight"
 command -v container >/dev/null 2>&1 || [ -x /usr/local/bin/container ] ||
     fail "container CLI not found"
 cargo build --bins
-[ -x "$NEWCD" ] && [ -x "$NEWCM" ] || fail "cargo build did not produce $NEW_DIR binaries"
+[ -x "$NEWCD" ] || fail "cargo build did not produce $NEWCD"
 cleanup # leftovers from an aborted run
 
 step "A: auto-adoption of a stopped pre-journal distro"
@@ -104,7 +105,7 @@ need_locked "$MARKER"
 "$NEWCD" set "$A" --cpus 2
 grep -F '"cpus": 2' "$JOURNALS/$A/spec.json" >/dev/null ||
     fail "set did not re-journal $A"
-"$NEWCM" -l | grep -F "$A" >/dev/null || fail "cm -l does not list adopted $A"
+NEWCM -l | grep -F "$A" >/dev/null || fail "cm -l does not list adopted $A"
 
 step "B: explicit adopt of a running pre-journal distro"
 "$OLDCD" create -n "$B" "$IMAGE" # 0.4.2 create boots -- adoption lands on a live container
@@ -113,7 +114,7 @@ if refuse=$("$NEWCD" run -n "$B" -- true 2>&1); then
 fi
 echo "$refuse" | grep -F "predates journaled state" >/dev/null ||
     { echo "$refuse"; fail "wrong refusal for $B"; }
-"$NEWCM" --migrate "$B" | grep -F "adopted" >/dev/null ||
+NEWCM --migrate "$B" | grep -F "adopted" >/dev/null ||
     fail "cm --migrate did not adopt $B"
 runout=$("$NEWCD" run -n "$B" -- true 2>&1) || { echo "$runout"; fail "adopted $B does not run"; }
 echo "$runout" | grep -F "drifted" >/dev/null &&

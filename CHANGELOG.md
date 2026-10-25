@@ -8,7 +8,20 @@ entries directly. At release time the `-dev` heading is renamed to
 `## X.Y.Z -- YYYY-MM-DD` and audited against the commit log -- see
 docs/design/release.md.
 
-## 0.9.0-dev
+## 0.9.0 -- 2026-10-24
+
+### Highlights
+
+- **TLS root store picks up the emSign distrust**: this release exists
+  to ship `rustls-webpki` 0.103.16 and `webpki-root-certs` 1.0.11,
+  which remove the emSign roots whose misgenerated private keys are
+  now public (RUSTSEC-2026-0382/0383) — details under Fixed.
+- **`cm --env-file`**: pass secrets to the guest without putting them
+  on any command line — including straight from the Keychain via a
+  FIFO — and a warning now names `--env` entries that look like
+  credentials.
+- **Signed release builds cover the binstall tarball** too, and the
+  README lists the expected signers for out-of-band verification.
 
 ### Added
 
