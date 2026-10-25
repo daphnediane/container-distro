@@ -94,7 +94,7 @@ pub fn container_cmd() -> Command {
 /// verified, so bump it together with `VERIFIED_CONTAINER_MINOR` (and
 /// `PKG_SHA256` in install.rs) once the new release's layout checks
 /// out — docs/design/container-internals.md "version gating".
-pub const PINNED_CONTAINER_VERSION: &str = "1.5.0";
+pub const PINNED_CONTAINER_VERSION: &str = "1.6.1";
 
 /// `name` looked up on `PATH` — the first match that is a file.
 pub(crate) fn find_on_path(name: &Path) -> Option<PathBuf> {
@@ -181,7 +181,7 @@ pub fn container_version() -> Option<String> {
 /// `containers/<id>/runtime-configuration.json` and its
 /// `options.rootFsOverride`. Extended as new `container` minors are
 /// verified — a release-checklist step (docs/design/release.md).
-pub const VERIFIED_CONTAINER_MINOR: &[&str] = &["1.5"];
+pub const VERIFIED_CONTAINER_MINOR: &[&str] = &["1.5", "1.6"];
 
 /// Warn (once per process) when the `container` daemon is not a version
 /// whose appRoot internals we have verified. Code paths that read or
