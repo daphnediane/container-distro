@@ -22,7 +22,7 @@ parts:
 
 - **macOS 26 or later** on Apple silicon -- the floor for Apple's
   `container` itself.
-- Apple's [`container`] CLI. Built and verified against **1.5.0**; if
+- Apple's [`container`] CLI. Built and verified against **1.5.x–1.6.x**; if
   it's missing, an interactive `cm`/`container-distro` offers to
   download the signed installer (SHA-256-pinned;
   `CONTAINER_DISTRO_NO_INSTALL_OFFER=1` opts out). Newer releases run

@@ -6,7 +6,7 @@ read -- and one writes -- state that is *not* a public interface. This
 document inventories every assumption we make about `container` and
 `container machine` internals: what we rely on, where the code relies on
 it, and what breaks when upstream changes it. Verified against
-`container` 1.5.x; see [Version gating].
+`container` 1.5.x and 1.6.x; see [Version gating].
 
 Risk tiers used below:
 
@@ -283,7 +283,7 @@ storage -- not a promised interface. Call sites are marked with
 
 ## Version gating
 
-`VERIFIED_CONTAINER_MINOR = ["1.5"]` (`src/container/mod.rs`) records the
+`VERIFIED_CONTAINER_MINOR = ["1.5", "1.6"]` (`src/container/mod.rs`) records the
 `major.minor` versions whose appRoot internals we've verified. Any code
 that reads or writes `appRoot` contents -- `container_disk_usage`,
 `container_dir`/`preserve_rootfs`/`restore_rootfs`/`set_rootfs_override`,
