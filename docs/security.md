@@ -58,8 +58,8 @@ guest as roughly equivalent to code run on the host as you.
   exposure for *other* machines too.
 - **Whatever you pass with `--env`.** A `cm --env K=V` value rides
   `cm`'s and the inner `container` process's argv (visible to other
-  host users via `ps` while it runs -- `cm` warns when the entry
-  looks like a credential), then lives in the guest process's
+  host users via `ps` while it runs -- `cm` warns interactively when
+  the entry looks like a credential), then lives in the guest process's
   environment -- `/proc/<pid>/environ`, readable by that uid and
   root, and inherited by children. `--env K` alone and `--env-file`
   keep values off every argv (the `container` CLI resolves both

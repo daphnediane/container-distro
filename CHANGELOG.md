@@ -17,6 +17,13 @@ docs/design/release.md.
   pin is also the compatibility ceiling, so a behind-pin install gets
   a one-line pointer at the current upstream release.
 
+### Changed
+
+- **The `--env KEY=VALUE` secret-on-argv warning is interactive
+  only** — it fires when stderr is a terminal and stays out of
+  scripts and pipelines, where a heuristic nudge with no opt-out
+  would only add noise to captured output.
+
 ## 0.9.1 -- 2026-10-24
 
 ### Changed

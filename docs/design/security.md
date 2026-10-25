@@ -618,7 +618,14 @@ secrets should never ride `-e`/positional args either.
   name tokens minus reference suffixes like `_ID`/`_FILE`/`_PATH`,
   PEM blocks, well-known token prefixes) draws a one-line stderr
   warning naming the variable — never the value — and the two
-  alternatives. The T13 design uses the safer pattern: the distrofs
+  alternatives, only when stderr is a terminal: the heuristic has
+  false positives and no opt-out, so a script's captured stderr
+  shouldn't carry it, and a command in a script was almost certainly
+  tried by hand first. CodeQL's `rust/cleartext-logging` flags that
+  stderr write; reviewed and dismissed as a false positive ([#49]) —
+  the sink receives names only by construction, and naming is what
+  makes the nudge actionable.
+  The T13 design uses the safer pattern: the distrofs
   token reaches the guest via inherited env, never argv, and is
   scrubbed from the server's environment at start.
 - **Residuals:** env is a weak secret channel by nature — in-guest it
@@ -771,6 +778,7 @@ Each open gap adds attack surface; flagging the traps up front.
 [#27]: https://github.com/daphnediane/container-distro/issues/27
 [#34]: https://github.com/daphnediane/container-distro/issues/34
 [#44]: https://github.com/daphnediane/container-distro/issues/44
+[#49]: https://github.com/daphnediane/container-distro/issues/49
 [apple/container#2325]: https://github.com/apple/container/issues/2325
 [configuration-files]: notes/configuration-files.md
 [gui-apps]: notes/gui-apps.md

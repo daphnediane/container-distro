@@ -91,9 +91,11 @@ fails with `-1743`.
 
 A literal `--env KEY=VALUE` puts the value on `cm`'s command line
 and on the `container` process it becomes — visible to every user on
-the host via `ps` while it runs. `cm` warns when the name or value
-looks like a credential (`PASSWORD`, `*_TOKEN`, `*_SECRET*`, PEM
-blocks, `ghp_`/`sk-`-style token prefixes; `TERM=xterm` stays quiet).
+the host via `ps` while it runs. When stderr is a terminal, `cm`
+warns when the name or value looks like a credential (`PASSWORD`,
+`*_TOKEN`, `*_SECRET*`, PEM blocks, `ghp_`/`sk-`-style token
+prefixes; `TERM=xterm` stays quiet). Scripts and pipelines don't get
+the line — it's a heuristic nudge, not a guard.
 Two forms keep values off argv entirely, because the `container` CLI
 resolves them itself:
 

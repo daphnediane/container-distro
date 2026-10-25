@@ -216,7 +216,7 @@ Uses `container exec`, so argv is exact -- nothing is re-split.
 
 `--env KEY` and `--env-file` are resolved by the `container` CLI, so
 values never appear on a command line; a literal `--env KEY=VALUE`
-does, and `run` warns when it looks like a credential. See
+does, and `run` warns interactively when it looks like a credential. See
 [cm.md](cm.md#passing-secrets) for the Keychain recipe and the guest-side
 caveats.
 

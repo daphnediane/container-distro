@@ -7,6 +7,7 @@
 //! Environment handed to a guest process: `--env` entries and
 //! `--env-file` paths, plus the "is that a secret on argv?" nudge.
 
+use std::io::IsTerminal;
 use std::process::Command;
 
 /// `--env`/`--env-file` arguments for `container exec` and `machine run`.
@@ -66,7 +67,14 @@ impl GuestEnv {
 
     /// One stderr line per invocation naming the suspicious entries
     /// (never their values) and the two argv-free alternatives.
+    ///
+    /// Interactive only: the heuristic has false positives and no
+    /// opt-out, so a script's captured stderr shouldn't carry it —
+    /// the command was almost certainly tried by hand first.
     pub fn warn_secrets(&self, prog: &str) {
+        if !std::io::stderr().is_terminal() {
+            return;
+        }
         let names = self.secret_literals();
         if names.is_empty() {
             return;
