@@ -46,9 +46,9 @@ Co-Authored-By: Devin (SWE-2) <158243242+devin-ai-integration[bot]@users.noreply
 
 ## GitHub Issues
 
-Any issue filed on this project by an AI agent must end with an
-attribution line identifying the agent and model, placed after the body
-content and separated by a horizontal rule:
+Any issue or comment posted on this project's tracker by an AI agent
+must end with an attribution line identifying the agent and model,
+placed after the body content and separated by a horizontal rule:
 
 ```
 ---
