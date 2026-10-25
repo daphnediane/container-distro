@@ -73,10 +73,9 @@ If `container` services aren't running, `cm` runs
 
 ## Verifying downloads
 
-Signed builds sign the pkg, the binaries, and the tarball -- the
-tarball gets a detached code signature (`.tar.gz.sig`) and, when the
-maintainer's GPG key is configured, a `gpg --detach-sign` signature
-(`.tar.gz.asc`):
+Signed release builds sign the pkg, the binaries, and the release
+tarball -- the tarball gets a detached code signature
+(`.tar.gz.sig`) and a `gpg --detach-sign` signature (`.tar.gz.asc`):
 
 | Artifact                     | Check                                            |
 | ---------------------------- | ------------------------------------------------ |
@@ -198,7 +197,7 @@ container-distro`).
 | [docs/cm-vs-wsl.md](docs/cm-vs-wsl.md)                 | Behavioral differences from `wsl.exe`                          |
 | [docs/machine-vs-distro.md](docs/machine-vs-distro.md) | `container machine` vs `container distro` -- which to use      |
 | [docs/security.md](docs/security.md)                   | Security model: not a sandbox, `--restricted`, scoping down    |
-| [SECURITY.md](SECURITY.md)                             | Reporting vulnerabilities (draft, pre-1.0)                     |
+| [SECURITY.md](SECURITY.md)                             | Reporting vulnerabilities                                      |
 | [docs/work/](docs/work/)                               | Roadmap and open items                                         |
 | [docs/design/](docs/design/)                           | Architecture and design documents                              |
 

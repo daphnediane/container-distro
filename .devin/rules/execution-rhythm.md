@@ -21,6 +21,9 @@ description: Guidelines for implementing work items and plan phases
 
 Maintain a running log at `.devin/progress.md` (git-ignored — do not commit it):
 
+- **Start it before doing the work**: on a new prompt, create or update
+  the log *before* making changes — a session should never reach the
+  commit point with an empty log
 - Record each user prompt (verbatim or summarized) and the status of planned work for it
 - Update statuses as work proceeds: pending → in progress → done/blocked
 - The commit-changes and amend-changes skills examine and clear this log after each commit

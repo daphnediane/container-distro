@@ -759,8 +759,9 @@ Each open gap adds attack surface; flagging the traps up front.
 7. C8 (PID 1 zombie reaping), C11 (uninstall TOCTOU / prefix cleanup) --
    **done**; C10's rw-all-`/Volumes` surface stays an accepted opt-in
    trade-off
-8. Nudge semi-trusted workloads off rw home shares (T1) -- **open**
-   ([#19])
+8. Nudge semi-trusted workloads off rw home shares (T1) -- **done**
+   ([#19]): ad-hoc install paths default to `--home-mount none`; the
+   catalog path keeps `rw`
 9. Adopt the machine model's anti-persistence defenses for distros --
    **done**: stopped distros are journal + disk under `plugin-state/
    container-distro/`, materialized fresh at every start ([#18])

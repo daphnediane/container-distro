@@ -1,16 +1,17 @@
 # Security Policy
 
-> **Draft.** `container-distro` is pre-1.0 with a single maintainer;
-> this policy is adopted ahead of need. Anything marked `[TODO]` is a
-> placeholder for response expectations and disclosure details.
+`container-distro` is a single-maintainer project; reports are handled
+on a best-effort basis.
 
 ## Supported Versions
 
-The project is pre-1.0: only the latest release receives fixes, and
-there are no backports to older versions.
+Fixes land on `main` and may be backported to the latest release line
+when the next release isn't out yet; older releases are not
+maintained.
 
 | Version        | Supported |
 | -------------- | --------- |
+| `main`         | yes       |
 | latest release | yes       |
 | older releases | no        |
 
@@ -24,7 +25,7 @@ the repository's **Security** tab and choose **Report a
 vulnerability**.
 
 If that isn't available to you, or you get no response within
-[TODO: N] days, open a public issue that says only "I have a security
+7 days, open a public issue that says only "I have a security
 report to share privately" -- no details -- and the maintainer will
 reach out.
 
@@ -36,8 +37,8 @@ Including as much of the following as you can helps triage:
 - steps to reproduce, or a proof of concept
 - the impact -- what an attacker gains that they shouldn't have
 
-Response expectations: **[TODO: acknowledgement / fix timelines --
-currently best-effort]**.
+Response expectations: this is a hobby project with no guaranteed
+timelines -- reports are triaged as maintainer time allows.
 
 ## Scope
 
@@ -59,9 +60,10 @@ private channel above is fine.
 
 ## Disclosure
 
-[TODO: coordinated-disclosure policy -- e.g. fix released before any
-public advisory, expected embargo window, whether reporters are
-credited]
+The intent is to ship a fix before any public advisory -- a quiet fix
+release usually resolves the report. Reporters are credited in the
+advisory and release notes unless they ask not to be; there is no
+bounty program.
 
 ## Attribution
 

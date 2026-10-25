@@ -22,7 +22,8 @@ docs/design/release.md.
 - **The `--env KEY=VALUE` secret-on-argv warning is interactive
   only** — it fires when stderr is a terminal and stays out of
   scripts and pipelines, where a heuristic nudge with no opt-out
-  would only add noise to captured output.
+  would only add noise to captured output. Flagged by CodeQL's
+  `rust/cleartext-logging` rule.
 
 ## 0.9.1 -- 2026-10-24
 
