@@ -154,13 +154,18 @@ it. Options weighed:
 ## Signing and notarization
 
 CI has no keychain, so the workflow's build produces
-`container-distro-<version>-unsigned.pkg` — Apple's own
-`container` releases use the same signed/unsigned naming pair. The
-signed pkg (`container-distro-<version>.pkg`) is produced by running
-`scripts/build-pkg.sh` on the cert-holding machine and uploading it
-over the draft release: `productsign` on the CI artifact is *not*
-enough — it would sign the outer pkg but leave the binaries unsigned,
-which notarization rejects.
+`container-distro-<version>-unsigned.pkg` and
+`container-distro-<target>-v<version>-unsigned.tar.gz` — Apple's own
+`container` releases use the same signed/unsigned naming pair for the
+pkg, and the tarball follows it. Mangling the names means the
+canonical assets only ever appear in their final signed form: a
+signed upload adds assets rather than mutating ones already on the
+release, even if an unsigned build got published. The signed pkg
+(`container-distro-<version>.pkg`) and canonical tarball are produced
+by running `scripts/build-pkg.sh` on the cert-holding machine and
+uploading them over the draft release: `productsign` on the CI
+artifact is *not* enough — it would sign the outer pkg but leave the
+binaries unsigned, which notarization rejects.
 
 Even unsigned or unnotarized, the pkg installs via `sudo installer
 -pkg` or right-click → Open (Gatekeeper), and tarball binaries aren't
@@ -187,12 +192,25 @@ itself -- `codesign` signs arbitrary files when `--detached` is used --
 so it verifies with `codesign --verify --detached=<file>.sig <file>`
 against the same Apple-PKI chain as the binaries inside; the `.asc`
 (GPG, configured via `GPG_KEY_ID` in `signing.local.conf`) covers the
-crowd that expects a PGP signature on a tarball. Both are listed as
-detached sidecars rather than renamed assets because the
+crowd that expects a PGP signature on a tarball. Both are detached
+sidecars of the canonical tarball — the
 `{name}-{target}-v{version}.tar.gz` name is fixed by the binstall
-metadata. The README's Verifying downloads section lists the expected
-identities; `upload-release-artifacts.sh` verifies the `.sig` (and
-`.asc` when present) before uploading them over the draft release.
+metadata, which is also why unsigned builds mangle the archive name
+(`-unsigned.tar.gz`) instead of shipping the canonical name unsigned
+(`cargo binstall` then falls back to building from source — an
+unsigned tarball isn't worth presenting as canonical). The README's
+Verifying downloads section lists the expected identities;
+`upload-release-artifacts.sh` verifies the `.sig` (and `.asc` when
+present) before uploading them over the draft release, and deletes
+the `-unsigned` pkg and tarball the CI build attached. Two provenance
+guards close the loop (#50): a `build-pkg.sh` run that will sign
+doesn't build the checkout at all — it re-enters itself inside a
+`git worktree` of the `v<version>` tag under `scratch/`, so
+uncommitted changes and a checkout moved mid-build can't contaminate
+signed artifacts (`--allow-dirty` signs the working tree for test
+builds; unsigned runs build in place with a warning) — and
+`upload-release-artifacts.sh` refuses to touch a release that is no
+longer a draft.
 
 Setup (a paid Developer Program membership is required; an "Apple
 Development" cert from a free account is *not* usable — Gatekeeper

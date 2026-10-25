@@ -98,15 +98,19 @@ the binaries embed their dep tree in a `.dep-v0` section —
 skipped with a warning for ad-hoc builds; the official release path
 requires them. Signing is
 auto-detected from the keychain (`--sign` requires it, `--no-sign`
-forces the `-unsigned` artifact); `NOTARY_PROFILE` opts into
+forces the `-unsigned` artifacts — pkg and tarball alike, so the
+canonical names only ever ship signed); a build that will sign builds
+a `git worktree` of the release tag under `scratch/` so the source
+can't move mid-build (`--allow-dirty` signs the working tree for test
+builds); `NOTARY_PROFILE` opts into
 notarize+staple. Signed builds also emit a detached code signature for
 the tarball (`*.tar.gz.sig` — `codesign --verify --detached=<sig>
 <file>`), plus a GPG `.asc` when `GPG_KEY_ID` is set. The signed path
 is `scripts/build-pkg-signed.sh`
 (reading the gitignored `packaging/signing.local.conf` — see
 `signing.conf.example`), then `scripts/upload-release-artifacts.sh
-vX.Y.Z` verifies the signatures and swaps the CI-built unsigned asset
-on the draft release for the signed one.
+vX.Y.Z` verifies the signatures and swaps the CI-built unsigned assets
+on the draft release for the signed ones.
 
 The design — including the options considered and rejected — lives in
 [docs/design/packaging.md](docs/design/packaging.md).

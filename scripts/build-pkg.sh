@@ -24,8 +24,13 @@
 # docs' `sudo installer -pkg` / right-click-Open steps apply. A signed
 # build also signs the tarball — a detached code signature (.sig) under
 # the same Developer ID Application identity as the binaries, verifiable
-# with `codesign --verify --detached=` (the tarball name is fixed by the
-# binstall metadata, so absent signature files mark the unsigned build).
+# with `codesign --verify --detached=`. Unsigned builds get a `-unsigned`
+# tarball name like the pkg, so the canonical
+# {name}-{target}-v{version}.tar.gz (fixed by the binstall metadata)
+# only ever appears in its final signed form on a release. A build
+# that will sign builds a `git worktree` of the `v<version>` tag under
+# scratch/ so the source can't move mid-build (#50); `--allow-dirty`
+# signs the working tree instead, for test builds.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -33,19 +38,102 @@ step() { printf '\n==> %s\n' "$*"; }
 
 SKIP_BUILD=
 SIGN=auto
+ALLOW_DIRTY=
 for arg in "$@"; do
     case "$arg" in
         --skip-build) SKIP_BUILD=1 ;;
         --sign) SIGN=1 ;;
         --no-sign) SIGN=0 ;;
-        *) echo "usage: $0 [--skip-build] [--sign|--no-sign]" >&2; exit 2 ;;
+        --allow-dirty) ALLOW_DIRTY=1 ;;
+        *) echo "usage: $0 [--skip-build] [--sign|--no-sign] [--allow-dirty]" >&2; exit 2 ;;
     esac
 done
 
-OUT=scratch/pkg
+OUT=${CONTAINER_DISTRO_PKG_OUT:-scratch/pkg}
 COMPONENT=container-distro-core.pkg
 IDENTIFIER=io.github.daphnediane.container-distro
 TARGET=aarch64-apple-darwin
+
+# Find the first keychain identity with the given cert name under the
+# given search policy. Empty when absent (the unsigned path). Resolved
+# before the build: --sign fails fast instead of after a full cargo
+# run, and the provenance check below knows whether this run signs.
+find_identity() {
+    security find-identity -v -p "$1" 2>/dev/null |
+        sed -n "s/.*\"\($2[^\"]*\)\".*/\1/p" | head -n1
+}
+if [ "$SIGN" = 0 ]; then
+    APP_IDENTITY=
+    PKG_IDENTITY=
+else
+    APP_IDENTITY=${CODESIGN_IDENTITY:-$(find_identity codesigning "Developer ID Application")}
+    PKG_IDENTITY=${PKG_SIGN_IDENTITY:-$(find_identity basic "Developer ID Installer")}
+fi
+if [ "$SIGN" = 1 ] && { [ -z "$APP_IDENTITY" ] || [ -z "$PKG_IDENTITY" ]; }; then
+    echo "--sign was given but Developer ID identities are missing" >&2
+    echo "  binaries: ${APP_IDENTITY:-not found}" >&2
+    echo "  pkg:      ${PKG_IDENTITY:-not found}" >&2
+    exit 1
+fi
+
+# cargo metadata reports the real target dir — honoring
+# CARGO_TARGET_DIR and .cargo/config.toml overrides. Needed before the
+# build now: the provenance decision depends on the package version.
+META=$(cargo metadata --no-deps --format-version 1)
+version=$(echo "$META" | jq -r '.packages[0].version')
+pv_tag=$(git describe --exact-match --tags HEAD 2>/dev/null || true)
+pv_dirty=$(git status --porcelain)
+
+# Provenance anchor (#50): signed artifacts attest to the tagged
+# source, so a signing run doesn't build this checkout at all — it
+# re-enters itself inside a `git worktree` of v<version> under
+# scratch/, which is immune to uncommitted changes *and* to a checkout
+# moved mid-build (a branch switch during the minutes-long cargo run
+# has actually happened). --allow-dirty signs the working tree
+# directly, for test builds.
+if [ -n "$APP_IDENTITY$PKG_IDENTITY" ] && [ -z "$ALLOW_DIRTY" ] &&
+    [ -z "${CONTAINER_DISTRO_PKG_FROM_WORKTREE:-}" ]; then
+    git rev-parse -q --verify "refs/tags/v$version" >/dev/null || {
+        echo "provenance: no tag v$version — sign from the tagged commit," >&2
+        echo "  or pass --allow-dirty for a working-tree test build" >&2
+        exit 1
+    }
+    [ "$pv_tag" = "v$version" ] ||
+        echo "  note: HEAD is not at v$version — building the tag, not the checkout" >&2
+    [ -z "$pv_dirty" ] ||
+        echo "  note: uncommitted changes excluded — the build comes from the tag" >&2
+    SRCDIR="scratch/pkg-src-v$version"
+    git worktree remove --force "$SRCDIR" 2>/dev/null || {
+        rm -rf "$SRCDIR"
+        git worktree prune
+    }
+    git worktree add --detach "$SRCDIR" "v$version"
+    step "worktree build of v$version ($SRCDIR)"
+    REPO=$PWD
+    pv_status=0
+    ( cd "$REPO/$SRCDIR" &&
+        CONTAINER_DISTRO_PKG_FROM_WORKTREE=1 \
+        CONTAINER_DISTRO_PKG_OUT="$REPO/scratch/pkg" \
+        scripts/build-pkg.sh "$@" ) || pv_status=$?
+    git worktree remove --force "$SRCDIR"
+    exit "$pv_status"
+fi
+
+# In-place build — unsigned runs (or --allow-dirty). The tree is only
+# checked once, at start: `-unsigned` names are already non-canonical,
+# and a dirty tree may be the point of a test build.
+if [ "$pv_tag" != "v$version" ] || [ -n "$pv_dirty" ]; then
+    if [ "$pv_tag" != "v$version" ]; then
+        pv_note="HEAD is not at the v$version tag (found: ${pv_tag:-none})"
+    else
+        pv_note="working tree is dirty"
+    fi
+    if [ -n "$APP_IDENTITY$PKG_IDENTITY" ]; then
+        echo "provenance: $pv_note — signing an unanchored test build" >&2
+    else
+        echo "  note: provenance: $pv_note — unsigned build continues" >&2
+    fi
+fi
 
 if [ -z "$SKIP_BUILD" ]; then
     # `cargo auditable` is a drop-in cargo wrapper that embeds the
@@ -62,10 +150,6 @@ if [ -z "$SKIP_BUILD" ]; then
     fi
 fi
 
-# cargo metadata reports the real target dir — honoring
-# CARGO_TARGET_DIR and .cargo/config.toml overrides.
-META=$(cargo metadata --no-deps --format-version 1)
-version=$(echo "$META" | jq -r '.packages[0].version')
 R="$(echo "$META" | jq -r '.target_directory')/release"
 [ -x "$R/container-distro" ] || {
     echo "release binary missing — run without --skip-build" >&2
@@ -93,26 +177,6 @@ if command -v cargo-cyclonedx >/dev/null; then
     mv "$SBOM.json" "$OUT/$SBOM.json"
 else
     echo "  (no cargo cyclonedx — skipping the SBOM; recommended for releases)"
-fi
-
-# Find the first keychain identity with the given cert name under the
-# given search policy. Empty when absent (the unsigned path).
-find_identity() {
-    security find-identity -v -p "$1" 2>/dev/null |
-        sed -n "s/.*\"\($2[^\"]*\)\".*/\1/p" | head -n1
-}
-if [ "$SIGN" = 0 ]; then
-    APP_IDENTITY=
-    PKG_IDENTITY=
-else
-    APP_IDENTITY=${CODESIGN_IDENTITY:-$(find_identity codesigning "Developer ID Application")}
-    PKG_IDENTITY=${PKG_SIGN_IDENTITY:-$(find_identity basic "Developer ID Installer")}
-fi
-if [ "$SIGN" = 1 ] && { [ -z "$APP_IDENTITY" ] || [ -z "$PKG_IDENTITY" ]; }; then
-    echo "--sign was given but Developer ID identities are missing" >&2
-    echo "  binaries: ${APP_IDENTITY:-not found}" >&2
-    echo "  pkg:      ${PKG_IDENTITY:-not found}" >&2
-    exit 1
 fi
 
 if [ -n "$APP_IDENTITY" ]; then
@@ -215,14 +279,19 @@ fi
 
 step "cargo-binstall tarball"
 # { name }-{ target }-v{ version }.tar.gz with a matching inner dir —
-# the layout [package.metadata.binstall] in Cargo.toml advertises.
+# the layout [package.metadata.binstall] in Cargo.toml advertises. The
+# inner dir keeps the canonical name; only the archive name mangles —
+# unsigned builds get `-unsigned` like the pkg, so the canonical name
+# only ever appears in its final signed form and a signed upload adds
+# assets instead of mutating already-attached ones.
 TDIR="container-distro-$TARGET-v$version"
-rm -rf "$OUT/$TDIR" "$OUT/$TDIR.tar.gz" \
-    "$OUT/$TDIR.tar.gz.sig" "$OUT/$TDIR.tar.gz.asc"
+TARNAME="$TDIR.tar.gz"
+[ -n "$APP_IDENTITY" ] || TARNAME="$TDIR-unsigned.tar.gz"
+rm -rf "$OUT/$TDIR" "$OUT/$TDIR".tar.gz* "$OUT/$TDIR"-unsigned.tar.gz*
 mkdir -p "$OUT/$TDIR"
 cp "$R/container-distro" LICENSE THIRD-PARTY-NOTICES.yaml "$OUT/$TDIR/"
 cp vendor/microsoft/LICENSE "$OUT/$TDIR/LICENSE-microsoft-wsl"
-tar -czf "$OUT/$TDIR.tar.gz" -C "$OUT" "$TDIR"
+tar -czf "$OUT/$TARNAME" -C "$OUT" "$TDIR"
 rm -rf "$OUT/$TDIR"
 # Signed builds give the tarball a detached code signature too — same
 # Developer ID Application identity as the binaries, timestamped like
@@ -230,7 +299,7 @@ rm -rf "$OUT/$TDIR"
 # (a passphrase prompt via pinentry is expected on a cold agent).
 if [ -n "$APP_IDENTITY" ]; then
     codesign --force --sign "$APP_IDENTITY" --timestamp \
-        --detached "$OUT/$TDIR.tar.gz.sig" "$OUT/$TDIR.tar.gz"
+        --detached "$OUT/$TARNAME.sig" "$OUT/$TARNAME"
 fi
 if [ -n "${GPG_KEY_ID:-}" ]; then
     command -v gpg >/dev/null || {
@@ -238,13 +307,13 @@ if [ -n "${GPG_KEY_ID:-}" ]; then
         exit 1
     }
     gpg --yes --armor --local-user "$GPG_KEY_ID" \
-        --output "$OUT/$TDIR.tar.gz.asc" --detach-sign "$OUT/$TDIR.tar.gz"
+        --output "$OUT/$TARNAME.asc" --detach-sign "$OUT/$TARNAME"
 fi
 
 step "summary"
 pkgutil --payload-files "$COMPONENT_DIR/$COMPONENT" | sed 's/^/  /'
-SUMFILES="$OUT/$PKGNAME.pkg $OUT/$TDIR.tar.gz"
-[ -f "$OUT/$TDIR.tar.gz.sig" ] && SUMFILES="$SUMFILES $OUT/$TDIR.tar.gz.sig"
-[ -f "$OUT/$TDIR.tar.gz.asc" ] && SUMFILES="$SUMFILES $OUT/$TDIR.tar.gz.asc"
+SUMFILES="$OUT/$PKGNAME.pkg $OUT/$TARNAME"
+[ -f "$OUT/$TARNAME.sig" ] && SUMFILES="$SUMFILES $OUT/$TARNAME.sig"
+[ -f "$OUT/$TARNAME.asc" ] && SUMFILES="$SUMFILES $OUT/$TARNAME.asc"
 [ -f "$OUT/$SBOM.json" ] && SUMFILES="$SUMFILES $OUT/$SBOM.json"
 shasum -a 256 $SUMFILES | sed 's/^/  /'

@@ -130,16 +130,17 @@ The mechanical bits are driven by [cargo-release] (`cargo install
    GitHub Release with the new `CHANGELOG.md` section as notes and the
    artifacts attached (`--prerelease` when the tag carries a `-` suffix
    like `v0.4.0-rc.1`). CI has no signing keychain, so the attached
-   pkg is `container-distro-X.Y.Z-unsigned.pkg`; with a Developer ID
-   configured (`packaging/signing.local.conf`), rebuild signed and
-   replace it before publishing:
+   artifacts carry `-unsigned` names (`container-distro-X.Y.Z-unsigned.pkg`,
+   `container-distro-aarch64-apple-darwin-vX.Y.Z-unsigned.tar.gz`); with a
+   Developer ID configured (`packaging/signing.local.conf`), rebuild
+   signed and replace them before publishing:
 
    ```bash
    scripts/build-pkg-signed.sh                 # signs + notarizes/staples;
                                                # tarball gets .sig (+.asc)
    scripts/upload-release-artifacts.sh vX.Y.Z  # verifies them and swaps
-                                               # the signed pkg in for the
-                                               # unsigned asset
+                                               # the signed artifacts in
+                                               # for the unsigned ones
    ```
 
    Review the draft and publish it -- in the web

@@ -11,8 +11,10 @@ sudo installer -pkg container-distro-<version>.pkg -target /
 A published release normally only carries the signed build. CI and
 draft prereleases may still have
 `container-distro-<version>-unsigned.pkg`, which Gatekeeper installs
-with right-click → Open or the same `installer` command; [packaging]
-covers the signing story. It lands under `/usr/local`: `bin/cm` and
+with right-click → Open or the same `installer` command, and a
+`-unsigned` binstall tarball that `cargo binstall` won't fetch under
+its canonical name (it falls back to building from source);
+[packaging] covers the signing story. It lands under `/usr/local`: `bin/cm` and
 `bin/container-distro`, the `container distro` plugin registration
 (`libexec/container-plugins/distro/`), man pages, bash/zsh/fish
 completions, `bin/uninstall-container-distro.sh`,

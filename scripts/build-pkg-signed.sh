@@ -5,7 +5,7 @@
 # GPG_KEY_ID there additionally signs the binstall tarball with gpg.
 # Upload the result over the draft release with
 # scripts/upload-release-artifacts.sh (docs/design/release.md step 6).
-# Extra args pass through (--skip-build etc).
+# Extra args pass through (--skip-build, --allow-dirty, etc).
 set -eu
 cd "$(dirname "$0")/.."
 
