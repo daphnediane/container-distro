@@ -204,11 +204,16 @@ Verifying downloads section lists the expected identities;
 present) before uploading them over the draft release, and deletes
 the `-unsigned` pkg and tarball the CI build attached. Two provenance
 guards close the loop (#50): a `build-pkg.sh` run that will sign
-doesn't build the checkout at all — it re-enters itself inside a
-`git worktree` of the `v<version>` tag under `scratch/`, so
-uncommitted changes and a checkout moved mid-build can't contaminate
-signed artifacts (`--allow-dirty` signs the working tree for test
-builds; unsigned runs build in place with a warning) — and
+compiles inside a `git worktree` of the `v<version>` tag under
+`scratch/` — the helpers under `scripts/pkg/` make the pipeline
+composable (`build.sh` compiles, `collect.sh` gathers binaries +
+inputs, `bundle.sh` assembles and signs source-free) so the worktree
+only needs to span the compile+collect steps — and uncommitted
+changes or a checkout moved mid-build can't contaminate signed
+artifacts. `--no-worktree` builds in place with the tag+clean
+requirement re-checked before bundling, `--allow-dirty` signs the
+working tree, and unanchored builds mangle the name (`-<hash>`,
+`-dirty`, `-unsigned`) so a canonical name always means tag content.
 `upload-release-artifacts.sh` refuses to touch a release that is no
 longer a draft.
 

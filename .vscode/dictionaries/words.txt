@@ -96,6 +96,7 @@ journaled
 journaling
 kalilinux
 kext
+keyserver
 lchflags
 lchmod
 ldconfig
@@ -259,6 +260,7 @@ waypipe
 wayvnc
 windowsterminal
 worktree
+worktrees
 wslconfig
 WSLENV
 xattr

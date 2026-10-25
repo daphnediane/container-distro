@@ -15,6 +15,8 @@ globs: **/*.rs,**/Cargo.toml
 
 ## Code Style
 
+<!-- cspell:ignore ncols segs pathish -->
+
 - `snake_case` for functions, variables, modules
 - `CamelCase` for types and traits
 - `SCREAMING_SNAKE_CASE` for constants and statics

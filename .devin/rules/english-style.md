@@ -7,6 +7,8 @@ description: English and spelling conventions — American English, real words o
 
 Applies to code, comments, docs, shell scripts, and commit messages.
 
+<!-- cspell:ignore AEDF defence nums toks subdirs rederives WRONLY -->
+
 - **American English** (`defense` not `defence`).
 - **Prefer the clearer, simpler phrasing** — plain words over formal or
   clever ones (`use` not `utilize`, `start` not `commence`), direct

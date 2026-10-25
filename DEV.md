@@ -99,10 +99,11 @@ skipped with a warning for ad-hoc builds; the official release path
 requires them. Signing is
 auto-detected from the keychain (`--sign` requires it, `--no-sign`
 forces the `-unsigned` artifacts — pkg and tarball alike, so the
-canonical names only ever ship signed); a build that will sign builds
-a `git worktree` of the release tag under `scratch/` so the source
-can't move mid-build (`--allow-dirty` signs the working tree for test
-builds); `NOTARY_PROFILE` opts into
+canonical names only ever ship signed); a build that will sign
+compiles inside a `git worktree` of the release tag under `scratch/`
+so the source can't move mid-build (`--no-worktree` builds in place
+with tag+clean still enforced, `--allow-dirty` drops it — unanchored
+builds also get `-hash`/`-dirty` name mangling); `NOTARY_PROFILE` opts into
 notarize+staple. Signed builds also emit a detached code signature for
 the tarball (`*.tar.gz.sig` — `codesign --verify --detached=<sig>
 <file>`), plus a GPG `.asc` when `GPG_KEY_ID` is set. The signed path

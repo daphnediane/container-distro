@@ -25,21 +25,5 @@
     "ignorePaths": [
         "vendor/**",
         "THIRD-PARTY-NOTICES.yaml"
-    ],
-    "overrides": [
-        {
-            "filename": "**/.devin/rules/**/*.md",
-            "words": [
-                "defence",
-                "ncols",
-                "nums",
-                "pathish",
-                "rederives",
-                "segs",
-                "subdirs",
-                "toks",
-                "WRONLY"
-            ]
-        }
     ]
 }

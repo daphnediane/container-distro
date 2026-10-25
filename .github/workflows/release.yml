@@ -43,7 +43,10 @@ jobs:
       - run: cargo install --locked cargo-cyclonedx@0.5.9 cargo-auditable@0.7.7
 
       - name: Build release artifacts
-        run: scripts/build-pkg.sh --no-sign
+        # --no-worktree: the runner's checkout is already the verified
+        # tag and can't move mid-build — the worktree anchor is for
+        # local signed builds.
+        run: scripts/build-pkg.sh --no-sign --no-worktree
 
       - name: Extract CHANGELOG notes
         env:

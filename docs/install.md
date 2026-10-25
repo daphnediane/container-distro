@@ -44,6 +44,8 @@ codesign -dv /usr/local/bin/container-distro   # after install
 
 Expected signers:
 
+<!-- cspell:ignore AEDF dvvv -->
+
 - `.pkg`: `Developer ID Installer: Daphne Pfister (YN9EG6U9PY)`;
   detached `.sig` + binaries: `Developer ID Application: Daphne
   Pfister (YN9EG6U9PY)`. The certificates chain to the Apple Root CA

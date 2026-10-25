@@ -24,6 +24,7 @@ mangen
 memchr
 miniz
 objc
+openpgp
 pemfile
 powerfmt
 proptest
