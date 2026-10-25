@@ -10,6 +10,7 @@ mod machine;
 #[cfg(test)]
 mod test_support;
 mod types;
+pub(crate) mod upstream;
 
 use anyhow::{Context, Result, bail};
 use serde::de::DeserializeOwned;
@@ -89,12 +90,12 @@ pub fn container_cmd() -> Command {
     Command::new(cli_override().unwrap_or_else(|| container_binary().into()))
 }
 
-/// The `container` release the interactive install offer downloads and
-/// opens — pinned to a release whose appRoot internals we have
-/// verified, so bump it together with `VERIFIED_CONTAINER_MINOR` (and
-/// `PKG_SHA256` in install.rs) once the new release's layout checks
-/// out — docs/design/container-internals.md "version gating".
-pub const PINNED_CONTAINER_VERSION: &str = "1.6.1";
+// Upstream-release facts (install-offer pin, verified minors) and the
+// daemon's own version live in `upstream` — re-exported here so the
+// `container::` paths callers already use stay stable.
+pub(crate) use upstream::{
+    PINNED_CONTAINER_VERSION, app_root, system_running, warn_unverified_version,
+};
 
 /// `name` looked up on `PATH` — the first match that is a file.
 pub(crate) fn find_on_path(name: &Path) -> Option<PathBuf> {
@@ -141,65 +142,6 @@ pub fn require_installed() -> Result<()> {
         bail!("{}", install::not_installed_message());
     }
     Ok(())
-}
-
-fn system_status() -> Option<serde_json::Value> {
-    let out = container_cmd()
-        .args(["system", "status", "--format", "json"])
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    serde_json::from_slice(&out.stdout).ok()
-}
-
-/// Whether `container` services are currently running.
-pub fn system_running() -> bool {
-    system_status().is_some_and(|s| s.get("status").and_then(|v| v.as_str()) == Some("running"))
-}
-
-/// `container`'s data directory (`paths.appRoot` in `container system status`).
-pub fn app_root() -> Option<PathBuf> {
-    system_status()?
-        .pointer("/paths/appRoot")?
-        .as_str()
-        .map(PathBuf::from)
-}
-
-/// The `container` daemon version (`server.version` in `system status`).
-pub fn container_version() -> Option<String> {
-    system_status()?
-        .pointer("/server/version")?
-        .as_str()
-        .map(String::from)
-}
-
-/// `container` `major.minor` versions whose internal storage layout we
-/// have verified: `containers/<id>/rootfs.ext4`,
-/// `containers/<id>/runtime-configuration.json` and its
-/// `options.rootFsOverride`. Extended as new `container` minors are
-/// verified — a release-checklist step (docs/design/release.md).
-pub const VERIFIED_CONTAINER_MINOR: &[&str] = &["1.5", "1.6"];
-
-/// Warn (once per process) when the `container` daemon is not a version
-/// whose appRoot internals we have verified. Code paths that read or
-/// write `appRoot` contents directly should call this first — the layout
-/// is not a public interface and may change without notice.
-pub fn warn_unverified_version() {
-    static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| {
-        if let Some(v) = container_version()
-            && !VERIFIED_CONTAINER_MINOR
-                .iter()
-                .any(|k| v == *k || v.starts_with(&format!("{k}.")))
-        {
-            eprintln!(
-                "warning: `container` {v} has not been verified — operations using its internal storage layout may break"
-            );
-        }
-    });
 }
 
 /// The `source` of a `rootFsOverride` record in a container's

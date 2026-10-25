@@ -61,6 +61,7 @@ fn print_version(name: &str) -> Result<ExitCode> {
         .arg("--version")
         .status()
         .context("failed to run `container --version`")?;
+    container::upstream::note_behind_pin();
     Ok(exit_code(status))
 }
 

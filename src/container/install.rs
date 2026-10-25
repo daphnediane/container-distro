@@ -5,6 +5,7 @@
  */
 
 use crate::catalog::wsl;
+use crate::container::upstream::PKG_SHA256;
 use crate::container::{INSTALLED_CONTAINER_PATH, PINNED_CONTAINER_VERSION};
 use crate::setup::privilege::is_root;
 use anyhow::{Context, Result, anyhow, bail};
@@ -18,12 +19,6 @@ use tempfile::NamedTempFile;
 /// Set to skip the install offer entirely and get the manual
 /// instructions instead.
 const NO_OFFER_ENV: &str = "CONTAINER_DISTRO_NO_INSTALL_OFFER";
-
-/// SHA-256 of `container-<PINNED_CONTAINER_VERSION>-installer-signed.pkg`
-/// — the `digest` GitHub reports for the release asset. Pinned so the
-/// download can't be swapped en route; bump together with
-/// `PINNED_CONTAINER_VERSION` (docs/design/container-internals.md).
-const PKG_SHA256: &str = "cd47846819f06478d067060efe21e516b562ac0a9af8eecad6d5fea0b556b200";
 
 /// How long we wait for Installer.app to drop the CLI before telling
 /// the user to re-run — the installer UI moves at human speed.

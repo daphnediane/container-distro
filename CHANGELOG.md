@@ -10,6 +10,28 @@ docs/design/release.md.
 
 ## 0.10.0-dev
 
+### Added
+
+- **`cm --update` / `container distro update` now note when the
+  installed `container` is behind the newest verified release** — the
+  pin is also the compatibility ceiling, so a behind-pin install gets
+  a one-line pointer at the current upstream release.
+
+## 0.9.1 -- 2026-10-24
+
+### Changed
+
+- **`container` 1.6.x is verified**: the appRoot internals we depend
+  on are unchanged in 1.6.0/1.6.1, so the "has not been verified"
+  warning no longer fires on them and the interactive install offer
+  now pins the signed **1.6.1** installer. Verified: the rootfs
+  override mechanism, sparse `rootfs.ext4` lifecycle, machine
+  plugin-state layout, `machine inspect` fields, `exec -w` dir
+  creation, the `--masked-path`/`--read-only-path` `NONE` sentinel,
+  `--ssh`, plugin argv[1] discovery, and `--arch` still overriding
+  the new platform inference. `container export` still can't see an
+  overridden rootfs — the scratch-container workaround stays (#15).
+
 ## 0.9.0 -- 2026-10-24
 
 ### Highlights

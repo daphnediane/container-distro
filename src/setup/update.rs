@@ -37,7 +37,8 @@ use serde_json::Value;
 use tempfile::NamedTempFile;
 
 use crate::catalog::wsl;
-use crate::container::install;
+use crate::container::upstream::cmp_version;
+use crate::container::{self, install};
 use crate::setup::privilege;
 
 /// The GitHub repo releases come from — matches Cargo.toml's
@@ -70,6 +71,7 @@ pub fn update(version: Option<&str>, force: bool, dry_run: bool) -> Result<()> {
     if privilege::is_root() {
         bail!("run without sudo — Installer.app asks for admin rights itself");
     }
+    container::upstream::note_behind_pin();
     let (tag, release) = fetch_release(version)?;
     let current = env!("CARGO_PKG_VERSION");
     match cmp_version(current, &tag) {
@@ -205,30 +207,6 @@ fn fetch_release(version: Option<&str>) -> Result<(String, Value)> {
         .with_context(|| format!("{label} has no tag_name"))?
         .to_string();
     Ok((tag, json))
-}
-
-/// `X.Y.Z[-suffix]`: the numeric triple first, then a prerelease sorts
-/// before its release (`0.6.0-dev` < `0.6.0`). Two prerelease suffixes
-/// compare lexically — `dev` < `rc.N` — close enough for our tags.
-fn cmp_version(a: &str, b: &str) -> Ordering {
-    fn split(v: &str) -> ([u64; 3], Option<&str>) {
-        let (core, pre) = match strip_v(v).split_once('-') {
-            Some((c, p)) => (c, Some(p)),
-            None => (strip_v(v), None),
-        };
-        let mut numbers = [0u64; 3];
-        for (n, part) in core.split('.').take(3).enumerate() {
-            numbers[n] = part.parse().unwrap_or(0);
-        }
-        (numbers, pre)
-    }
-    let (an, ap) = split(a);
-    let (bn, bp) = split(b);
-    an.cmp(&bn).then_with(|| match (ap, bp) {
-        (None, Some(_)) => Ordering::Greater,
-        (Some(_), None) => Ordering::Less,
-        (x, y) => x.cmp(&y),
-    })
 }
 
 /// The pkg receipt's install root (`pkgutil --pkg-info`), normalized
@@ -386,17 +364,6 @@ mod tests {
                 "digest": digest,
             })).collect::<Vec<_>>(),
         })
-    }
-
-    #[test]
-    fn version_ordering() {
-        assert_eq!(cmp_version("0.5.0", "0.5.0"), Ordering::Equal);
-        assert_eq!(cmp_version("0.5.0", "v0.5.0"), Ordering::Equal);
-        assert_eq!(cmp_version("0.5.0", "0.6.0"), Ordering::Less);
-        assert_eq!(cmp_version("0.6.0-dev", "0.5.0"), Ordering::Greater);
-        assert_eq!(cmp_version("0.6.0-dev", "0.6.0"), Ordering::Less);
-        assert_eq!(cmp_version("0.6.0-rc.1", "0.6.0"), Ordering::Less);
-        assert_eq!(cmp_version("0.6.0-dev", "0.6.0-rc.1"), Ordering::Less);
     }
 
     #[test]
