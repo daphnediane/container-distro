@@ -33,7 +33,8 @@ Applies to code, comments, docs, shell scripts, and commit messages.
 - **Fix real misspellings; don't blanket-add flagged words.** Decide
   per word: fix, dictionary entry, or local ignore.
 - **Add full symbols, not chunks** — `O_WRONLY`, not `WRONLY`. Chunk
-  entries hide the same misspelling elsewhere.
+  entries hide the same misspelling elsewhere. A chunk earns its own
+  entry only when it stands alone as a word in our code.
 - **No uppercase variants** of words already listed in lowercase.
 - **Opaque identifiers** (Store app IDs, team IDs, hashes) get a local
   `// cspell:ignore` / `# cspell:ignore` / `<!-- cspell:ignore -->`
