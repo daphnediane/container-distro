@@ -7,7 +7,7 @@ description: English and spelling conventions — American English, real words o
 
 Applies to code, comments, docs, shell scripts, and commit messages.
 
-<!-- cspell:ignore AEDF defence nums toks subdirs rederives WRONLY -->
+<!-- cspell:ignore defence nums toks subdirs rederives WRONLY -->
 
 - **American English** (`defense` not `defence`).
 - **Prefer the clearer, simpler phrasing** — plain words over formal or
@@ -36,12 +36,13 @@ Applies to code, comments, docs, shell scripts, and commit messages.
   entries hide the same misspelling elsewhere.
 - **No uppercase variants** of words already listed in lowercase.
 - **Opaque identifiers** (Store app IDs, team IDs, hashes) get a local
-  `// cspell:ignore` or `<!-- cspell:ignore -->` near the occurrence,
-  not a dictionary entry.
-- **Misspellings cited as examples** (in rule docs like this one) are
-  allow-listed via the `overrides` block in `cSpell.json` scoped to
-  `.devin/rules/` — never a dictionary entry, or the misspelling would
-  pass everywhere.
+  `// cspell:ignore` / `# cspell:ignore` / `<!-- cspell:ignore -->`
+  near the occurrence, not a dictionary entry.
+- **Misspellings cited as examples** (in rule docs like this one) get
+  a local `<!-- cspell:ignore -->` at the top of that doc — never a
+  dictionary entry, or the misspelling would pass everywhere. (Not a
+  path-scoped `overrides` block in `cSpell.json`: it doesn't apply
+  correctly in multi-folder workspaces.)
 - **Dictionary layout** under `.vscode/dictionaries/`: `words.txt` is
   the general list — listed first in `dictionaries` and the
   `addWords` target so IDE quick-adds land there; `packages.txt` is
