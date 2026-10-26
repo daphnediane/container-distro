@@ -15,7 +15,15 @@ and `build-pkg.sh` must produce it (`scripts/build-distrofs.sh`).
 
 distrofs's own packaging as a product -- the crates.io decision, a
 stable `proto`/handshake contract, shipping its own `.pkg` -- is
-tracked in the distrofs repo against its 1.0 milestone.
+tracked in the [container-mount] repo against its 1.0 milestone.
+
+Under the `container mount` plugin direction ([mount-backends]) this
+question may dissolve: the plugin would ship and locate its own
+servers, and container-distro would ship none of them. Decide that
+direction before picking a delivery here.
+
+[container-mount]: https://github.com/daphnediane/container-mount
+[mount-backends]: https://github.com/daphnediane/container-mount/blob/main/docs/design/mount-backends.md
 
 [#27]: https://github.com/daphnediane/container-distro/issues/27
 [#35]: https://github.com/daphnediane/container-distro/issues/35

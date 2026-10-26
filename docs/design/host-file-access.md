@@ -61,7 +61,7 @@ own VM rather than a namespace in one shared VM (which matters for
 | `container copy` / `cp`          | One-shot file/tar transfer: `vminitd` reads/writes under `rootfs` over a dedicated vsock | Fine for a `cp` command; no listing, no partial reads -- can't back a mount |
 | `--publish-socket host:guest`    | Guest listens, host connects; per-connection vsock relay into `rootfs/<guest>`           | **Yes -- the transport.**                                                   |
 | `--volume <socket>:<guest>`      | A socket-typed volume source relayed *into* the guest                                    | Future guest->host broker for distro-to-distro mounts                       |
-| `ContainerClient.dial(id:port:)` | Host dials a guest vsock port; XPC-only, no CLI                                          | No -- private API                                                           |
+| `ContainerClient.dial(id:port:)` | Host dials a guest vsock port; XPC route `containerDial`, no CLI                         | Not for distros; the transport for other containers ([mount-backends])      |
 
 The mechanics: `cp` has the runtime helper ask `vminitd` (guest
 PID 1) to read/write under `/run/container/<id>/rootfs`, resolved
@@ -120,8 +120,8 @@ under `/run` or `/tmp`.
 
 ## Guest server: `distrofs`
 
-**Build.** `distrofs` is a standalone project
-([daphnediane/distrofs](https://github.com/daphnediane/distrofs)) —
+**Build.** `distrofs` comes from the standalone container-mount project
+([daphnediane/container-mount](https://github.com/daphnediane/container-mount)) —
 one crate producing a static `aarch64-unknown-linux-musl` guest server
 *and* the macOS host client/binary from a shared protocol module
 (prebuilt musl binaries for both arches ship on its GitHub releases;
@@ -202,8 +202,8 @@ filesystem types, so virtiofs shares and `/proc` appear as empty
 read-only directories rather than looping host content back or
 leaking pseudo filesystems into Finder. Devices/FIFOs/sockets list
 with their real type but can't be opened. Details (and a "root view"
-option idea) live in distrofs's
-[protocol doc](https://github.com/daphnediane/distrofs/blob/main/docs/design/protocol.md).
+option idea) live in container-mount's
+[protocol doc](https://github.com/daphnediane/container-mount/blob/main/docs/design/protocol.md).
 
 ## Transport and connection hygiene
 
@@ -237,13 +237,13 @@ defends in three layers (private-directory chain check, socket-leaf
 `container-runtime-linux` helper), then runs a mutual HMAC-SHA256
 handshake proving both ends hold this session's token. Only "no
 server yet" errors retry; trust failures don't. Details:
-[distrofs protocol doc](https://github.com/daphnediane/distrofs/blob/main/docs/design/protocol.md).
+[distrofs protocol doc](https://github.com/daphnediane/container-mount/blob/main/docs/design/protocol.md).
 
 ## Protocol
 
 The wire protocol, handshake, mount-filtering policy, and client-side
-validation all live in the distrofs repo — see its
-[protocol design doc](https://github.com/daphnediane/distrofs/blob/main/docs/design/protocol.md).
+validation all live in the container-mount repo — see its
+[protocol design doc](https://github.com/daphnediane/container-mount/blob/main/docs/design/protocol.md).
 container-distro deliberately knows nothing of it. The properties the
 rest of this document relies on:
 
@@ -306,7 +306,7 @@ payload. One-time portal setup is a maintainer task, documented in
 packaging.md when Phase 2 lands. The project is built with `xcodebuild`
 from a checked-in project under `macos/DistroFiles/`; the distrofs
 client library is built by a run-script phase (`cargo build --lib
---target aarch64-apple-darwin` in the distrofs checkout).
+--target aarch64-apple-darwin` in the container-mount checkout).
 
 **Minimum OS.** macOS 26 for generic-URL resources; the cache handler
 is used when running on 27+.
@@ -378,7 +378,37 @@ Recorded as **T13** in security.md (Phase 1); the substance:
 | 2            | FSKit spike, then app + appex + agent + C ABI; signing                                                            | Finder browses and edits a distro; spike answers the open questions below          |
 | 3            | inotify events + `DataCacheHandler`                                                                               | host sees guest-side edits without remount                                         |
 | 4            | `.pkg` payload, `cm --mount`, docs                                                                                | release-gate passes with the app in the payload                                    |
-| 5 (optional) | machines and not-yet-restarted distros via `container exec -i ... distrofs serve --stdio`                         | `fs ls` works on a machine (binary pushed with `container copy`)                   |
+| 5 (optional) | machines, non-distro containers, stopped disks: vsock dial, `--stdio`, helper VM ([mount-backends])               | `fs ls` works on a machine (binary pushed with `container copy`)                   |
+
+## Beyond distros: other containers and stopped disks
+
+Everything above relies on two create-time choices container-distro
+makes for its own distros: the `/sbin.distro` assets volume and the
+`--publish-socket` relay. That wiring was stripped from `main` (it
+lives on `feature/distrofs`) while the options are reconsidered.
+
+The direction under investigation, in container-mount's [mount-backends]
+doc, is a separate `podman mount`-style **`container mount` plugin**
+that owns all of it — servers, tokens, transports, helper VMs — for
+any container, with container-distro loosely coupled to it: it
+invokes the plugin's CLI when the plugin is installed and, optionally,
+adds create-time references (a read-only servers share, a socket
+relay) that the plugin returns as JSON. container-distro would then
+carry no distrofs binaries, protocol knowledge, or socket layout. The
+mechanisms that make this possible:
+
+- **Transport:** `container-apiserver`'s `containerDial` XPC route
+  hands back an fd to a guest vsock port on any running container,
+  with no create-time flag (*verified* 2026-10-25, `container` 1.6.1).
+- **Delivery:** `container copy` of a *directory* keeps the exec bit
+  (a single file lands `0644`), or a read-only servers share added at
+  create time.
+- **Stopped disks:** a helper container boots the target's ext4 (or a
+  `clonefile` snapshot of it) with the server as its entrypoint — the
+  same disk-override trick `distro export` uses.
+- **Not virtiofs:** keeping a root as a host folder loses ownership,
+  setuid, and device nodes (*verified*), and lands guest symlinks on
+  the host verbatim.
 
 ## Future extension: distro-to-distro mounts (`/mnt/wsl`)
 
@@ -430,13 +460,14 @@ almost entirely. Both are post-FSKit.
 | Alternative                                          | Why not (as the primary design)                                                                                                                         |
 | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Wrap `container copy`                                | Running-only, root-only, one-shot; no listing or random access. Still a fine basis for a future `cm --cp`                                               |
-| Read `rootfs.ext4` offline (pure-Rust ext4 reader)   | Read-only, misses never-booted distros, reads upstream internals; maybe for stopped distros later                                                       |
+| Read `rootfs.ext4` offline (pure-Rust ext4 reader)   | Read-only, reads upstream internals; for stopped disks a helper VM gives real ext4 instead ([mount-backends])                                           |
+| Distro root as a host folder over virtiofs           | Ownership, setuid, and device nodes don't survive (*verified*); guest symlinks land on the host verbatim ([mount-backends])                             |
 | Loopback NFSv3 translator + `mount_nfs`              | Quick and pure Rust, but AUTH_SYS on loopback TCP lets any local user mount it; superseded by FSKit (pre-26 macOS is unsupported anyway)                |
 | SMB / WebDAV / SFTP servers on the guest's vmnet IP  | Reachable by every guest on the subnet; absent under `--network none`; heavy per-distro packages                                                        |
 | File Provider extension (the Dropbox/OneDrive model) | Sync-and-materialize under `~/Library/CloudStorage`; weak POSIX semantics -- fine for documents, wrong for a live Linux root                            |
 | macFUSE / FUSE-T + sshfs                             | Third-party install (for macFUSE, a kext or its own FSKit backend); FSKit directly is the first-party path                                              |
 | 9P2000.L or SFTP as the wire protocol                | No change notifications; no guest-side reuse (the guest kernel lacks 9P); SFTP's POSIX coverage is thin. A custom protocol is small -- we own both ends |
-| `ContainerClient.dial` vsock                         | Internal XPC API, no CLI; would need Swift and track upstream internals                                                                                 |
+| `ContainerClient.dial` vsock (for distros)           | Undocumented XPC route, no CLI; `--publish-socket` covers distros. Kept for containers without a relay ([mount-backends])                               |
 | Server started at boot by `init`                     | A root daemon in every distro all the time, plus systemd/openrc interplay; on demand costs ~100 ms exec per session                                     |
 
 ## Open questions (Phase 2 spike)
@@ -451,3 +482,4 @@ almost entirely. Both are post-FSKit.
   "not yet verified").
 
 [#27]: https://github.com/daphnediane/container-distro/issues/27
+[mount-backends]: https://github.com/daphnediane/container-mount/blob/main/docs/design/mount-backends.md

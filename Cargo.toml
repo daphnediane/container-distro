@@ -24,8 +24,8 @@ exclude = [
     "/deny.toml",
 ]
 
-# The guest file server moved to the standalone `distrofs` project
-# (https://github.com/daphnediane/distrofs); `scripts/build-distrofs.sh`
+# The guest file server moved to the standalone container-mount project
+# (https://github.com/daphnediane/container-mount); `scripts/build-distrofs.sh`
 # builds it there and installs `distrofs-server-<arch>` into libexec.
 
 [dependencies]
