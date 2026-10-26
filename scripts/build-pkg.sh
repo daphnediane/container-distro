@@ -16,7 +16,7 @@
 #   --allow-dirty    build the working tree even when signing — the
 #                    artifacts get -<hash>/-dirty name mangling
 #   --no-worktree    build in place but keep the tag+clean requirement
-#                    (re-checked by artifacts.sh before the first sign)
+#                    (re-checked before bundling signs anything)
 #   CODESIGN_IDENTITY  signs the binaries (default: a "Developer ID
 #                      Application" keychain identity, if present)
 #   PKG_SIGN_IDENTITY  signs the .pkg (default: "Developer ID Installer")
@@ -108,7 +108,8 @@ if [ -z "$ALLOW_DIRTY" ] && [ -z "$NO_WORKTREE" ] &&
     pv_ref=HEAD
     git rev-parse -q --verify "refs/tags/v$PKG_VERSION" >/dev/null &&
         pv_ref="v$PKG_VERSION"
-    SRCDIR=$("$PKG/worktree.sh" add "scratch/pkg-src-$PKG_VERSION$PROV_SUFFIX" "$pv_ref")
+    SRCDIR="scratch/pkg-src-$PKG_VERSION$PROV_SUFFIX"
+    "$PKG/worktree.sh" add "$SRCDIR" "$pv_ref"
     # Names are canonical inside a tag worktree (it *is* the tag),
     # -<hash> inside a commit worktree.
     eval "$("$PKG/name.sh" "$SRCDIR")"
